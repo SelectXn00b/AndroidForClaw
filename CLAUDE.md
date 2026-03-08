@@ -4,38 +4,93 @@
 
 ## 🎯 项目概览
 
-**androidforclaw** (原 AndroidForClaw) 是 [forClaw](../README.md) 项目家族的一部分,为 [OpenClaw](https://github.com/openclaw/openclaw) 提供手机控制能力。这是一个 Android AI Agent Runtime,使 AI 能够通过自然语言指令观察和控制 Android 设备。
+**androidforclaw** (原 AndroidForClaw) 是 [forClaw](../README.md) 项目家族的一部分,这是一个**手机版的 OpenClaw** - 在 Android 平台上实现 [OpenClaw](https://github.com/openclaw/openclaw) 的完整功能。
 
-**项目定位**: OpenClaw 是大脑,androidforclaw 是手机执行器。
+**项目定位**: **AndroidForClaw 是手机版的 OpenClaw**,在 Android 平台上实现 OpenClaw 的完整 AI Agent 能力,而非仅作为远程执行器。
 
-**核心目的**: 赋予 AI 使用 Android 手机的能力 - 观察屏幕、UI 交互、执行任务、数据处理等。应用场景包括但不限于:移动自动化、应用测试、数据采集、任务执行、设备交互。
+**核心目标**:
+- 实现 OpenClaw 的 60-80% 核心功能 (而非子集)
+- Protocol 100% 兼容 OpenClaw
+- 在移动设备上提供完整的 Agent Runtime
+- 支持 Gateway 多渠道接入
+- 适配移动平台特性 (轻量级、省电、移动 UI)
+
+**核心功能**:
+- **Agent Runtime**: 完整的 AgentLoop 执行引擎
+- **Skills System**: 与 OpenClaw 兼容的 Skills 系统
+- **Gateway**: WebSocket RPC (35-60 methods 目标)
+- **Multi-Channel**: 多渠道支持 (Discord, Feishu, WebChat)
+- **Android Tools**: 移动平台特化工具 (screenshot, UI 交互, 设备控制)
+- **Session 管理**: 与 OpenClaw 完全兼容的 JSONL 存储
 
 **核心理念** (源自 OpenClaw):
 - **知识与代码分离** - Tools 提供能力,Skills 教授如何使用
 - **Agent Loop** - 简洁的 LLM → Tool Call → Observation 循环
 - **Skills 系统** - 用 Markdown 文档实现可扩展的知识库
-- **Gateway 架构** - (规划中) 多渠道接入和远程控制
+- **Gateway 架构** - 多渠道接入和远程控制
 
-**技术栈**: Kotlin + Java, MVVM + Repository, OpenAI 兼容 API (Claude Opus 4.6), Accessibility Service, ADB JNI, MMKV 存储。
+**技术栈**: Kotlin + Java, MVVM + Repository, OpenAI 兼容 API (Claude Opus 4.6), Accessibility Service, ADB JNI, MMKV 存储, WebSocket Gateway。
 
 ### 🔗 与 OpenClaw 对齐
 
-**重要原则**: 当前 Android 项目功能和底层逻辑要尽量向 OpenClaw 对齐, 实施的时候不要偷懒
+**重要原则**: AndroidForClaw 是手机版 OpenClaw,要实现完整功能对齐,而非仅作为执行器
 
-**OpenClaw 路径**: `~/file/forclaw/OpenClaw`
+**OpenClaw 路径**: `~/file/forclaw/OpenClaw` 或 `../openclaw`
+
+**对齐目标** (基于 MOBILE_OPENCLAW_ALIGNMENT.md):
+
+| 维度 | 当前 | 短期目标 (1月) | 长期目标 (3月) |
+|------|------|----------------|----------------|
+| **Protocol** | 40% | **100%** ✅ | 100% |
+| **Methods** | 11/100 | **35/100** (35%) | **60/100** (60%) |
+| **Events** | 3/17 | **12/17** (70%) | **15/17** (88%) |
+| **Session** | 95% | **100%** ✅ | 100% |
+| **Skills** | 80% | **95%** ✅ | 100% |
+| **Agent Runtime** | 100% | 100% | 100% |
+| **Channel Router** | 0% | **60%** | **90%** |
+| **总体** | **60%** | **80%** | **90%** |
+
+**必须 100% 对齐** 🔴:
+- ✅ **Protocol 层**: Frame 结构、字段命名、Error 格式 (当前 40% → 目标 100%)
+- ✅ **Agent Runtime**: AgentLoop, Tool Registry, Skills System, Context Builder (已 100%)
+- ✅ **Session 管理**: JSONL 存储、Session CRUD、Compaction (已 95%)
+- ✅ **配置系统**: openclaw.json 格式 (已 100%)
+
+**逐步对齐 (60-80%)** 🟡:
+- 🟡 **Gateway Methods**: 从 11 个扩展到 35-60 个核心方法
+- 🟡 **Gateway Events**: 从 3 个扩展到 12-15 个核心事件
+- 🟡 **Channel Router**: 统一多渠道架构
+
+**合理差异 (平台特性)** ⚪:
+- ⚪ **Tools**: Android 特化工具 (screenshot, UI 交互) vs Desktop 工具 (文件系统, 命令行)
+- ⚪ **UI**: 移动友好 UI (悬浮窗, 简单 HTML) vs React Dashboard
+- ⚪ **部署**: APK 安装 vs npm 安装
 
 **对齐指南**:
 - ✅ **核心架构**: Agent Loop, Skills System, Tools Registry 必须对齐
 - ✅ **配置系统**: openclaw.json 格式必须一致
 - ✅ **Skills 格式**: AgentSkills.io 兼容格式
-- ⚠️ **Android 特有**: Accessibility, MediaProjection 等 Android 特有功能是合理的,不要死搬
+- ✅ **Protocol**: 必须 100% 兼容 OpenClaw Gateway Protocol
+- ⚠️ **Android 特有**: Accessibility, MediaProjection 等合理差异
 - 📋 **对照表**: 参考 [MAPPING.md](MAPPING.md) 快速找到对应实现
+
+**对齐路线图** (参考 MOBILE_OPENCLAW_ALIGNMENT.md):
+1. **Phase 1**: Protocol 100% 对齐 (2-3天) - req/res/event, payload, ok, HelloOkFrame
+2. **Phase 2**: 核心 Methods 扩展 (3-5天) - models.list, tools.catalog, skills.*, agents.*
+3. **Phase 3**: Events 完善 (2-3天) - agent.iteration, agent.tool_call, tick, health
+4. **Phase 4**: Channel Router (3-5天) - 统一多渠道架构
+5. **Phase 5**: 高级功能 (可选) - Cron, Exec Approvals, Voice Wake
 
 **工作流程**:
 1. 在 OpenClaw 中发现功能/架构
 2. 查阅 [MAPPING.md](MAPPING.md) 找到对应位置
 3. 如果缺失,实现后更新 MAPPING.md
 4. 如果是 Android 特有,在 MAPPING.md 中标注
+
+**参考文档**:
+- [MOBILE_OPENCLAW_ALIGNMENT.md](MOBILE_OPENCLAW_ALIGNMENT.md) - 完整对齐策略
+- [GATEWAY_ALIGNMENT_DECISION.md](GATEWAY_ALIGNMENT_DECISION.md) - Gateway 对齐决策
+- [OPENCLAW_REAL_COMPARISON.md](OPENCLAW_REAL_COMPARISON.md) - 与真实源码对比
 
 ---
 
@@ -67,10 +122,12 @@
 - 工作区 Skills: `/sdcard/AndroidForClaw/workspace/skills/` (用户自定义)
 - AgentSkills.io 兼容格式
 
-**Gateway** (规划中)
-- WebSocket 控制平面
-- 多渠道支持 (WhatsApp, Telegram, Web 等)
-- 远程控制与监控
+**Gateway** (基础已实现,持续完善中)
+- WebSocket RPC Server (Protocol v45)
+- 11 核心 Methods (目标 35-60 个)
+- 3 核心 Events (目标 12-15 个)
+- Token Authentication
+- 多渠道支持 (Discord, Feishu 独立实现,计划统一为 Channel Router)
 
 ---
 
@@ -717,16 +774,36 @@ if (result.success) {
 
 ### 🚧 进行中
 
-- [ ] Skills 系统 (SkillsLoader, 按需加载)
-- [ ] 内置 Skills 库 (mobile-operations, app-testing 等)
-- [ ] 用户自定义 Skills 支持
+- [ ] Gateway Protocol 100% 对齐 (Phase 1 - 最高优先级)
+  - [ ] Frame types: req/res/event
+  - [ ] Response 字段: ok, payload
+  - [ ] Event 字段: payload, seq
+  - [ ] HelloOkFrame 完整实现
+  - [ ] ErrorShape 完整结构
+- [ ] Gateway Methods 扩展 (Phase 2)
+  - [ ] models.list, tools.catalog
+  - [ ] skills.status, skills.install, skills.update
+  - [ ] agents.list, agents.create, agents.update, agents.delete
+  - [ ] config.get, config.set
+- [ ] Skills 系统完善
+  - [ ] SkillsLoader 完善
+  - [ ] 内置 Skills 库 (mobile-operations, app-testing 等)
+  - [ ] 用户自定义 Skills 支持
 
 ### 📅 计划中
 
-- [ ] Gateway 架构 (多渠道)
+- [ ] Gateway Events 扩展 (Phase 3)
+  - [ ] agent.iteration, agent.tool_call, agent.tool_result
+  - [ ] chat, tick, health, shutdown
+- [ ] Channel Router 统一 (Phase 4)
+  - [ ] 统一 Discord, Feishu 架构
+  - [ ] channels.status, channels.logout
 - [ ] Web UI 控制面板
-- [ ] 远程控制与监控
 - [ ] Skills 社区 (类似 ClawHub)
+- [ ] 高级功能 (Phase 5 - 可选)
+  - [ ] Cron 定时任务
+  - [ ] Exec Approvals
+  - [ ] Voice Wake
 
 ---
 
