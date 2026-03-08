@@ -403,8 +403,9 @@ fun PermissionsCard(onClick: () -> Unit) {
     val context = LocalContext.current
     // 检查 S4Claw (observer) 的无障碍服务
     val accessibility = isS4ClawAccessibilityEnabled(context)
-    // 这里简化处理，实际应该从context获取
-    val overlay = true // Settings.canDrawOverlays(context)
+    // 检查悬浮窗权限
+    val overlay = Settings.canDrawOverlays(context)
+    // 检查截图权限
     val screenCapture = MediaProjectionHelper.isMediaProjectionGranted()
 
     val allGranted = accessibility && overlay && screenCapture
