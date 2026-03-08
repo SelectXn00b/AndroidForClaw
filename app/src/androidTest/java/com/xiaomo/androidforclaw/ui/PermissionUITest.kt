@@ -43,7 +43,7 @@ class PermissionUITest {
      */
     @Test
     fun testWorkspaceDirectory_exists() {
-        val workspaceDir = java.io.File("/sdcard/androidforclaw-workspace")
+        val workspaceDir = java.io.File("/sdcard/.androidforclaw/workspace")
 
         // 验证工作空间目录可以创建
         if (!workspaceDir.exists()) {
@@ -59,7 +59,7 @@ class PermissionUITest {
      */
     @Test
     fun testSkillsDirectory_exists() {
-        val skillsDir = java.io.File("/sdcard/androidforclaw-workspace/skills")
+        val skillsDir = java.io.File("/sdcard/.androidforclaw/workspace/skills")
 
         if (!skillsDir.exists()) {
             skillsDir.mkdirs()
@@ -75,7 +75,7 @@ class PermissionUITest {
      */
     @Test
     fun testConfigDirectory_exists() {
-        val configDir = java.io.File("/sdcard/AndroidForClaw/config")
+        val configDir = java.io.File("/sdcard/.androidforclaw/config")
 
         if (!configDir.exists()) {
             configDir.mkdirs()
@@ -90,7 +90,7 @@ class PermissionUITest {
      */
     @Test
     fun testFileCreation_works() {
-        val testFile = java.io.File("/sdcard/androidforclaw-workspace/test.txt")
+        val testFile = java.io.File("/sdcard/.androidforclaw/workspace/test.txt")
 
         try {
             testFile.writeText("Test content")
