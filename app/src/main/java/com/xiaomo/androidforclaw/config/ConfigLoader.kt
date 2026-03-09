@@ -39,8 +39,8 @@ class ConfigLoader(private val context: Context) {
     private val openclawConfigFile: File
 
     init {
-        // 使用应用私有存储空间（避免 UID 变化导致的权限问题）
-        CONFIG_DIR = File(context.filesDir, "config").absolutePath
+        // 使用 /sdcard/.androidforclaw/config 目录，用户可通过文件管理器访问
+        CONFIG_DIR = "/sdcard/.androidforclaw/config"
         configDir = File(CONFIG_DIR)
         openclawConfigFile = File(configDir, OPENCLAW_CONFIG_FILE)
 
@@ -53,16 +53,12 @@ class ConfigLoader(private val context: Context) {
     /**
      * 从旧的 /sdcard/.androidforclaw 迁移配置到新位置
      *
-     * Migration strategy:
-     * 1. Try to copy file directly (if readable)
-     * 2. If copy fails (permission issue), read via shell command and write
-     *
-     * Old location: /sdcard/.androidforclaw/openclaw.json (note: not in config subdirectory)
-     * New location: /data/user/0/com.xiaomo.androidforclaw/files/config/openclaw.json
+     * Old location: /sdcard/.androidforclaw/openclaw.json (直接在根目录)
+     * New location: /sdcard/.androidforclaw/config/openclaw.json (在 config 子目录)
      */
     private fun migrateConfigFromOldLocation() {
         try {
-            // Old config file is directly under .androidforclaw directory, not in config subdirectory
+            // 旧配置文件直接在 .androidforclaw 目录下
             val oldConfigFile = File("/sdcard/.androidforclaw", OPENCLAW_CONFIG_FILE)
 
             // If old config file exists and new config file does not exist, try to migrate
