@@ -8,13 +8,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.util.UUID
 
 /**
- * Session Manager - 管理多会话
+ * Session Manager - Multi-session management
  *
- * 功能:
- * - 创建/删除会话
- * - 切换会话
- * - 每个会话独立的消息历史
- * - 会话元数据（标题、创建时间等）
+ * Features:
+ * - Create/delete sessions
+ * - Switch sessions
+ * - Independent message history for each session
+ * - Session metadata (title, creation time, etc.)
  */
 class SessionManager {
 
@@ -26,7 +26,7 @@ class SessionManager {
         val isActive: Boolean = false
     ) {
         /**
-         * 根据首条用户消息生成标题
+         * Generate title based on first user message
          */
         fun generateTitle(): String {
             val firstUserMessage = messages.firstOrNull { it.isUser }
@@ -47,7 +47,7 @@ class SessionManager {
         private const val PREF_LAST_SESSION_ID = "last_session_id"
     }
 
-    // MMKV 用于持久化存储
+    // MMKV for persistent storage
     private val mmkv by lazy {
         com.tencent.mmkv.MMKV.defaultMMKV()
     }
@@ -59,10 +59,10 @@ class SessionManager {
     val currentSession: StateFlow<Session> = _currentSession.asStateFlow()
 
     /**
-     * 创建默认会话
+     * Create default session
      */
     private fun createDefaultSession(): Session {
-        // 检查是否是首次启动 - OpenClaw 风格
+        // Check if it's first run - OpenClaw style
         val welcomeMessage = getWelcomeMessage()
 
         return Session(
@@ -78,22 +78,22 @@ class SessionManager {
     }
 
     /**
-     * 获取欢迎消息 - OpenClaw 风格
+     * Get welcome message - OpenClaw style
      *
-     * 如果 workspace 的 IDENTITY.md 为空或不存在，说明是首次启动
+     * If workspace's IDENTITY.md is empty or doesn't exist, it's first run
      */
     private fun getWelcomeMessage(): String {
-        // 检查 /sdcard/.androidforclaw/workspace/ 是否存在
+        // Check if /sdcard/.androidforclaw/workspace/ exists
         val workspaceDir = java.io.File("/sdcard/.androidforclaw/workspace")
         val identityFile = java.io.File(workspaceDir, "IDENTITY.md")
 
-        // 判断是否是首次启动（文件不存在或为空或包含模板文字）
+        // Determine if it's first run (file doesn't exist or is empty or contains template text)
         val isFirstRun = !identityFile.exists() ||
                          identityFile.readText().trim().isEmpty() ||
                          identityFile.readText().contains("Fill this in during your first conversation")
 
         return if (isFirstRun) {
-            // 首次启动 - OpenClaw 风格的引导
+            // First run - OpenClaw style guidance
             """
 你好！👋
 
@@ -148,18 +148,18 @@ class SessionManager {
 需要帮助吗？😊
             """.trimIndent()
         } else {
-            // 已配置 - 读取 IDENTITY 信息
+            // Already configured - Read IDENTITY info
             try {
                 val identityContent = identityFile.readText()
 
-                // 尝试解析 Name 和 Emoji
+                // Try to parse Name and Emoji
                 val nameMatch = Regex("""[*-]\s*\*?Name\*?[：:]\s*(.+)""").find(identityContent)
                 val emojiMatch = Regex("""[*-]\s*\*?Emoji\*?[：:]\s*(.+)""").find(identityContent)
 
                 val name = nameMatch?.groupValues?.get(1)?.trim() ?: "AndroidForClaw"
                 val emoji = emojiMatch?.groupValues?.get(1)?.trim() ?: "🤖"
 
-                // 常规欢迎消息
+                // Regular welcome message
                 """
 你好！$emoji 我是 $name
 
@@ -172,15 +172,15 @@ class SessionManager {
 需要什么帮助？
                 """.trimIndent()
             } catch (e: Exception) {
-                // 读取失败，使用默认消息
+                // Read failed, use default message
                 "你好！🤖 我是 AndroidForClaw\n\n我可以帮你控制和测试 Android 应用。需要什么帮助？"
             }
         }
     }
 
     /**
-     * 从后端 SessionManager 加载 sessions
-     * （飞书、Discord、WebSocket 创建的 sessions）
+     * Load sessions from backend SessionManager
+     * (sessions created by Feishu, Discord, WebSocket)
      */
     fun loadSessionsFromBackend() {
         try {
@@ -196,7 +196,7 @@ class SessionManager {
                 return
             }
 
-            // 转换后端 sessions 为 UI sessions
+            // Convert backend sessions to UI sessions
             val backendSessions = backendSessionKeys.mapNotNull { key ->
                 val backendSession = backendSessionManager.get(key)
                 if (backendSession != null) {
@@ -207,7 +207,7 @@ class SessionManager {
                         else -> "其他"
                     }
 
-                    // 生成标题
+                    // Generate title
                     val title = if (backendSession.messages.isNotEmpty()) {
                         val firstUserMsg = backendSession.messages.firstOrNull {
                             it.role == "user"
@@ -229,7 +229,7 @@ class SessionManager {
                         "[$type] ${key.take(10)}..."
                     }
 
-                    // 转换消息格式，过滤推理标签
+                    // Convert message format, filter reasoning tags
                     val uiMessages = backendSession.messages.mapNotNull { msg ->
                         if (msg.role == "user" || msg.role == "assistant") {
                             val contentStr = when (val c = msg.content) {
@@ -238,7 +238,7 @@ class SessionManager {
                                 else -> c.toString()
                             }
 
-                            // 对 assistant 消息过滤推理标签
+                            // Filter reasoning tags for assistant messages
                             val cleanContent = if (msg.role == "assistant") {
                                 ReasoningTagFilter.stripReasoningTags(contentStr)
                             } else {
@@ -276,27 +276,27 @@ class SessionManager {
             }
 
             if (backendSessions.isNotEmpty()) {
-                // 保留当前的 UI sessions（新对话按钮创建的）
+                // Keep current UI sessions (created by new conversation button)
                 val uiOnlySessions = _sessions.value.filter { session ->
                     !backendSessionKeys.contains(session.id)
                 }
 
-                // 合并：后端 sessions + UI sessions
+                // Merge: backend sessions + UI sessions
                 val allSessions = (backendSessions + uiOnlySessions).sortedByDescending { it.createdAt }
 
                 _sessions.value = allSessions
 
-                // 🔄 恢复上次使用的 session
+                // 🔄 Restore last used session
                 val lastSessionId = mmkv.decodeString(PREF_LAST_SESSION_ID)
                 if (lastSessionId != null) {
                     val lastSession = allSessions.find { it.id == lastSessionId }
                     if (lastSession != null) {
-                        // 更新激活状态
+                        // Update active status
                         _sessions.value = allSessions.map {
                             it.copy(isActive = it.id == lastSessionId)
                         }
                         _currentSession.value = lastSession.copy(isActive = true)
-                        android.util.Log.d("SessionManager", "✅ 恢复上次会话: $lastSessionId")
+                        android.util.Log.d("SessionManager", "✅ Restored last session: $lastSessionId")
                     }
                 }
 
@@ -309,57 +309,57 @@ class SessionManager {
     }
 
     /**
-     * 创建新会话
+     * Create new session
      */
     fun createSession(): Session {
         val newSession = createDefaultSession()
 
-        // 将当前所有会话设置为非激活
+        // Set all current sessions to inactive
         val updatedSessions = _sessions.value.map { it.copy(isActive = false) }
 
-        // 添加新会话
+        // Add new session
         _sessions.value = updatedSessions + newSession.copy(isActive = true)
         _currentSession.value = newSession
 
-        // 💾 保存当前 session ID 到 MMKV
+        // 💾 Save current session ID to MMKV
         mmkv.encode(PREF_LAST_SESSION_ID, newSession.id)
-        android.util.Log.d("SessionManager", "💾 保存新会话ID: ${newSession.id}")
+        android.util.Log.d("SessionManager", "💾 Saved new session ID: ${newSession.id}")
 
         return newSession
     }
 
     /**
-     * 切换到指定会话
+     * Switch to specified session
      */
     fun switchSession(sessionId: String) {
         val session = _sessions.value.find { it.id == sessionId }
         if (session != null) {
-            // 更新激活状态
+            // Update active status
             _sessions.value = _sessions.value.map {
                 it.copy(isActive = it.id == sessionId)
             }
             _currentSession.value = session.copy(isActive = true)
 
-            // 💾 保存当前 session ID 到 MMKV
+            // 💾 Save current session ID to MMKV
             mmkv.encode(PREF_LAST_SESSION_ID, sessionId)
-            android.util.Log.d("SessionManager", "💾 保存会话ID: $sessionId")
+            android.util.Log.d("SessionManager", "💾 Saved session ID: $sessionId")
         }
     }
 
     /**
-     * 删除会话
+     * Delete session
      */
     fun deleteSession(sessionId: String) {
         val currentSessions = _sessions.value
         if (currentSessions.size <= 1) {
-            // 至少保留一个会话
+            // Keep at least one session
             return
         }
 
         val remainingSessions = currentSessions.filter { it.id != sessionId }
         _sessions.value = remainingSessions
 
-        // 如果删除的是当前会话，切换到最新的会话
+        // If deleting current session, switch to latest session
         if (_currentSession.value.id == sessionId) {
             val newCurrent = remainingSessions.first()
             _currentSession.value = newCurrent.copy(isActive = true)
@@ -367,14 +367,14 @@ class SessionManager {
     }
 
     /**
-     * 添加消息到当前会话
+     * Add message to current session
      */
     fun addMessageToCurrentSession(message: ChatMessage) {
         val current = _currentSession.value
         val updatedMessages = current.messages + message
         val updatedSession = current.copy(messages = updatedMessages)
 
-        // 更新会话列表
+        // Update session list
         _sessions.value = _sessions.value.map {
             if (it.id == current.id) updatedSession else it
         }
@@ -382,13 +382,13 @@ class SessionManager {
     }
 
     /**
-     * 替换当前会话的所有消息 (用于从后端同步)
+     * Replace all messages in current session (for syncing from backend)
      */
     fun replaceCurrentSessionMessages(messages: List<ChatMessage>) {
         val current = _currentSession.value
         val updatedSession = current.copy(messages = messages)
 
-        // 更新会话列表
+        // Update session list
         _sessions.value = _sessions.value.map {
             if (it.id == current.id) updatedSession else it
         }
@@ -396,14 +396,14 @@ class SessionManager {
     }
 
     /**
-     * 从当前会话移除消息
+     * Remove message from current session
      */
     fun removeMessageFromCurrentSession(messageId: String) {
         val current = _currentSession.value
         val updatedMessages = current.messages.filter { it.id != messageId }
         val updatedSession = current.copy(messages = updatedMessages)
 
-        // 更新会话列表
+        // Update session list
         _sessions.value = _sessions.value.map {
             if (it.id == current.id) updatedSession else it
         }
@@ -411,7 +411,7 @@ class SessionManager {
     }
 
     /**
-     * 更新当前会话的标题
+     * Update current session title
      */
     fun updateCurrentSessionTitle(title: String) {
         val current = _currentSession.value
@@ -424,7 +424,7 @@ class SessionManager {
     }
 
     /**
-     * 自动生成当前会话的标题（基于首条用户消息）
+     * Auto-generate current session title (based on first user message)
      */
     fun autoGenerateCurrentSessionTitle() {
         val current = _currentSession.value
@@ -435,7 +435,7 @@ class SessionManager {
     }
 
     /**
-     * 清空当前会话的消息
+     * Clear current session messages
      */
     fun clearCurrentSession() {
         val current = _currentSession.value
@@ -455,12 +455,12 @@ class SessionManager {
     }
 
     /**
-     * 获取所有会话
+     * Get all sessions
      */
     fun getAllSessions(): List<Session> = _sessions.value
 
     /**
-     * 获取会话数量
+     * Get session count
      */
     fun getSessionCount(): Int = _sessions.value.size
 }

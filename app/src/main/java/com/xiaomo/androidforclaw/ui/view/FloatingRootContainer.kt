@@ -8,8 +8,8 @@ import android.widget.LinearLayout
 import com.draco.ladb.R
 
 /**
- * 悬浮窗根布局容器
- * 使用自定义Button Tab切换View页面（避免Material Design组件在Service中的主题问题）
+ * Floating window root layout container
+ * Uses custom Button Tabs to switch View pages (to avoid Material Design component theme issues in Service)
  */
 class FloatingRootContainer @JvmOverloads constructor(
     context: Context,
@@ -22,21 +22,21 @@ class FloatingRootContainer @JvmOverloads constructor(
     private lateinit var btnTabBugList: Button
     private lateinit var contentContainer: LinearLayout
 
-    // 页面View (ChatHistoryView 和 ChatLogView 已删除 - 旧架构)
+    // Page Views (ChatHistoryView and ChatLogView removed - old architecture)
     private var todoListView: TodosView? = null
 
-    // 当前显示的页面索引
+    // Current displayed page index
     private var currentPageIndex = 0
 
     init {
         orientation = VERTICAL
         setupViews()
         setupTabListener()
-        showPage(0) // 默认显示第一个页面
+        showPage(0) // Display first page by default
     }
 
     private fun setupViews() {
-        // 加载布局
+        // Load layout
         LayoutInflater.from(context).inflate(R.layout.layout_floating_root, this, true)
 
         btnTabChatHistory = findViewById(R.id.btnTabChatHistory)
@@ -44,12 +44,12 @@ class FloatingRootContainer @JvmOverloads constructor(
         btnTabBugList = findViewById(R.id.btnTabBugList)
         contentContainer = findViewById(R.id.contentContainer)
 
-        // 创建页面View
+        // Create page Views
         createViews()
     }
 
     private fun createViews() {
-        // 创建TodosView
+        // Create TodosView
         todoListView = TodosView(context)
     }
 
@@ -71,13 +71,13 @@ class FloatingRootContainer @JvmOverloads constructor(
         currentPageIndex = index
         contentContainer.removeAllViews()
 
-        // 更新Tab按钮样式
+        // Update Tab button style
         updateTabAppearance(index)
 
-        // 显示对应的页面
+        // Show corresponding page
         when (index) {
             0 -> {
-                // ChatHistoryView 和 ChatLogView 已删除（旧架构），暂不显示
+                // ChatHistoryView and ChatLogView removed (old architecture), not displayed for now
             }
 
             1 -> {
@@ -85,13 +85,13 @@ class FloatingRootContainer @JvmOverloads constructor(
             }
 
             2 -> {
-                // BugListView 已移除
+                // BugListView removed
             }
         }
     }
 
     private fun updateTabAppearance(selectedIndex: Int) {
-        // 重置所有按钮为未选中状态
+        // Reset all buttons to unselected state
         btnTabChatHistory.setBackgroundResource(R.drawable.tab_unselected_background)
         btnTabChatHistory.setTextColor(context.getColor(android.R.color.white))
         btnTabTodos.setBackgroundResource(R.drawable.tab_unselected_background)
@@ -99,7 +99,7 @@ class FloatingRootContainer @JvmOverloads constructor(
         btnTabBugList.setBackgroundResource(R.drawable.tab_unselected_background)
         btnTabBugList.setTextColor(context.getColor(android.R.color.white))
 
-        // 设置选中的按钮样式
+        // Set selected button style
         when (selectedIndex) {
             0 -> {
                 btnTabChatHistory.setBackgroundResource(R.drawable.tab_selected_background)
@@ -119,7 +119,7 @@ class FloatingRootContainer @JvmOverloads constructor(
     }
 
     /**
-     * 清理资源
+     * Clean up resources
      */
     fun cleanup() {
         todoListView?.cleanup()

@@ -450,12 +450,12 @@ private fun formatTimestamp(timestamp: Long): String {
 }
 
 /**
- * Session 控制栏 - 参考 OpenClaw 的设计
+ * Session control bar - Reference OpenClaw design
  *
- * 功能：
- * - 显示当前 session
- * - 下拉选择器切换 session
- * - 新建 session 按钮
+ * Features:
+ * - Display current session
+ * - Dropdown selector to switch sessions
+ * - New session button
  */
 @Composable
 fun SessionControlBar(
@@ -479,7 +479,7 @@ fun SessionControlBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // Session 选择器 (类似 OpenClaw 的 select)
+            // Session selector (similar to OpenClaw's select)
             Box(
                 modifier = Modifier.weight(1f)
             ) {
@@ -499,7 +499,7 @@ fun SessionControlBar(
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Session 标题
+                        // Session title
                         Text(
                             text = currentSession?.title ?: "新对话",
                             style = TextStyle(
@@ -512,7 +512,7 @@ fun SessionControlBar(
                             overflow = TextOverflow.Ellipsis
                         )
 
-                        // 下拉图标
+                        // Dropdown icon
                         Icon(
                             imageVector = Icons.Default.ArrowDropDown,
                             contentDescription = "选择会话",
@@ -522,7 +522,7 @@ fun SessionControlBar(
                     }
                 }
 
-                // 下拉菜单
+                // Dropdown menu
                 DropdownMenu(
                     expanded = expanded,
                     onDismissRequest = { expanded = false },
@@ -572,7 +572,7 @@ fun SessionControlBar(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // 新建 Session 按钮
+            // New Session button
             Surface(
                 modifier = Modifier.size(40.dp),
                 shape = CircleShape,
@@ -595,7 +595,7 @@ fun SessionControlBar(
 }
 
 /**
- * 格式化 Session 创建时间
+ * Format Session creation time
  */
 private fun formatSessionTime(timestamp: Long): String {
     val now = System.currentTimeMillis()
@@ -612,4 +612,4 @@ private fun formatSessionTime(timestamp: Long): String {
     }
 }
 
-// 预览功能已移除，在实际Activity中使用
+// Preview functionality removed, use in actual Activity
