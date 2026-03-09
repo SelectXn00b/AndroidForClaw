@@ -1,13 +1,13 @@
 package com.xiaomo.androidforclaw.agent.skills
 
 /**
- * Skill 文档数据模型
- * 对应 AgentSkills.io 格式
+ * Skill Document Data Model
+ * Corresponds to AgentSkills.io format
  *
- * 文件格式:
+ * File format:
  * ---
  * name: skill-name
- * description: 技能描述
+ * description: Skill description
  * metadata:
  *   {
  *     "openclaw": {
@@ -26,38 +26,38 @@ package com.xiaomo.androidforclaw.agent.skills
  */
 data class SkillDocument(
     /**
-     * Skill 名称（唯一标识）
-     * 例如: "mobile-operations", "app-testing"
+     * Skill name (unique identifier)
+     * e.g.: "mobile-operations", "app-testing"
      */
     val name: String,
 
     /**
-     * Skill 描述（1-2 句话）
-     * 例如: "移动设备操作核心技能"
+     * Skill description (1-2 sentences)
+     * e.g.: "Core mobile device operation skills"
      */
     val description: String,
 
     /**
-     * Skill 元数据
+     * Skill metadata
      */
     val metadata: SkillMetadata,
 
     /**
-     * Skill 正文内容（Markdown 格式）
-     * 这部分会注入到系统提示词中
+     * Skill body content (Markdown format)
+     * This part will be injected into system prompt
      */
     val content: String,
 
     /**
-     * Skill 来源
-     * "bundled" - 内置在 assets/skills/
-     * "managed" - 来自 /sdcard/.androidforclaw/skills/ (对齐 ~/.openclaw/skills/)
-     * "workspace" - 来自 /sdcard/.androidforclaw/workspace/skills/ (对齐 ~/.openclaw/workspace/)
+     * Skill source
+     * "bundled" - Built-in at assets/skills/
+     * "managed" - From /sdcard/.androidforclaw/skills/ (aligns with ~/.openclaw/skills/)
+     * "workspace" - From /sdcard/.androidforclaw/workspace/skills/ (aligns with ~/.openclaw/workspace/)
      */
     val source: SkillSource = SkillSource.BUNDLED
 ) {
     /**
-     * 获取完整内容（带标题）
+     * Get formatted content (with title)
      */
     fun getFormattedContent(): String {
         val emoji = metadata.emoji ?: ""
@@ -70,7 +70,7 @@ $content
     }
 
     /**
-     * 估算 Token 数量（粗略估算: 1 token ≈ 4 字符）
+     * Estimate token count (rough estimate: 1 token ≈ 4 characters)
      */
     fun estimateTokens(): Int {
         return (content.length / 4.0).toInt()
@@ -78,63 +78,63 @@ $content
 }
 
 /**
- * Skill 元数据
+ * Skill Metadata
  */
 data class SkillMetadata(
     /**
-     * 是否始终加载（启动时加载）
-     * true: 加载到所有系统提示词
-     * false: 按需加载
+     * Whether to always load (load at startup)
+     * true: Load into all system prompts
+     * false: Load on demand
      */
     val always: Boolean = false,
 
     /**
-     * Skill 的 emoji 图标
-     * 例如: "📱", "🧪", "🐛"
+     * Skill's emoji icon
+     * e.g.: "📱", "🧪", "🐛"
      */
     val emoji: String? = null,
 
     /**
-     * Skill 依赖要求
+     * Skill dependency requirements
      */
     val requires: SkillRequires? = null
 )
 
 /**
- * Skill 来源枚举
- * 对齐 OpenClaw 三层架构
+ * Skill Source Enum
+ * Aligns with OpenClaw three-tier architecture
  */
 enum class SkillSource(val displayName: String) {
     BUNDLED("bundled"),      // assets/skills/
-    MANAGED("managed"),      // /sdcard/.androidforclaw/skills/ (对齐 ~/.openclaw/skills/)
-    WORKSPACE("workspace")   // /sdcard/.androidforclaw/workspace/skills/ (对齐 ~/.openclaw/workspace/)
+    MANAGED("managed"),      // /sdcard/.androidforclaw/skills/ (aligns with ~/.openclaw/skills/)
+    WORKSPACE("workspace")   // /sdcard/.androidforclaw/workspace/skills/ (aligns with ~/.openclaw/workspace/)
 }
 
 /**
- * Skill 依赖要求
- * 用于检查 Skill 是否可用
+ * Skill Dependency Requirements
+ * Used to check if Skill is available
  */
 data class SkillRequires(
     /**
-     * 需要的二进制工具
-     * 例如: ["adb", "ffmpeg"]
+     * Required binary tools
+     * e.g.: ["adb", "ffmpeg"]
      */
     val bins: List<String> = emptyList(),
 
     /**
-     * 需要的环境变量
-     * 例如: ["ANDROID_HOME", "PATH"]
+     * Required environment variables
+     * e.g.: ["ANDROID_HOME", "PATH"]
      */
     val env: List<String> = emptyList(),
 
     /**
-     * 需要的配置项
-     * 例如: ["api.key", "device.id"]
+     * Required config items
+     * e.g.: ["api.key", "device.id"]
      */
     val config: List<String> = emptyList()
 ) {
     /**
-     * 是否有任何依赖
+     * Check if there are any dependencies
      */
     fun hasRequirements(): Boolean {
         return bins.isNotEmpty() || env.isNotEmpty() || config.isNotEmpty()

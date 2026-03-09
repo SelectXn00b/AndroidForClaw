@@ -10,15 +10,15 @@ import com.xiaomo.androidforclaw.providers.ToolDefinition
 import com.xiaomo.androidforclaw.browser.BrowserToolClient
 
 /**
- * browser_wait - 等待条件
+ * browser_wait - Wait for condition
  *
- * 支持 6 种等待方式:
- * 1. timeMs - 等待指定时间
- * 2. selector - 等待元素出现
- * 3. text - 等待文本出现
- * 4. url - 等待 URL 匹配
- * 5. js - 等待 JavaScript 条件为真
- * 6. navigation - 等待页面导航完成
+ * Supports 6 wait modes:
+ * 1. timeMs - Wait for specified time
+ * 2. selector - Wait for element to appear
+ * 3. text - Wait for text to appear
+ * 4. url - Wait for URL match
+ * 5. js - Wait for JavaScript condition to be true
+ * 6. navigation - Wait for page navigation to complete
  */
 class BrowserWaitSkill(private val context: Context) : Skill {
     override val name = "browser_wait"

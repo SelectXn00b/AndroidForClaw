@@ -10,8 +10,8 @@ import com.xiaomo.androidforclaw.providers.ToolDefinition
 import com.xiaomo.androidforclaw.browser.BrowserToolClient
 
 /**
- * 通用浏览器 Skill
- * 用于包装其他浏览器工具
+ * Generic Browser Skill
+ * Used to wrap other browser tools
  */
 class BrowserGenericSkill(
     private val context: Context,
@@ -56,7 +56,7 @@ class BrowserGenericSkill(
 }
 
 /**
- * 创建浏览器 Skills 的工厂方法
+ * Factory methods for creating browser Skills
  */
 object BrowserSkillFactory {
 

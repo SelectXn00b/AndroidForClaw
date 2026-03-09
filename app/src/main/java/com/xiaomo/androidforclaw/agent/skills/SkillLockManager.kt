@@ -7,10 +7,10 @@ import com.google.gson.JsonObject
 import java.io.File
 
 /**
- * 技能锁文件管理器
+ * Skill Lock File Manager
  *
- * 管理 .clawhub/lock.json
- * 记录已安装技能的版本、哈希、安装时间等信息
+ * Manages .clawhub/lock.json
+ * Records version, hash, installation time and other info of installed skills
  */
 class SkillLockManager(private val workspacePath: String) {
     companion object {
@@ -23,7 +23,7 @@ class SkillLockManager(private val workspacePath: String) {
     private val gson: Gson = GsonBuilder().setPrettyPrinting().create()
 
     /**
-     * 读取锁文件
+     * Read lock file
      */
     fun readLock(): SkillLockFile {
         if (!lockFile.exists()) {
@@ -41,14 +41,14 @@ class SkillLockManager(private val workspacePath: String) {
     }
 
     /**
-     * 写入锁文件
+     * Write lock file
      */
     fun writeLock(lockFile: SkillLockFile): Result<Unit> {
         return try {
-            // 确保目录存在
+            // Ensure directory exists
             lockDir.mkdirs()
 
-            // 写入文件
+            // Write file
             val content = gson.toJson(lockFile)
             this.lockFile.writeText(content)
 
@@ -62,7 +62,7 @@ class SkillLockManager(private val workspacePath: String) {
     }
 
     /**
-     * 添加或更新技能记录
+     * Add or update skill record
      */
     fun addOrUpdateSkill(entry: SkillLockEntry): Result<Unit> {
         return try {
@@ -70,12 +70,12 @@ class SkillLockManager(private val workspacePath: String) {
             val existingIndex = lock.skills.indexOfFirst { it.slug == entry.slug }
 
             val updatedSkills = if (existingIndex >= 0) {
-                // 更新现有记录
+                // Update existing record
                 lock.skills.toMutableList().apply {
                     set(existingIndex, entry)
                 }
             } else {
-                // 添加新记录
+                // Add new record
                 lock.skills + entry
             }
 
@@ -88,7 +88,7 @@ class SkillLockManager(private val workspacePath: String) {
     }
 
     /**
-     * 移除技能记录
+     * Remove skill record
      */
     fun removeSkill(slug: String): Result<Unit> {
         return try {
@@ -108,7 +108,7 @@ class SkillLockManager(private val workspacePath: String) {
     }
 
     /**
-     * 获取技能记录
+     * Get skill record
      */
     fun getSkill(slug: String): SkillLockEntry? {
         val lock = readLock()
@@ -116,21 +116,21 @@ class SkillLockManager(private val workspacePath: String) {
     }
 
     /**
-     * 列出所有已安装技能
+     * List all installed skills
      */
     fun listSkills(): List<SkillLockEntry> {
         return readLock().skills
     }
 
     /**
-     * 检查技能是否已安装
+     * Check if skill is installed
      */
     fun isInstalled(slug: String): Boolean {
         return getSkill(slug) != null
     }
 
     /**
-     * 获取已安装版本
+     * Get installed version
      */
     fun getInstalledVersion(slug: String): String? {
         return getSkill(slug)?.version
@@ -138,14 +138,14 @@ class SkillLockManager(private val workspacePath: String) {
 }
 
 /**
- * 锁文件结构
+ * Lock File Structure
  */
 data class SkillLockFile(
     val skills: List<SkillLockEntry>
 )
 
 /**
- * 技能锁条目
+ * Skill Lock Entry
  */
 data class SkillLockEntry(
     val name: String,

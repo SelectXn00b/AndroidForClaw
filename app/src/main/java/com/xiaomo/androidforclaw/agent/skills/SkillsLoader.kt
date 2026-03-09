@@ -7,48 +7,48 @@ import com.tencent.mmkv.MMKV
 import java.io.File
 
 /**
- * Skills 加载器
- * 学习自 OpenClaw 的三层加载机制
+ * Skills Loader
+ * Implements OpenClaw's three-tier loading mechanism
  *
- * 加载优先级（高优先级覆盖低优先级）:
- * 1. Bundled Skills (最低) - assets/skills/
- * 2. Managed Skills (中等) - /sdcard/.androidforclaw/skills/
- * 3. Workspace Skills (最高) - /sdcard/.androidforclaw/workspace/skills/
+ * Loading priority (higher priority overrides lower):
+ * 1. Bundled Skills (lowest) - assets/skills/
+ * 2. Managed Skills (medium) - /sdcard/.androidforclaw/skills/
+ * 3. Workspace Skills (highest) - /sdcard/.androidforclaw/workspace/skills/
  *
- * Workspace 对齐 OpenClaw 架构：
+ * Workspace aligns with OpenClaw architecture:
  * - OpenClaw: ~/.openclaw/workspace/ (Git repo)
- * - AndroidForClaw: /sdcard/.androidforclaw/workspace/ (可 Git)
- * - 用户可通过文件管理器直接访问和编辑
+ * - AndroidForClaw: /sdcard/.androidforclaw/workspace/ (Git-enabled)
+ * - Users can directly access and edit via file manager
  */
 class SkillsLoader(private val context: Context) {
     companion object {
         private const val TAG = "SkillsLoader"
 
-        // 三层 Skills 目录 (对齐 OpenClaw 架构)
-        private const val BUNDLED_SKILLS_PATH = "skills"  // assets 路径
-        private const val MANAGED_SKILLS_DIR = "/sdcard/.androidforclaw/skills"  // 对齐 ~/.openclaw/skills/
-        private const val WORKSPACE_SKILLS_DIR = "/sdcard/.androidforclaw/workspace/skills"  // 对齐 ~/.openclaw/workspace/
+        // Three-tier Skills directories (aligns with OpenClaw architecture)
+        private const val BUNDLED_SKILLS_PATH = "skills"  // assets path
+        private const val MANAGED_SKILLS_DIR = "/sdcard/.androidforclaw/skills"  // aligns with ~/.openclaw/skills/
+        private const val WORKSPACE_SKILLS_DIR = "/sdcard/.androidforclaw/workspace/skills"  // aligns with ~/.openclaw/workspace/
 
-        // Skill 文件名
+        // Skill file name
         private const val SKILL_FILE_NAME = "SKILL.md"
     }
 
-    // Skills 缓存
+    // Skills cache
     private val skillsCache = mutableMapOf<String, SkillDocument>()
     private var cacheValid = false
 
-    // 文件监控 (Block 6 - 热重载)
+    // File monitoring (Block 6 - hot reload)
     private var fileObserver: FileObserver? = null
     private var hotReloadEnabled = false
 
     /**
-     * 加载所有 Skills
-     * 按优先级覆盖: Workspace > Managed > Bundled
+     * Load all Skills
+     * Priority override: Workspace > Managed > Bundled
      *
      * @return Map<name, SkillDocument>
      */
     fun loadSkills(): Map<String, SkillDocument> {
-        // 如果缓存有效，直接返回
+        // Return cached if valid
         if (cacheValid && skillsCache.isNotEmpty()) {
             Log.d(TAG, "返回缓存的 Skills (${skillsCache.size} 个)")
             return skillsCache.toMap()
@@ -57,7 +57,7 @@ class SkillsLoader(private val context: Context) {
         Log.d(TAG, "开始加载 Skills...")
         skillsCache.clear()
 
-        // 按优先级加载，高优先级覆盖低优先级
+        // Load by priority, higher priority overrides lower
         val bundledCount = loadBundledSkills(skillsCache)
         val managedCount = loadManagedSkills(skillsCache)
         val workspaceCount = loadWorkspaceSkills(skillsCache)
@@ -73,7 +73,7 @@ class SkillsLoader(private val context: Context) {
     }
 
     /**
-     * 重新加载 Skills (清除缓存)
+     * Reload Skills (clear cache)
      */
     fun reload() {
         Log.i(TAG, "重新加载 Skills...")
@@ -82,8 +82,8 @@ class SkillsLoader(private val context: Context) {
     }
 
     /**
-     * 启用热重载 (Block 6)
-     * 监控 Workspace 和 Managed 目录，文件变化时自动 reload
+     * Enable hot reload (Block 6)
+     * Monitor Workspace and Managed directories, auto reload on file changes
      */
     fun enableHotReload() {
         if (hotReloadEnabled) {
@@ -92,7 +92,7 @@ class SkillsLoader(private val context: Context) {
         }
 
         try {
-            // 监控 Workspace Skills 目录
+            // Monitor Workspace Skills directory
             val workspaceDir = File(WORKSPACE_SKILLS_DIR)
             if (workspaceDir.exists()) {
                 fileObserver = object : FileObserver(workspaceDir, CREATE or MODIFY or DELETE) {
@@ -116,7 +116,7 @@ class SkillsLoader(private val context: Context) {
     }
 
     /**
-     * 禁用热重载 (Block 6)
+     * Disable hot reload (Block 6)
      */
     fun disableHotReload() {
         fileObserver?.stopWatching()
@@ -126,13 +126,13 @@ class SkillsLoader(private val context: Context) {
     }
 
     /**
-     * 热重载是否启用
+     * Check if hot reload is enabled
      */
     fun isHotReloadEnabled(): Boolean = hotReloadEnabled
 
     /**
-     * 获取 Always Skills (始终加载的技能)
-     * 这些技能会在启动时加载到系统提示词
+     * Get Always Skills (always-loaded skills)
+     * These skills are loaded into system prompt at startup
      */
     fun getAlwaysSkills(): List<SkillDocument> {
         val allSkills = loadSkills()
@@ -142,11 +142,11 @@ class SkillsLoader(private val context: Context) {
     }
 
     /**
-     * 根据用户目标选择相关 Skills (Block 5 改进)
+     * Select relevant Skills based on user goal (Block 5 improvement)
      *
-     * @param userGoal 用户目标/指令
-     * @param excludeAlways 是否排除 always skills（避免重复）
-     * @return 相关的 Skills 列表
+     * @param userGoal User goal/instruction
+     * @param excludeAlways Whether to exclude always skills (avoid duplication)
+     * @return List of relevant Skills
      */
     fun selectRelevantSkills(
         userGoal: String,
@@ -155,22 +155,22 @@ class SkillsLoader(private val context: Context) {
         val allSkills = loadSkills()
         val keywords = userGoal.lowercase()
 
-        // 1. 使用任务类型识别
+        // 1. Use task type identification
         val recommendedSkillNames = identifyTaskType(userGoal)
 
-        // 2. 关键词匹配
+        // 2. Keyword matching
         val relevant = allSkills.values.filter { skill ->
-            // 排除 always skills（避免重复注入）
+            // Exclude always skills (avoid duplicate injection)
             if (excludeAlways && skill.metadata.always) {
                 return@filter false
             }
 
-            // 优先匹配任务类型推荐
+            // Prioritize task type recommendations
             if (recommendedSkillNames.contains(skill.name)) {
                 return@filter true
             }
 
-            // 然后尝试关键词匹配
+            // Then try keyword matching
             keywords.contains(skill.name.lowercase()) ||
                     keywords.contains(skill.description.lowercase()) ||
                     matchesKeywords(skill, keywords)
@@ -185,7 +185,7 @@ class SkillsLoader(private val context: Context) {
     }
 
     /**
-     * 检查 Skill 的依赖要求是否满足
+     * Check if Skill's dependency requirements are met
      */
     fun checkRequirements(skill: SkillDocument): RequirementsCheckResult {
         val requires = skill.metadata.requires
@@ -211,7 +211,7 @@ class SkillsLoader(private val context: Context) {
     }
 
     /**
-     * 获取 Skill 统计信息
+     * Get Skill statistics
      */
     fun getStatistics(): SkillsStatistics {
         val skills = loadSkills()
@@ -229,11 +229,11 @@ class SkillsLoader(private val context: Context) {
         )
     }
 
-    // ==================== 私有方法 ====================
+    // ==================== Private Methods ====================
 
     /**
-     * 从 assets/skills/ 加载内置 Skills (Bundled)
-     * 优先级: 最低
+     * Load bundled Skills from assets/skills/ (Bundled)
+     * Priority: Lowest
      */
     private fun loadBundledSkills(skills: MutableMap<String, SkillDocument>): Int {
         var count = 0
@@ -265,10 +265,10 @@ class SkillsLoader(private val context: Context) {
     }
 
     /**
-     * 从 /sdcard/.androidforclaw/skills/ 加载托管 Skills (Managed)
-     * 优先级: 中等（覆盖 Bundled）
+     * Load managed Skills from /sdcard/.androidforclaw/skills/ (Managed)
+     * Priority: Medium (overrides Bundled)
      *
-     * 对齐 OpenClaw: ~/.openclaw/skills/
+     * Aligns with OpenClaw: ~/.openclaw/skills/
      */
     private fun loadManagedSkills(skills: MutableMap<String, SkillDocument>): Int {
         var count = 0
@@ -312,13 +312,13 @@ class SkillsLoader(private val context: Context) {
     }
 
     /**
-     * 从 /sdcard/.androidforclaw/workspace/skills/ 加载工作区 Skills (Workspace)
-     * 优先级: 最高（覆盖 Bundled 和 Managed）
+     * Load workspace Skills from /sdcard/.androidforclaw/workspace/skills/ (Workspace)
+     * Priority: Highest (overrides Bundled and Managed)
      *
-     * 对齐 OpenClaw 架构：
+     * Aligns with OpenClaw architecture:
      * - OpenClaw: ~/.openclaw/workspace/ (Git repo)
-     * - AndroidForClaw: /sdcard/.androidforclaw/workspace/ (可 Git)
-     * - workspace/ 是用户的主工作区，支持版本控制
+     * - AndroidForClaw: /sdcard/.androidforclaw/workspace/ (Git-enabled)
+     * - workspace/ is the user's main workspace, supports version control
      */
     private fun loadWorkspaceSkills(skills: MutableMap<String, SkillDocument>): Int {
         var count = 0
@@ -362,11 +362,11 @@ class SkillsLoader(private val context: Context) {
     }
 
     /**
-     * 关键词匹配 (Block 5 改进)
-     * 用于判断 Skill 是否与用户目标相关
+     * Keyword matching (Block 5 improvement)
+     * Used to determine if Skill is relevant to user goal
      */
     private fun matchesKeywords(skill: SkillDocument, keywords: String): Boolean {
-        // 预定义的关键词映射
+        // Predefined keyword mappings
         return when (skill.name) {
             "app-testing" -> {
                 keywords.contains("测试") || keywords.contains("test") ||
@@ -406,47 +406,47 @@ class SkillsLoader(private val context: Context) {
     }
 
     /**
-     * 任务类型识别 (Block 5 新增)
-     * 根据用户目标识别任务类型，返回建议的 Skills
+     * Task type identification (Block 5 addition)
+     * Identify task type based on user goal, return recommended Skills
      */
     private fun identifyTaskType(userGoal: String): List<String> {
         val keywords = userGoal.lowercase()
         val recommendedSkills = mutableListOf<String>()
 
-        // 测试类任务
+        // Testing tasks
         if (keywords.contains("测试") || keywords.contains("test") ||
             keywords.contains("验证") || keywords.contains("检查")) {
             recommendedSkills.add("app-testing")
         }
 
-        // 调试类任务
+        // Debugging tasks
         if (keywords.contains("调试") || keywords.contains("debug") ||
             keywords.contains("bug") || keywords.contains("问题") ||
             keywords.contains("错误") || keywords.contains("崩溃")) {
             recommendedSkills.add("debugging")
         }
 
-        // UI 验证任务
+        // UI validation tasks
         if (keywords.contains("界面") || keywords.contains("ui") ||
             keywords.contains("布局") || keywords.contains("显示") ||
             keywords.contains("页面")) {
             recommendedSkills.add("ui-validation")
         }
 
-        // 性能测试任务
+        // Performance testing tasks
         if (keywords.contains("性能") || keywords.contains("卡顿") ||
             keywords.contains("慢") || keywords.contains("优化") ||
             keywords.contains("启动") || keywords.contains("流畅")) {
             recommendedSkills.add("performance")
         }
 
-        // 无障碍测试任务
+        // Accessibility testing tasks
         if (keywords.contains("无障碍") || keywords.contains("accessibility") ||
             keywords.contains("适配") || keywords.contains("可读性")) {
             recommendedSkills.add("accessibility")
         }
 
-        // 网络测试任务
+        // Network testing tasks
         if (keywords.contains("网络") || keywords.contains("联网") ||
             keywords.contains("离线") || keywords.contains("断网") ||
             keywords.contains("api")) {
@@ -458,7 +458,7 @@ class SkillsLoader(private val context: Context) {
     }
 
     /**
-     * 检查二进制工具是否可用
+     * Check if binary tool is available
      */
     private fun isBinaryAvailable(bin: String): Boolean {
         return try {
@@ -472,7 +472,7 @@ class SkillsLoader(private val context: Context) {
     }
 
     /**
-     * 检查配置项是否可用
+     * Check if config item is available
      */
     private fun isConfigAvailable(configKey: String): Boolean {
         return try {
@@ -485,16 +485,16 @@ class SkillsLoader(private val context: Context) {
 }
 
 /**
- * 依赖检查结果
+ * Requirements check result
  */
 sealed class RequirementsCheckResult {
     /**
-     * 依赖已满足
+     * Requirements satisfied
      */
     object Satisfied : RequirementsCheckResult()
 
     /**
-     * 依赖未满足
+     * Requirements not satisfied
      */
     data class Unsatisfied(
         val missingBins: List<String>,
@@ -518,7 +518,7 @@ sealed class RequirementsCheckResult {
 }
 
 /**
- * Skills 统计信息
+ * Skills statistics
  */
 data class SkillsStatistics(
     val totalSkills: Int,

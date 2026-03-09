@@ -10,7 +10,7 @@ import com.xiaomo.androidforclaw.providers.ToolDefinition
 import com.xiaomo.androidforclaw.browser.BrowserToolClient
 
 /**
- * browser_click - 点击元素
+ * browser_click - Click element
  */
 class BrowserClickSkill(private val context: Context) : Skill {
     override val name = "browser_click"

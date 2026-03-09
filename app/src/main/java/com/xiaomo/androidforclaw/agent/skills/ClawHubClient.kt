@@ -13,10 +13,10 @@ import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
 
 /**
- * ClawHub HTTP API 客户端
+ * ClawHub HTTP API Client
  *
- * 对接 https://clawhub.ai API
- * 提供技能搜索、下载、详情查询功能
+ * Interfaces with https://clawhub.ai API
+ * Provides skill search, download, and details query functions
  */
 class ClawHubClient {
     companion object {
@@ -34,7 +34,7 @@ class ClawHubClient {
     private val gson = Gson()
 
     /**
-     * 搜索技能
+     * Search skills
      *
      * ClawHub API v1: GET /api/v1/search?q=query&limit=20
      */
@@ -96,7 +96,7 @@ class ClawHubClient {
     }
 
     /**
-     * 获取技能详情
+     * Get skill details
      *
      * GET /api/skills/:slug
      */
@@ -125,10 +125,10 @@ class ClawHubClient {
             val owner = json.getAsJsonObject("owner")
             val stats = skill.getAsJsonObject("stats")
 
-            // ClawHub API v1 字段映射:
+            // ClawHub API v1 field mapping:
             // - displayName -> name
             // - summary -> description
-            // - tags.latest -> version (从 latestVersion 获取)
+            // - tags.latest -> version (from latestVersion)
             // - owner.displayName -> author
             // - stats.downloads -> downloads
 
@@ -156,7 +156,7 @@ class ClawHubClient {
     }
 
     /**
-     * 获取技能版本列表
+     * Get skill version list
      *
      * GET /api/skills/:slug/versions
      */
@@ -199,14 +199,14 @@ class ClawHubClient {
     }
 
     /**
-     * 下载技能包
+     * Download skill package
      *
      * ClawHub API v1: GET /api/v1/download?slug=x-twitter&version=latest
      *
-     * @param slug 技能 slug
-     * @param version 版本号 (默认 "latest")
-     * @param targetFile 下载目标文件
-     * @param progressCallback 下载进度回调 (已下载字节, 总字节)
+     * @param slug Skill slug
+     * @param version Version number (default "latest")
+     * @param targetFile Download target file
+     * @param progressCallback Download progress callback (downloaded bytes, total bytes)
      */
     suspend fun downloadSkill(
         slug: String,
@@ -237,10 +237,10 @@ class ClawHubClient {
             val contentLength = body.contentLength()
             Log.d(TAG, "Content length: $contentLength bytes")
 
-            // 确保目标目录存在
+            // Ensure target directory exists
             targetFile.parentFile?.mkdirs()
 
-            // 下载到临时文件
+            // Download to temporary file
             val tempFile = File(targetFile.parent, "${targetFile.name}.tmp")
             FileOutputStream(tempFile).use { output ->
                 body.byteStream().use { input ->
@@ -256,7 +256,7 @@ class ClawHubClient {
                 }
             }
 
-            // 移动到目标文件
+            // Move to target file
             if (tempFile.renameTo(targetFile)) {
                 Log.i(TAG, "✅ Downloaded skill to ${targetFile.absolutePath}")
                 Result.success(targetFile)
@@ -272,7 +272,7 @@ class ClawHubClient {
 }
 
 /**
- * 技能搜索结果
+ * Skill Search Result
  */
 data class SkillSearchResult(
     val skills: List<SkillSearchEntry>,
@@ -282,7 +282,7 @@ data class SkillSearchResult(
 )
 
 /**
- * 技能搜索条目
+ * Skill Search Entry
  */
 data class SkillSearchEntry(
     val slug: String,
@@ -295,7 +295,7 @@ data class SkillSearchEntry(
 )
 
 /**
- * 技能详情
+ * Skill Details
  */
 data class SkillDetails(
     val slug: String,
@@ -312,7 +312,7 @@ data class SkillDetails(
 )
 
 /**
- * 技能版本
+ * Skill Version
  */
 data class SkillVersion(
     val version: String,

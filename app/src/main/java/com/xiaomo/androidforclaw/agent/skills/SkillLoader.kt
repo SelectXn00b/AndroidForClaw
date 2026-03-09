@@ -9,13 +9,13 @@ import java.io.File
 import java.io.InputStreamReader
 
 /**
- * Skill Loader - 从 markdown 文件加载 skills
+ * Skill Loader - Load skills from markdown files
  *
- * 支持 OpenClaw 兼容的 skill 格式:
+ * Supports OpenClaw-compatible skill format:
  * - YAML frontmatter (name, description, metadata)
- * - Markdown 内容（技能说明、最佳实践等）
+ * - Markdown content (skill instructions, best practices, etc.)
  *
- * 加载顺序（优先级从高到低）:
+ * Loading order (priority from high to low):
  * 1. Workspace Skills: /sdcard/.androidforclaw/workspace/skills/
  * 2. Managed Skills: /sdcard/.androidforclaw/.skills/
  * 3. Bundled Skills: assets/skills/
@@ -25,17 +25,17 @@ class SkillLoader(private val context: Context) {
     companion object {
         private const val TAG = "SkillLoader"
 
-        // Skill 文件路径
+        // Skill file paths
         private const val WORKSPACE_SKILLS_DIR = "/sdcard/.androidforclaw/workspace/skills"
         private const val MANAGED_SKILLS_DIR = "/sdcard/.androidforclaw/.skills"
         private const val BUNDLED_SKILLS_PATH = "skills"
 
-        // 文件名
+        // File name
         private const val SKILL_FILE_NAME = "SKILL.md"
     }
 
     /**
-     * Skill Entry - 加载的 skill 条目
+     * Skill Entry - Loaded skill entry
      */
     data class SkillEntry(
         val name: String,
@@ -53,22 +53,22 @@ class SkillLoader(private val context: Context) {
     }
 
     /**
-     * 加载所有 skills
+     * Load all skills
      */
     fun loadAllSkills(): List<SkillEntry> {
         val allSkills = mutableMapOf<String, SkillEntry>()
 
-        // 1. 加载 bundled skills (优先级最低)
+        // 1. Load bundled skills (lowest priority)
         loadBundledSkills().forEach { skill ->
             allSkills[skill.name] = skill
         }
 
-        // 2. 加载 managed skills (覆盖 bundled)
+        // 2. Load managed skills (overrides bundled)
         loadManagedSkills().forEach { skill ->
             allSkills[skill.name] = skill
         }
 
-        // 3. 加载 workspace skills (优先级最高)
+        // 3. Load workspace skills (highest priority)
         loadWorkspaceSkills().forEach { skill ->
             allSkills[skill.name] = skill
         }
@@ -78,7 +78,7 @@ class SkillLoader(private val context: Context) {
     }
 
     /**
-     * 加载 bundled skills (assets)
+     * Load bundled skills (assets)
      */
     private fun loadBundledSkills(): List<SkillEntry> {
         val skills = mutableListOf<SkillEntry>()
@@ -109,21 +109,21 @@ class SkillLoader(private val context: Context) {
     }
 
     /**
-     * 加载 managed skills (外部存储)
+     * Load managed skills (external storage)
      */
     private fun loadManagedSkills(): List<SkillEntry> {
         return loadSkillsFromDirectory(MANAGED_SKILLS_DIR, SkillSource.MANAGED)
     }
 
     /**
-     * 加载 workspace skills (外部存储)
+     * Load workspace skills (external storage)
      */
     private fun loadWorkspaceSkills(): List<SkillEntry> {
         return loadSkillsFromDirectory(WORKSPACE_SKILLS_DIR, SkillSource.WORKSPACE)
     }
 
     /**
-     * 从目录加载 skills
+     * Load skills from directory
      */
     private fun loadSkillsFromDirectory(dirPath: String, source: SkillSource): List<SkillEntry> {
         val skills = mutableListOf<SkillEntry>()
@@ -155,7 +155,7 @@ class SkillLoader(private val context: Context) {
     }
 
     /**
-     * 解析 skill 文件
+     * Parse skill file
      */
     private fun parseSkillFile(content: String, filePath: String, source: SkillSource): SkillEntry? {
         try {
@@ -169,7 +169,7 @@ class SkillLoader(private val context: Context) {
                 return null
             }
 
-            // 解析 metadata
+            // Parse metadata
             val metadata = parseFrontmatterMetadata(frontmatter)
 
             return SkillEntry(
@@ -187,9 +187,9 @@ class SkillLoader(private val context: Context) {
     }
 
     /**
-     * 解析 frontmatter（YAML格式）
+     * Parse frontmatter (YAML format)
      *
-     * 格式:
+     * Format:
      * ---
      * name: skill_name
      * description: Skill description
@@ -216,7 +216,7 @@ class SkillLoader(private val context: Context) {
             }
         }
 
-        // 解析 frontmatter 键值对
+        // Parse frontmatter key-value pairs
         val frontmatter = mutableMapOf<String, Any?>()
         for (line in frontmatterLines) {
             if (line.contains(":")) {
@@ -225,13 +225,13 @@ class SkillLoader(private val context: Context) {
                     val key = parts[0].trim()
                     val value = parts[1].trim()
 
-                    // 尝试解析 JSON 格式的值
+                    // Try to parse JSON-formatted values
                     frontmatter[key] = parseValue(value)
                 }
             }
         }
 
-        // Markdown 内容
+        // Markdown content
         val markdownContent = lines
             .drop(frontmatterEnd + 1)
             .joinToString("\n")
@@ -241,37 +241,37 @@ class SkillLoader(private val context: Context) {
     }
 
     /**
-     * 解析 frontmatter 的值
+     * Parse frontmatter value
      */
     private fun parseValue(value: String): Any? {
         return when {
-            // JSON 对象或数组
+            // JSON object or array
             value.startsWith("{") || value.startsWith("[") -> {
                 try {
                     if (value.startsWith("{")) {
                         jsonObjectToMap(JSONObject(value))
                     } else {
-                        // 简单处理 JSON 数组，返回原始字符串
+                        // Simple handling of JSON array, return raw string
                         value
                     }
                 } catch (e: Exception) {
-                    value  // 解析失败，返回原始字符串
+                    value  // Parse failed, return raw string
                 }
             }
-            // 布尔值
+            // Boolean
             value.equals("true", ignoreCase = true) -> true
             value.equals("false", ignoreCase = true) -> false
-            // 数字
+            // Number
             value.toIntOrNull() != null -> value.toInt()
             value.toLongOrNull() != null -> value.toLong()
             value.toDoubleOrNull() != null -> value.toDouble()
-            // 字符串
+            // String
             else -> value
         }
     }
 
     /**
-     * 解析 frontmatter metadata
+     * Parse frontmatter metadata
      */
     private fun parseFrontmatterMetadata(frontmatter: Map<String, Any?>): Map<String, Any?> {
         val metadata = frontmatter["metadata"]
@@ -289,7 +289,7 @@ class SkillLoader(private val context: Context) {
     }
 
     /**
-     * JSONObject 转 Map
+     * Convert JSONObject to Map
      */
     private fun jsonObjectToMap(json: JSONObject): Map<String, Any?> {
         val map = mutableMapOf<String, Any?>()
@@ -304,7 +304,7 @@ class SkillLoader(private val context: Context) {
     }
 
     /**
-     * 读取 asset 文件
+     * Read asset file
      */
     private fun readAssetFile(assetManager: AssetManager, path: String): String {
         return assetManager.open(path).use { inputStream ->

@@ -10,24 +10,24 @@ import com.xiaomo.androidforclaw.providers.PropertySchema
 import com.xiaomo.androidforclaw.providers.ToolDefinition
 
 /**
- * BrowserForClaw - 浏览器控制 Skill
+ * BrowserForClaw - Browser Control Skill
  *
- * 这是一个统一的浏览器控制入口，封装了所有浏览器操作能力。
- * 对应独立的 browserforclaw 项目，通过 HTTP API 进行通信。
+ * This is a unified browser control entry point that encapsulates all browser operation capabilities.
+ * Corresponds to the independent browserforclaw project, communicating via HTTP API.
  *
- * 支持的操作：
- * - navigate: 导航到 URL
- * - click: 点击元素
- * - type: 输入文本
- * - get_content: 获取页面内容
- * - wait: 等待条件
- * - scroll: 滚动页面
- * - execute: 执行 JavaScript
- * - press: 按键
- * - screenshot: 截图
- * - get_cookies/set_cookies: Cookie 操作
- * - hover: 悬停
- * - select: 下拉选择
+ * Supported operations:
+ * - navigate: Navigate to URL
+ * - click: Click element
+ * - type: Type text
+ * - get_content: Get page content
+ * - wait: Wait for condition
+ * - scroll: Scroll page
+ * - execute: Execute JavaScript
+ * - press: Press key
+ * - screenshot: Take screenshot
+ * - get_cookies/set_cookies: Cookie operations
+ * - hover: Hover over element
+ * - select: Select dropdown option
  */
 class BrowserForClawSkill(private val context: Context) : Skill {
     override val name = "browser"
@@ -78,16 +78,16 @@ class BrowserForClawSkill(private val context: Context) : Skill {
         return try {
             val browserClient = BrowserToolClient(context)
 
-            // 将 operation 映射到 browserforclaw 的工具名称
+            // Map operation to browserforclaw tool name
             val toolName = "browser_$operation"
 
-            // 移除 operation 参数，其余参数直接传递给 browserforclaw
+            // Remove operation parameter, pass remaining parameters directly to browserforclaw
             val toolArgs = args.filterKeys { it != "operation" }
 
             val result = browserClient.executeToolAsync(toolName, toolArgs)
 
             if (result.success) {
-                // 根据操作类型格式化返回消息
+                // Format return message based on operation type
                 val message = when (operation) {
                     "navigate" -> "Successfully navigated to ${args["url"]}"
                     "click" -> "Successfully clicked element: ${args["selector"]}"

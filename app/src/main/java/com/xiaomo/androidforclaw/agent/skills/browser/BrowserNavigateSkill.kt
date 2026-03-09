@@ -10,9 +10,9 @@ import com.xiaomo.androidforclaw.providers.ToolDefinition
 import com.xiaomo.androidforclaw.browser.BrowserToolClient
 
 /**
- * browser_navigate - 导航到 URL
+ * browser_navigate - Navigate to URL
  *
- * 对应 OpenClaw 的 navigate 工具
+ * Corresponds to OpenClaw's navigate tool
  */
 class BrowserNavigateSkill(private val context: Context) : Skill {
     override val name = "browser_navigate"

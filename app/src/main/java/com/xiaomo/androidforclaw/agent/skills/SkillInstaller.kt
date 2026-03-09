@@ -14,9 +14,9 @@ import java.util.Locale
 import java.util.zip.ZipInputStream
 
 /**
- * 技能安装器
+ * Skill Installer
  *
- * 提供技能下载、解压、安装、卸载功能
+ * Provides skill download, extraction, installation, and uninstallation functions
  */
 class SkillInstaller(private val context: Context) {
     companion object {
@@ -35,11 +35,11 @@ class SkillInstaller(private val context: Context) {
     }
 
     /**
-     * 从 ClawHub 安装技能
+     * Install skill from ClawHub
      *
-     * @param slug 技能 slug
-     * @param version 版本号 (默认 "latest")
-     * @param progressCallback 进度回调
+     * @param slug Skill slug
+     * @param version Version number (default "latest")
+     * @param progressCallback Progress callback
      */
     suspend fun installFromClawHub(
         slug: String,
@@ -49,14 +49,14 @@ class SkillInstaller(private val context: Context) {
         try {
             Log.i(TAG, "Installing skill from ClawHub: $slug@$version")
 
-            // 1. 检查是否已安装
+            // 1. Check if already installed
             val existingEntry = lockManager.getSkill(slug)
             if (existingEntry != null) {
                 progressCallback?.invoke(InstallProgress.Info("Skill already installed: ${existingEntry.version}"))
                 Log.d(TAG, "Skill already installed: $slug@${existingEntry.version}")
             }
 
-            // 2. 获取技能详情
+            // 2. Get skill details
             progressCallback?.invoke(InstallProgress.FetchingDetails)
             val detailsResult = clawHubClient.getSkillDetails(slug)
             if (detailsResult.isFailure) {
@@ -65,7 +65,7 @@ class SkillInstaller(private val context: Context) {
             val details = detailsResult.getOrNull()!!
             Log.d(TAG, "Skill details: ${details.name} - ${details.description}")
 
-            // 3. 下载技能包
+            // 3. Download skill package
             progressCallback?.invoke(InstallProgress.Downloading(0, 0))
             val downloadFile = File(downloadCacheDir, "$slug-$version.zip")
             val downloadResult = clawHubClient.downloadSkill(
@@ -80,12 +80,12 @@ class SkillInstaller(private val context: Context) {
                 return@withContext Result.failure(downloadResult.exceptionOrNull()!!)
             }
 
-            // 4. 计算文件哈希
+            // 4. Calculate file hash
             progressCallback?.invoke(InstallProgress.VerifyingHash)
             val hash = calculateFileHash(downloadFile)
             Log.d(TAG, "Downloaded file hash: $hash")
 
-            // 5. 解压技能包
+            // 5. Extract skill package
             progressCallback?.invoke(InstallProgress.Extracting)
             val targetDir = File(managedSkillsDir, slug)
             val extractResult = extractZip(downloadFile, targetDir)
@@ -93,7 +93,7 @@ class SkillInstaller(private val context: Context) {
                 return@withContext Result.failure(extractResult.exceptionOrNull()!!)
             }
 
-            // 6. 验证 SKILL.md 存在
+            // 6. Verify SKILL.md exists
             val skillMdFile = File(targetDir, "SKILL.md")
             if (!skillMdFile.exists()) {
                 targetDir.deleteRecursively()
@@ -102,7 +102,7 @@ class SkillInstaller(private val context: Context) {
                 )
             }
 
-            // 7. 更新锁文件
+            // 7. Update lock file
             progressCallback?.invoke(InstallProgress.UpdatingLock)
             val lockEntry = SkillLockEntry(
                 name = details.name,
@@ -114,7 +114,7 @@ class SkillInstaller(private val context: Context) {
             )
             lockManager.addOrUpdateSkill(lockEntry)
 
-            // 8. 清理下载缓存
+            // 8. Clean up download cache
             downloadFile.delete()
 
             progressCallback?.invoke(InstallProgress.Complete)
@@ -138,10 +138,10 @@ class SkillInstaller(private val context: Context) {
     }
 
     /**
-     * 从本地文件安装技能
+     * Install skill from local file
      *
-     * @param zipFile ZIP 文件路径
-     * @param name 技能名称 (可选,从 SKILL.md 提取)
+     * @param zipFile ZIP file path
+     * @param name Skill name (optional, extracted from SKILL.md)
      */
     suspend fun installFromFile(
         zipFile: File,
@@ -150,14 +150,14 @@ class SkillInstaller(private val context: Context) {
         try {
             Log.i(TAG, "Installing skill from file: ${zipFile.absolutePath}")
 
-            // 1. 解压到临时目录
+            // 1. Extract to temporary directory
             val tempDir = File(downloadCacheDir, "temp-${System.currentTimeMillis()}")
             val extractResult = extractZip(zipFile, tempDir)
             if (extractResult.isFailure) {
                 return@withContext Result.failure(extractResult.exceptionOrNull()!!)
             }
 
-            // 2. 验证并解析 SKILL.md
+            // 2. Verify and parse SKILL.md
             val skillMdFile = File(tempDir, "SKILL.md")
             if (!skillMdFile.exists()) {
                 tempDir.deleteRecursively()
@@ -178,7 +178,7 @@ class SkillInstaller(private val context: Context) {
             val skill = (parseResult as SkillFrontmatterParser.ParseResult.Success).frontmatter
             val skillName = name ?: skill.name
 
-            // 3. 移动到托管目录
+            // 3. Move to managed directory
             val targetDir = File(managedSkillsDir, skillName)
             if (targetDir.exists()) {
                 targetDir.deleteRecursively()
@@ -186,18 +186,18 @@ class SkillInstaller(private val context: Context) {
             targetDir.parentFile?.mkdirs()
 
             if (!tempDir.renameTo(targetDir)) {
-                // 重命名失败,尝试复制
+                // Rename failed, try copying
                 tempDir.copyRecursively(targetDir, overwrite = true)
                 tempDir.deleteRecursively()
             }
 
-            // 4. 计算哈希
+            // 4. Calculate hash
             val hash = calculateFileHash(zipFile)
 
-            // 5. 更新锁文件
+            // 5. Update lock file
             val lockEntry = SkillLockEntry(
                 name = skillName,
-                slug = skillName,  // 本地安装使用 name 作为 slug
+                slug = skillName,  // Use name as slug for local install
                 version = "local",
                 hash = hash,
                 installedAt = DATE_FORMAT.format(Date()),
@@ -224,28 +224,28 @@ class SkillInstaller(private val context: Context) {
     }
 
     /**
-     * 卸载技能
+     * Uninstall skill
      *
-     * @param slug 技能 slug
+     * @param slug Skill slug
      */
     suspend fun uninstall(slug: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             Log.i(TAG, "Uninstalling skill: $slug")
 
-            // 1. 检查是否已安装
+            // 1. Check if installed
             val entry = lockManager.getSkill(slug)
                 ?: return@withContext Result.failure(
                     Exception("Skill not installed: $slug")
                 )
 
-            // 2. 删除技能目录
+            // 2. Delete skill directory
             val skillDir = File(managedSkillsDir, slug)
             if (skillDir.exists()) {
                 skillDir.deleteRecursively()
                 Log.d(TAG, "Deleted skill directory: ${skillDir.absolutePath}")
             }
 
-            // 3. 从锁文件中移除
+            // 3. Remove from lock file
             lockManager.removeSkill(slug)
 
             Log.i(TAG, "✅ Skill uninstalled: $slug")
@@ -258,7 +258,7 @@ class SkillInstaller(private val context: Context) {
     }
 
     /**
-     * 解压 ZIP 文件
+     * Extract ZIP file
      */
     private fun extractZip(zipFile: File, targetDir: File): Result<Unit> {
         return try {
@@ -270,7 +270,7 @@ class SkillInstaller(private val context: Context) {
                 while (entry != null) {
                     val file = File(targetDir, entry.name)
 
-                    // 安全检查: 防止 ZIP 路径遍历攻击
+                    // Security check: prevent ZIP path traversal attack
                     if (!file.canonicalPath.startsWith(targetDir.canonicalPath)) {
                         throw SecurityException("Zip entry outside target directory: ${entry.name}")
                     }
@@ -298,7 +298,7 @@ class SkillInstaller(private val context: Context) {
     }
 
     /**
-     * 计算文件 SHA-256 哈希
+     * Calculate file SHA-256 hash
      */
     private fun calculateFileHash(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
@@ -316,7 +316,7 @@ class SkillInstaller(private val context: Context) {
 }
 
 /**
- * 安装进度
+ * Installation Progress
  */
 sealed class InstallProgress {
     data class Info(val message: String) : InstallProgress()
@@ -330,7 +330,7 @@ sealed class InstallProgress {
 }
 
 /**
- * 安装结果
+ * Installation Result
  */
 data class InstallResult(
     val slug: String,

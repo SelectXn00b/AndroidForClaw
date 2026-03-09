@@ -10,7 +10,7 @@ import com.xiaomo.androidforclaw.providers.ToolDefinition
 import com.xiaomo.androidforclaw.browser.BrowserToolClient
 
 /**
- * browser_type - 输入文本
+ * browser_type - Type text
  */
 class BrowserTypeSkill(private val context: Context) : Skill {
     override val name = "browser_type"

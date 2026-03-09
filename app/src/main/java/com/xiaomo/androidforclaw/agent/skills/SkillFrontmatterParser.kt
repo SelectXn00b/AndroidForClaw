@@ -6,12 +6,12 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 
 /**
- * SKILL.md Frontmatter 解析器
+ * SKILL.md Frontmatter Parser
  *
- * 对齐 OpenClaw 格式:
- * - 支持 YAML Frontmatter (--- 分隔符)
- * - metadata.openclaw 是单行 JSON
- * - description 是单行文本
+ * Aligns with OpenClaw format:
+ * - Supports YAML Frontmatter (--- delimiter)
+ * - metadata.openclaw is single-line JSON
+ * - description is single-line text
  */
 class SkillFrontmatterParser {
     companion object {
@@ -20,9 +20,9 @@ class SkillFrontmatterParser {
     }
 
     /**
-     * 解析 SKILL.md 文件内容
+     * Parse SKILL.md file content
      *
-     * 格式:
+     * Format:
      * ```
      * ---
      * name: skill-name
@@ -36,12 +36,12 @@ class SkillFrontmatterParser {
      */
     fun parse(content: String): ParseResult {
         try {
-            // 1. 检查是否包含 Frontmatter
+            // 1. Check if contains Frontmatter
             if (!content.trim().startsWith("---")) {
                 return ParseResult.Error("Missing frontmatter (must start with ---)")
             }
 
-            // 2. 提取 Frontmatter 和 Content
+            // 2. Extract Frontmatter and Content
             val lines = content.lines()
             var frontmatterEnd = -1
             var inFrontmatter = false
@@ -62,12 +62,12 @@ class SkillFrontmatterParser {
                 return ParseResult.Error("Frontmatter not closed (missing closing ---)")
             }
 
-            // 3. 解析 Frontmatter YAML
+            // 3. Parse Frontmatter YAML
             val frontmatterLines = lines.subList(1, frontmatterEnd)
             val frontmatterText = frontmatterLines.joinToString("\n")
             val frontmatterData = parseYamlFrontmatter(frontmatterText)
 
-            // 4. 提取 name 和 description (必需字段)
+            // 4. Extract name and description (required fields)
             val name = frontmatterData["name"] as? String
             if (name.isNullOrBlank()) {
                 return ParseResult.Error("Missing required field: name")
@@ -78,19 +78,19 @@ class SkillFrontmatterParser {
                 return ParseResult.Error("Missing required field: description")
             }
 
-            // 5. 提取 metadata (可选)
+            // 5. Extract metadata (optional)
             val metadataMap = frontmatterData["metadata"] as? Map<*, *>
 
-            // 6. 提取 OpenClaw 元数据
+            // 6. Extract OpenClaw metadata
             val openclawMetadata = metadataMap?.get("openclaw")?.let { openclaw ->
                 parseOpenClawMetadata(openclaw)
             }
 
-            // 7. 提取 Content (Frontmatter 之后的所有内容)
+            // 7. Extract Content (all content after Frontmatter)
             val contentLines = lines.subList(frontmatterEnd + 1, lines.size)
             val contentText = contentLines.joinToString("\n").trim()
 
-            // 8. 返回解析结果
+            // 8. Return parse result
             return ParseResult.Success(
                 frontmatter = ParsedSkillFrontmatter(
                     name = name,
@@ -108,16 +108,16 @@ class SkillFrontmatterParser {
     }
 
     /**
-     * 解析 YAML Frontmatter (简化版)
+     * Parse YAML Frontmatter (simplified version)
      *
-     * 支持:
-     * - key: value (单行)
-     * - key: { "json": "object" } (单行 JSON)
+     * Supports:
+     * - key: value (single line)
+     * - key: { "json": "object" } (single line JSON)
      *
-     * 不支持:
-     * - 多行值
-     * - 数组
-     * - 复杂嵌套
+     * Not supported:
+     * - Multi-line values
+     * - Arrays
+     * - Complex nesting
      */
     private fun parseYamlFrontmatter(text: String): Map<String, Any?> {
         val result = mutableMapOf<String, Any?>()
@@ -131,24 +131,24 @@ class SkillFrontmatterParser {
                 continue
             }
 
-            // 检查是否是新的 key: value 行
+            // Check if it's a new key: value line
             val colonIndex = trimmedLine.indexOf(':')
             if (colonIndex > 0) {
-                // 保存之前的 key-value
+                // Save previous key-value
                 if (currentKey != null) {
                     result[currentKey] = parseYamlValue(currentValue.toString().trim())
                 }
 
-                // 开始新的 key-value
+                // Start new key-value
                 currentKey = trimmedLine.substring(0, colonIndex).trim()
                 currentValue = StringBuilder(trimmedLine.substring(colonIndex + 1).trim())
             } else {
-                // 继续当前值 (多行,但 OpenClaw 规范要求单行)
+                // Continue current value (multi-line, but OpenClaw spec requires single line)
                 currentValue.append(" ").append(trimmedLine)
             }
         }
 
-        // 保存最后一个 key-value
+        // Save last key-value
         if (currentKey != null) {
             result[currentKey] = parseYamlValue(currentValue.toString().trim())
         }
@@ -157,20 +157,20 @@ class SkillFrontmatterParser {
     }
 
     /**
-     * 解析 YAML 值
+     * Parse YAML value
      *
-     * 支持:
-     * - 字符串 (默认)
-     * - JSON 对象 { ... }
-     * - 布尔值 true/false
-     * - 数字
+     * Supports:
+     * - String (default)
+     * - JSON object { ... }
+     * - Boolean true/false
+     * - Number
      */
     private fun parseYamlValue(value: String): Any? {
         if (value.isEmpty()) {
             return null
         }
 
-        // JSON 对象
+        // JSON object
         if (value.startsWith("{") && value.endsWith("}")) {
             return try {
                 val jsonObject = JsonParser.parseString(value).asJsonObject
@@ -181,20 +181,20 @@ class SkillFrontmatterParser {
             }
         }
 
-        // 布尔值
+        // Boolean
         if (value == "true") return true
         if (value == "false") return false
 
-        // 数字
+        // Number
         value.toIntOrNull()?.let { return it }
         value.toDoubleOrNull()?.let { return it }
 
-        // 字符串
+        // String
         return value
     }
 
     /**
-     * JsonObject 转 Map
+     * Convert JsonObject to Map
      */
     private fun jsonObjectToMap(jsonObject: JsonObject): Map<String, Any?> {
         val map = mutableMapOf<String, Any?>()
@@ -234,7 +234,7 @@ class SkillFrontmatterParser {
     }
 
     /**
-     * 解析 OpenClaw 元数据
+     * Parse OpenClaw metadata
      */
     private fun parseOpenClawMetadata(data: Any?): OpenClawSkillMetadata? {
         if (data == null) return null
@@ -268,7 +268,7 @@ class SkillFrontmatterParser {
     }
 
     /**
-     * 解析安装规范
+     * Parse install specification
      */
     private fun parseInstallSpec(data: Any?): SkillInstallSpec? {
         if (data == null) return null
@@ -309,7 +309,7 @@ class SkillFrontmatterParser {
     }
 
     /**
-     * 解析结果
+     * Parse result
      */
     sealed class ParseResult {
         data class Success(

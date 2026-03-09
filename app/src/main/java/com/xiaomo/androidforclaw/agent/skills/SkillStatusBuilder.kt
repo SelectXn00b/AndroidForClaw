@@ -6,10 +6,10 @@ import com.xiaomo.androidforclaw.config.ConfigLoader
 import java.io.File
 
 /**
- * 技能状态构建器
+ * Skill Status Builder
  *
- * 对齐 OpenClaw 的 buildWorkspaceSkillStatus()
- * 扫描技能目录,评估技能资格,生成状态报告
+ * Aligns with OpenClaw's buildWorkspaceSkillStatus()
+ * Scans skill directories, evaluates skill eligibility, generates status report
  */
 class SkillStatusBuilder(private val context: Context) {
     companion object {
@@ -20,24 +20,24 @@ class SkillStatusBuilder(private val context: Context) {
     private val parser = SkillFrontmatterParser()
 
     /**
-     * 构建技能状态报告
+     * Build skill status report
      *
-     * @param workspacePath 工作区路径 (默认: /sdcard/.androidforclaw/workspace)
+     * @param workspacePath Workspace path (default: /sdcard/.androidforclaw/workspace)
      * @return SkillStatusReport
      */
     fun buildStatus(workspacePath: String = "/sdcard/.androidforclaw/workspace"): SkillStatusReport {
         val managedSkillsDir = "/sdcard/.androidforclaw/skills"
-        val bundledSkillsPath = "skills" // assets 路径
+        val bundledSkillsPath = "skills" // assets path
 
         val skillEntries = mutableListOf<SkillStatusEntry>()
 
-        // 1. 加载内置技能 (bundled)
+        // 1. Load bundled skills
         Log.d(TAG, "Loading bundled skills from assets://$bundledSkillsPath")
         loadSkillsFromAssets(bundledSkillsPath).forEach { entry ->
             skillEntries.add(buildStatusEntry(entry, SkillSource.BUNDLED))
         }
 
-        // 2. 加载托管技能 (managed)
+        // 2. Load managed skills
         val managedDir = File(managedSkillsDir)
         if (managedDir.exists() && managedDir.isDirectory) {
             Log.d(TAG, "Loading managed skills from $managedSkillsDir")
@@ -46,7 +46,7 @@ class SkillStatusBuilder(private val context: Context) {
             }
         }
 
-        // 3. 加载工作区技能 (workspace)
+        // 3. Load workspace skills
         val workspaceSkillsDir = File(workspacePath, "skills")
         if (workspaceSkillsDir.exists() && workspaceSkillsDir.isDirectory) {
             Log.d(TAG, "Loading workspace skills from ${workspaceSkillsDir.absolutePath}")
@@ -65,7 +65,7 @@ class SkillStatusBuilder(private val context: Context) {
     }
 
     /**
-     * 从 assets 加载技能
+     * Load skills from assets
      */
     private fun loadSkillsFromAssets(assetsPath: String): List<SkillEntry> {
         val entries = mutableListOf<SkillEntry>()
@@ -109,7 +109,7 @@ class SkillStatusBuilder(private val context: Context) {
     }
 
     /**
-     * 从文件系统目录加载技能
+     * Load skills from filesystem directory
      */
     private fun loadSkillsFromDirectory(directory: File): List<SkillEntry> {
         val entries = mutableListOf<SkillEntry>()
@@ -149,16 +149,16 @@ class SkillStatusBuilder(private val context: Context) {
     }
 
     /**
-     * 构建单个技能的状态条目
+     * Build status entry for a single skill
      */
     private fun buildStatusEntry(entry: SkillEntry, source: SkillSource): SkillStatusEntry {
         val config = configLoader.loadOpenClawConfig()
         val skillConfig = config.skills.entries[entry.skill.name]
 
-        // 检查是否被配置禁用
+        // Check if disabled by config
         val disabled = skillConfig?.enabled == false
 
-        // 检查是否被白名单阻止 (bundled skills 需要在白名单中)
+        // Check if blocked by allowlist (bundled skills need to be in allowlist)
         val blockedByAllowlist = if (source == SkillSource.BUNDLED) {
             val allowBundled = config.skills.allowBundled
             allowBundled != null && entry.skill.name !in allowBundled
@@ -166,16 +166,16 @@ class SkillStatusBuilder(private val context: Context) {
             false
         }
 
-        // 检查要求和缺失
+        // Check requirements and missing items
         val (requirements, missing) = checkRequirements(entry.metadata?.requires)
 
-        // 检查配置项
+        // Check config paths
         val configChecks = checkConfigPaths(entry.metadata?.requires?.config, config)
 
-        // 检查平台兼容性
+        // Check platform compatibility
         val platformCompatible = checkPlatformCompatibility(entry.metadata?.os)
 
-        // 评估资格
+        // Evaluate eligibility
         val eligible = !disabled &&
                 !blockedByAllowlist &&
                 platformCompatible &&
@@ -184,7 +184,7 @@ class SkillStatusBuilder(private val context: Context) {
                         missing.env.isNullOrEmpty() &&
                         missing.config.isNullOrEmpty()))
 
-        // 构建安装选项
+        // Build install options
         val installOptions = buildInstallOptions(entry.metadata?.install)
 
         return SkillStatusEntry(
@@ -210,7 +210,7 @@ class SkillStatusBuilder(private val context: Context) {
     }
 
     /**
-     * 检查技能要求
+     * Check skill requirements
      *
      * @return Pair<requirements, missing>
      */
@@ -224,19 +224,19 @@ class SkillStatusBuilder(private val context: Context) {
         val missingEnv = mutableListOf<String>()
         val missingConfig = mutableListOf<String>()
 
-        // 检查二进制文件 (Android 上不适用,跳过)
-        // Android 不使用 PATH 二进制,而是使用权限和 APK
+        // Check binaries (not applicable on Android, skip)
+        // Android doesn't use PATH binaries, uses permissions and APKs instead
 
-        // 检查环境变量
+        // Check environment variables
         requires.env?.forEach { envVar ->
             if (System.getenv(envVar) == null) {
                 missingEnv.add(envVar)
             }
         }
 
-        // anyBins - 至少一个存在 (Android 上不适用)
+        // anyBins - at least one must exist (not applicable on Android)
 
-        // config 路径检查在 checkConfigPaths 中处理
+        // config path checks handled in checkConfigPaths
 
         val missing = if (missingBins.isNotEmpty() ||
             missingAnyBins.isNotEmpty() ||
@@ -257,7 +257,7 @@ class SkillStatusBuilder(private val context: Context) {
     }
 
     /**
-     * 检查配置路径
+     * Check config paths
      */
     private fun checkConfigPaths(
         configPaths: List<String>?,
@@ -278,33 +278,33 @@ class SkillStatusBuilder(private val context: Context) {
     }
 
     /**
-     * 获取配置值 (简化实现)
+     * Get config value (simplified implementation)
      */
     private fun getConfigValue(path: String, config: com.xiaomo.androidforclaw.config.OpenClawConfig): Any? {
-        // 简单的路径解析 (支持 "gateway.enabled", "agent.maxIterations" 等)
+        // Simple path parsing (supports "gateway.enabled", "agent.maxIterations", etc.)
         val parts = path.split(".")
         return when {
             parts.size == 2 && parts[0] == "gateway" && parts[1] == "enabled" -> config.gateway.enabled
             parts.size == 2 && parts[0] == "agent" && parts[1] == "maxIterations" -> config.agent.maxIterations
-            // 可扩展更多路径
+            // Can be extended for more paths
             else -> null
         }
     }
 
     /**
-     * 检查平台兼容性
+     * Check platform compatibility
      */
     private fun checkPlatformCompatibility(osList: List<String>?): Boolean {
         if (osList == null) {
-            return true // 无限制
+            return true // No restrictions
         }
 
-        // Android 平台标识
+        // Android platform identifier
         return "android" in osList.map { it.lowercase() }
     }
 
     /**
-     * 构建安装选项
+     * Build install options
      */
     private fun buildInstallOptions(installSpecs: List<SkillInstallSpec>?): List<SkillInstallOption> {
         if (installSpecs == null) {
@@ -325,10 +325,10 @@ class SkillStatusBuilder(private val context: Context) {
     }
 
     /**
-     * 检查安装器可用性
+     * Check installer availability
      */
     private fun checkInstallAvailability(spec: SkillInstallSpec): Pair<Boolean, String?> {
-        // Android 平台检查
+        // Android platform check
         val platformCompatible = spec.os?.let { osList ->
             "android" in osList.map { it.lowercase() }
         } ?: true
@@ -337,10 +337,10 @@ class SkillStatusBuilder(private val context: Context) {
             return Pair(false, "Platform not supported")
         }
 
-        // 根据安装器类型检查
+        // Check based on installer type
         return when (spec.kind) {
             InstallKind.APK -> {
-                // APK 安装 (Android 特有)
+                // APK install (Android-specific)
                 if (spec.url != null) {
                     Pair(true, null)
                 } else {
@@ -349,7 +349,7 @@ class SkillStatusBuilder(private val context: Context) {
             }
 
             InstallKind.DOWNLOAD -> {
-                // 直接下载
+                // Direct download
                 if (spec.url != null) {
                     Pair(true, null)
                 } else {
@@ -358,7 +358,7 @@ class SkillStatusBuilder(private val context: Context) {
             }
 
             else -> {
-                // brew, node, go, uv 在 Android 上不可用
+                // brew, node, go, uv not available on Android
                 Pair(false, "${spec.kind.name} not available on Android")
             }
         }

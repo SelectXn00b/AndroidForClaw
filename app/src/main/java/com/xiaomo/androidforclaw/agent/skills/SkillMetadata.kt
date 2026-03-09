@@ -1,14 +1,14 @@
 package com.xiaomo.androidforclaw.agent.skills
 
 /**
- * OpenClaw Skills 元数据定义
+ * OpenClaw Skills Metadata Definition
  *
- * 完全对齐 OpenClaw 的 skills/types.ts
- * 用于解析 SKILL.md 中的 metadata.openclaw 字段
+ * Fully aligns with OpenClaw's skills/types.ts
+ * Used to parse metadata.openclaw field in SKILL.md
  */
 
 /**
- * 技能条目 (对齐 SkillEntry)
+ * Skill Entry (aligns with SkillEntry)
  */
 data class SkillEntry(
     val skill: Skill,
@@ -18,7 +18,7 @@ data class SkillEntry(
 )
 
 /**
- * 基础技能信息 (来自 pi-coding-agent)
+ * Basic Skill Information (from pi-coding-agent)
  */
 data class Skill(
     val name: String,
@@ -28,7 +28,7 @@ data class Skill(
 )
 
 /**
- * 解析后的 Frontmatter
+ * Parsed Frontmatter
  */
 data class ParsedSkillFrontmatter(
     val name: String,
@@ -37,7 +37,7 @@ data class ParsedSkillFrontmatter(
 )
 
 /**
- * OpenClaw 技能元数据 (对齐 OpenClawSkillMetadata)
+ * OpenClaw Skill Metadata (aligns with OpenClawSkillMetadata)
  */
 data class OpenClawSkillMetadata(
     val always: Boolean = false,
@@ -51,17 +51,17 @@ data class OpenClawSkillMetadata(
 )
 
 /**
- * 技能要求 (对齐 requires 字段)
+ * Skill Requirements (aligns with requires field)
  */
 data class SkillRequirements(
-    val bins: List<String>? = null,            // 必须存在的二进制
-    val anyBins: List<String>? = null,         // 至少一个必须存在
-    val env: List<String>? = null,             // 必须存在的环境变量
-    val config: List<String>? = null           // openclaw.json 路径检查
+    val bins: List<String>? = null,            // Required binaries
+    val anyBins: List<String>? = null,         // At least one must exist
+    val env: List<String>? = null,             // Required environment variables
+    val config: List<String>? = null           // openclaw.json path checks
 )
 
 /**
- * 技能安装规范 (对齐 SkillInstallSpec)
+ * Skill Install Specification (aligns with SkillInstallSpec)
  */
 data class SkillInstallSpec(
     val id: String? = null,
@@ -70,16 +70,16 @@ data class SkillInstallSpec(
     val bins: List<String>? = null,
     val os: List<String>? = null,
 
-    // brew 安装
+    // brew install
     val formula: String? = null,
 
-    // npm/yarn/pnpm/bun 安装
+    // npm/yarn/pnpm/bun install
     val `package`: String? = null,
 
-    // go 安装
+    // go install
     val module: String? = null,
 
-    // 下载安装
+    // download install
     val url: String? = null,
     val archive: String? = null,               // tar.gz, tar.bz2, zip
     val extract: Boolean? = null,
@@ -88,19 +88,19 @@ data class SkillInstallSpec(
 )
 
 /**
- * 安装器类型
+ * Installer Type
  */
 enum class InstallKind {
     BREW,       // Homebrew (macOS/Linux)
     NODE,       // npm/yarn/pnpm/bun
     GO,         // go install
     UV,         // uv (Python)
-    DOWNLOAD,   // 直接下载
-    APK         // Android APK (Android 特有)
+    DOWNLOAD,   // Direct download
+    APK         // Android APK (Android-specific)
 }
 
 /**
- * 技能调用策略 (对齐 SkillInvocationPolicy)
+ * Skill Invocation Policy (aligns with SkillInvocationPolicy)
  */
 data class SkillInvocationPolicy(
     val invocation: InvocationType? = null,
@@ -115,7 +115,7 @@ enum class InvocationType {
 }
 
 /**
- * 技能状态报告 (对齐 SkillStatusReport)
+ * Skill Status Report (aligns with SkillStatusReport)
  */
 data class SkillStatusReport(
     val workspaceDir: String,
@@ -124,7 +124,7 @@ data class SkillStatusReport(
 )
 
 /**
- * 技能状态条目 (对齐 SkillStatusEntry)
+ * Skill Status Entry (aligns with SkillStatusEntry)
  */
 data class SkillStatusEntry(
     val name: String,
@@ -147,10 +147,10 @@ data class SkillStatusEntry(
     val install: List<SkillInstallOption>
 )
 
-// SkillSource 已在 SkillDocument.kt 中定义,此处移除避免重复
+// SkillSource already defined in SkillDocument.kt, removed here to avoid duplication
 
 /**
- * 配置检查结果
+ * Config Check Result
  */
 data class SkillConfigCheck(
     val path: String,
@@ -159,7 +159,7 @@ data class SkillConfigCheck(
 )
 
 /**
- * 可用的安装选项
+ * Available Install Option
  */
 data class SkillInstallOption(
     val installId: String,
@@ -170,12 +170,12 @@ data class SkillInstallOption(
 )
 
 /**
- * 技能限制配置 (对齐 OpenClaw 默认限制)
+ * Skills Limits Configuration (aligns with OpenClaw default limits)
  */
 data class SkillsLimits(
     val maxCandidatesPerRoot: Int = 300,
     val maxSkillsLoadedPerSource: Int = 200,
-    val maxSkillsInPrompt: Int = 150,          // Android 可降至 50-100
+    val maxSkillsInPrompt: Int = 150,          // Can be reduced to 50-100 on Android
     val maxSkillsPromptChars: Int = 30_000,
     val maxSkillFileBytes: Int = 256_000
 )

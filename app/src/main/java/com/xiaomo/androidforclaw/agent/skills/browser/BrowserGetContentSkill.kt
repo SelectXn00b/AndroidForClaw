@@ -10,7 +10,7 @@ import com.xiaomo.androidforclaw.providers.ToolDefinition
 import com.xiaomo.androidforclaw.browser.BrowserToolClient
 
 /**
- * browser_get_content - 获取页面内容
+ * browser_get_content - Get page content
  */
 class BrowserGetContentSkill(private val context: Context) : Skill {
     override val name = "browser_get_content"

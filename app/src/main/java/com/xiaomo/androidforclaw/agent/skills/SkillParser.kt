@@ -6,13 +6,13 @@ import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 
 /**
- * Skill 文档解析器
- * 支持 AgentSkills.io 格式
+ * Skill Document Parser
+ * Supports AgentSkills.io format
  *
- * 格式说明:
+ * Format specification:
  * ---
  * name: skill-name
- * description: 技能描述
+ * description: Skill description
  * metadata: { "openclaw": { ... } }
  * ---
  * # Markdown Content
@@ -22,23 +22,23 @@ object SkillParser {
     private val gson = Gson()
 
     /**
-     * 解析 Skill 文档
+     * Parse Skill document
      *
-     * @param content SKILL.md 文件的完整内容
+     * @param content Full content of SKILL.md file
      * @return SkillDocument
-     * @throws IllegalArgumentException 如果格式不正确
+     * @throws IllegalArgumentException If format is incorrect
      */
     fun parse(content: String): SkillDocument {
         try {
-            // 1. 分割 frontmatter 和 body
+            // 1. Split frontmatter and body
             val (frontmatter, body) = splitFrontmatter(content)
 
-            // 2. 解析 frontmatter 字段
+            // 2. Parse frontmatter fields
             val name = extractYamlField(frontmatter, "name")
             val description = extractYamlField(frontmatter, "description")
             val metadataJson = extractYamlField(frontmatter, "metadata")
 
-            // 3. 验证必需字段
+            // 3. Validate required fields
             if (name.isEmpty()) {
                 throw IllegalArgumentException("Missing required field: name")
             }
@@ -46,7 +46,7 @@ object SkillParser {
                 throw IllegalArgumentException("Missing required field: description")
             }
 
-            // 4. 解析 metadata
+            // 4. Parse metadata
             val metadata = parseMetadata(metadataJson)
 
             return SkillDocument(
@@ -62,18 +62,18 @@ object SkillParser {
     }
 
     /**
-     * 分割 YAML frontmatter 和 Markdown body
+     * Split YAML frontmatter and Markdown body
      *
-     * 输入:
+     * Input:
      * ---
      * name: test
      * ---
      * # Content
      *
-     * 输出: ("name: test", "# Content")
+     * Output: ("name: test", "# Content")
      */
     private fun splitFrontmatter(content: String): Pair<String, String> {
-        // 使用正则分割 "---" 分隔符
+        // Split using "---" delimiter regex
         val parts = content.split(Regex("^---\\s*$", RegexOption.MULTILINE))
 
         if (parts.size < 3) {
@@ -89,30 +89,30 @@ object SkillParser {
     }
 
     /**
-     * 提取 YAML 字段值
+     * Extract YAML field value
      *
-     * 支持格式:
-     * 1. 单行: name: value
-     * 2. 多行 JSON: metadata: { "key": "value" }
-     * 3. 多行 JSON (跨行): metadata:
+     * Supported formats:
+     * 1. Single line: name: value
+     * 2. Multi-line JSON: metadata: { "key": "value" }
+     * 3. Multi-line JSON (spanning lines): metadata:
      *                        {
      *                          "key": "value"
      *                        }
      */
     private fun extractYamlField(yaml: String, field: String): String {
-        // 尝试匹配单行格式: field: value
+        // Try to match single-line format: field: value
         val singleLineRegex = Regex("$field:\\s*([^\\n{]+)")
         val singleLineMatch = singleLineRegex.find(yaml)
         if (singleLineMatch != null) {
             val value = singleLineMatch.groupValues[1].trim()
-            // 如果不是 JSON 起始，返回该值
+            // If not JSON start, return the value
             if (!value.isEmpty() && !yaml.substring(singleLineMatch.range.last).trimStart().startsWith("{")) {
                 return value
             }
         }
 
-        // 尝试匹配多行 JSON: field: { ... } 或 field:\n  { ... }
-        // 使用括号计数来正确提取嵌套 JSON
+        // Try to match multi-line JSON: field: { ... } or field:\n  { ... }
+        // Use brace counting to correctly extract nested JSON
         val fieldPattern = "$field:\\s*"
         val fieldStart = yaml.indexOf(fieldPattern)
         if (fieldStart == -1) {
@@ -124,7 +124,7 @@ object SkillParser {
             return ""
         }
 
-        // 从 { 开始，计数括号直到匹配
+        // Start from {, count braces until matched
         var braceCount = 0
         var jsonEnd = jsonStart
         while (jsonEnd < yaml.length) {
@@ -133,9 +133,9 @@ object SkillParser {
                 '}' -> {
                     braceCount--
                     if (braceCount == 0) {
-                        // 找到匹配的右括号
+                        // Found matching closing brace
                         val jsonStr = yaml.substring(jsonStart, jsonEnd + 1)
-                        // 移除 JSON 中的换行和多余空格，保持紧凑格式
+                        // Remove newlines and extra spaces from JSON, keep compact format
                         return jsonStr.replace(Regex("\\s+"), " ").trim()
                     }
                 }
@@ -147,9 +147,9 @@ object SkillParser {
     }
 
     /**
-     * 解析 metadata JSON
+     * Parse metadata JSON
      *
-     * 格式:
+     * Format:
      * {
      *   "openclaw": {
      *     "always": true,
@@ -189,7 +189,7 @@ object SkillParser {
     }
 
     /**
-     * 解析 requires 字段
+     * Parse requires field
      */
     private fun parseRequires(openclaw: JsonObject): SkillRequires? {
         val requiresObj = openclaw.getAsJsonObject("requires") ?: return null
@@ -207,7 +207,7 @@ object SkillParser {
     }
 
     /**
-     * 将 JsonArray 转换为 List<String>
+     * Convert JsonArray to List<String>
      */
     private fun jsonArrayToList(array: JsonArray?): List<String> {
         if (array == null) return emptyList()
@@ -215,16 +215,16 @@ object SkillParser {
     }
 
     /**
-     * 验证 Skill 文档格式
+     * Validate Skill document format
      *
-     * @return 验证结果，成功返回 null，失败返回错误信息
+     * @return Validation result, returns null on success, error message on failure
      */
     fun validate(content: String): String? {
         return try {
             parse(content)
-            null  // 验证成功
+            null  // Validation successful
         } catch (e: Exception) {
-            e.message  // 返回错误信息
+            e.message  // Return error message
         }
     }
 }
