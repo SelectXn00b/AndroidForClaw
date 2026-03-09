@@ -24,7 +24,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * Skill 显示模型（带来源信息）
+ * Skill display model (with source information)
  */
 data class SkillDisplayModel(
     val document: SkillDocument,
@@ -33,13 +33,13 @@ data class SkillDisplayModel(
 )
 
 /**
- * Skills 管理界面
- * 对标 OpenClaw CLI: openclaw skills list
+ * Skills management interface
+ * Maps to OpenClaw CLI: openclaw skills list
  *
- * 功能：
- * - 查看所有 Skills
- * - 查看 Skill 详情
- * - 删除用户 Skills
+ * Features:
+ * - View all Skills
+ * - View Skill details
+ * - Delete user Skills
  */
 class SkillsActivity : AppCompatActivity() {
 
@@ -92,7 +92,7 @@ class SkillsActivity : AppCompatActivity() {
                     val allSkills = skillsLoader.loadSkills()
                     val result = mutableListOf<SkillDisplayModel>()
 
-                    // 将 Map 转换为 List 并推断来源
+                    // Convert Map to List and infer source
                     allSkills.forEach { (name, doc) ->
                         val (source, path) = detectSkillSource(name)
                         result.add(SkillDisplayModel(doc, source, path))
@@ -104,10 +104,10 @@ class SkillsActivity : AppCompatActivity() {
                 adapter.submitList(skills)
                 updateStats(skills)
 
-                Log.d(TAG, "加载了 ${skills.size} 个 Skills")
+                Log.d(TAG, "Loaded ${skills.size} Skills")
 
             } catch (e: Exception) {
-                Log.e(TAG, "加载 Skills 失败", e)
+                Log.e(TAG, "Failed to load Skills", e)
                 Toast.makeText(this@SkillsActivity, "加载失败: ${e.message}", Toast.LENGTH_SHORT).show()
             } finally {
                 binding.swipeRefresh.isRefreshing = false
@@ -116,22 +116,22 @@ class SkillsActivity : AppCompatActivity() {
     }
 
     /**
-     * 检测 Skill 来源
+     * Detect Skill source
      */
     private fun detectSkillSource(skillName: String): Pair<String, String> {
-        // 检查 workspace
+        // Check workspace
         val workspacePath = "/sdcard/.androidforclaw/workspace/skills/$skillName"
         if (File(workspacePath).exists()) {
             return "workspace" to workspacePath
         }
 
-        // 检查 managed
+        // Check managed
         val managedPath = "/sdcard/.androidforclaw/.skills/$skillName"
         if (File(managedPath).exists()) {
             return "managed" to managedPath
         }
 
-        // 默认为 bundled
+        // Default to bundled
         return "bundled" to "assets/skills/$skillName"
     }
 
@@ -226,21 +226,21 @@ class SkillsActivity : AppCompatActivity() {
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    // 删除 Skill 目录
+                    // Delete Skill directory
                     val skillDir = File(skill.path)
                     if (skillDir.exists()) {
                         skillDir.deleteRecursively()
-                        Log.d(TAG, "已删除: ${skill.path}")
+                        Log.d(TAG, "Deleted: ${skill.path}")
                     }
                 }
 
                 Toast.makeText(this@SkillsActivity, "已删除: ${skill.document.name}", Toast.LENGTH_SHORT).show()
 
-                // 重新加载（SkillsLoader 会自动重新扫描文件系统）
+                // Reload (SkillsLoader will automatically rescan the file system)
                 loadSkills()
 
             } catch (e: Exception) {
-                Log.e(TAG, "删除 Skill 失败", e)
+                Log.e(TAG, "Failed to delete Skill", e)
                 Toast.makeText(this@SkillsActivity, "删除失败: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
@@ -258,7 +258,7 @@ class SkillsActivity : AppCompatActivity() {
 }
 
 /**
- * Skills 列表适配器
+ * Skills list adapter
  */
 class SkillsAdapter(
     private val onItemClick: (SkillDisplayModel) -> Unit,
@@ -295,13 +295,13 @@ class SkillsAdapter(
             val meta = doc.metadata
 
             binding.apply {
-                // Emoji + 名称
+                // Emoji + name
                 tvName.text = "${meta.emoji ?: "📄"} ${doc.name}"
 
-                // 描述
+                // Description
                 tvDescription.text = doc.description
 
-                // 来源标签
+                // Source label
                 tvSource.text = when (skill.source) {
                     "bundled" -> "📦 内置"
                     "workspace" -> "👤 用户"
@@ -309,7 +309,7 @@ class SkillsAdapter(
                     else -> "❓ 未知"
                 }
 
-                // 分类标签（从名称推断）
+                // Category label (inferred from name)
                 val category = when {
                     doc.name.contains("mobile") || doc.name.contains("app") -> "automation"
                     doc.name.contains("test") -> "testing"
@@ -326,17 +326,17 @@ class SkillsAdapter(
                     tvCategory.visibility = View.GONE
                 }
 
-                // 自动加载标记
+                // Auto-load marker
                 if (meta.always) {
                     tvAutoLoad.visibility = View.VISIBLE
                 } else {
                     tvAutoLoad.visibility = View.GONE
                 }
 
-                // 点击事件
+                // Click events
                 root.setOnClickListener { onItemClick(skill) }
 
-                // 删除按钮（仅用户 Skill 可见）
+                // Delete button (visible only for user Skills)
                 btnDelete.visibility = if (skill.source != "bundled") View.VISIBLE else View.GONE
                 btnDelete.setOnClickListener { onDeleteClick(skill) }
             }

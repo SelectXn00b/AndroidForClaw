@@ -39,14 +39,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 
 /**
- * 检查 S4Claw (observer扩展) 的无障碍服务是否已启用
+ * Check if S4Claw (observer extension) accessibility service is enabled
  *
- * 注意：此方法只检查系统设置，不阻塞线程
+ * Note: This method only checks system settings without blocking the thread
  */
 suspend fun isS4ClawAccessibilityEnabled(context: Context): Boolean {
     return withContext(Dispatchers.IO) {
         try {
-            // 检查系统设置
+            // Check system settings
             val accessibilityEnabled = Settings.Secure.getInt(
                 context.contentResolver,
                 Settings.Secure.ACCESSIBILITY_ENABLED,
@@ -54,7 +54,7 @@ suspend fun isS4ClawAccessibilityEnabled(context: Context): Boolean {
             ) == 1
 
             if (!accessibilityEnabled) {
-                Log.d("MainActivityCompose", "系统无障碍功能未启用")
+                Log.d("MainActivityCompose", "System accessibility not enabled")
                 return@withContext false
             }
 
@@ -63,44 +63,44 @@ suspend fun isS4ClawAccessibilityEnabled(context: Context): Boolean {
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
             ) ?: return@withContext false
 
-            // S4Claw 的无障碍服务包名
+            // S4Claw accessibility service package name
             val s4clawServiceName = "com.xiaomo.androidforclaw.accessibility/com.xiaomo.androidforclaw.accessibility.service.PhoneAccessibilityService"
 
             val isEnabled = enabledServices.contains(s4clawServiceName)
-            Log.d("MainActivityCompose", "S4Claw 无障碍服务系统状态: $isEnabled")
+            Log.d("MainActivityCompose", "S4Claw accessibility service system status: $isEnabled")
 
-            // 如果系统显示已启用，尝试通过 AIDL 验证服务真正可用
+            // If system shows enabled, try to verify service is actually available via AIDL
             if (isEnabled) {
                 try {
-                    // 确保绑定服务
+                    // Ensure service is bound
                     com.xiaomo.androidforclaw.accessibility.AccessibilityProxy.bindService(context)
-                    kotlinx.coroutines.delay(300)  // 异步等待连接
+                    kotlinx.coroutines.delay(300)  // Wait asynchronously for connection
 
-                    // 使用异步方法检查
+                    // Check using async method
                     val ready = com.xiaomo.androidforclaw.accessibility.AccessibilityProxy.isServiceReadyAsync()
-                    Log.d("MainActivityCompose", "S4Claw 无障碍服务 AIDL 可用性: $ready")
+                    Log.d("MainActivityCompose", "S4Claw accessibility service AIDL availability: $ready")
                     return@withContext ready
                 } catch (e: Exception) {
-                    Log.w("MainActivityCompose", "AIDL 验证失败，使用系统设置结果", e)
+                    Log.w("MainActivityCompose", "AIDL verification failed, using system settings result", e)
                     return@withContext isEnabled
                 }
             }
 
             isEnabled
         } catch (e: Exception) {
-            Log.e("MainActivityCompose", "检查 S4Claw 无障碍服务失败", e)
+            Log.e("MainActivityCompose", "Failed to check S4Claw accessibility service", e)
             false
         }
     }
 }
 
 /**
- * MainActivity - Compose 版本
+ * MainActivity - Compose version
  *
- * 包含三个Tab：
- * 1. 对话 - AI 助手聊天界面
- * 2. 状态 - 系统状态卡片
- * 3. 设置 - 配置和测试入口
+ * Contains three tabs:
+ * 1. Chat - AI assistant chat interface
+ * 2. Status - System status cards
+ * 3. Settings - Configuration and test entries
  */
 class MainActivityCompose : ComponentActivity() {
 
@@ -116,11 +116,11 @@ class MainActivityCompose : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 检查并请求文件管理权限
+        // Check and request file management permission
         checkAndRequestStoragePermission()
 
         setContent {
-            // 保存 ViewModel 引用以供 BroadcastReceiver 使用
+            // Save ViewModel reference for BroadcastReceiver use
             val viewModel: ChatViewModel = viewModel()
             chatViewModel = viewModel
 
@@ -134,36 +134,36 @@ class MainActivityCompose : ComponentActivity() {
                         startActivity(Intent(this, SkillsActivity::class.java))
                     },
                     onNavigateToConfig = {
-                        Log.d("MainActivityCompose", "点击了模型配置")
+                        Log.d("MainActivityCompose", "Clicked model configuration")
                         try {
                             startActivity(Intent(this, ConfigActivity::class.java))
-                            Log.d("MainActivityCompose", "成功启动 ConfigActivity")
+                            Log.d("MainActivityCompose", "Successfully started ConfigActivity")
                         } catch (e: Exception) {
-                            Log.e("MainActivityCompose", "启动 ConfigActivity 失败", e)
+                            Log.e("MainActivityCompose", "Failed to start ConfigActivity", e)
                         }
                     },
                     onNavigateToTest = {
-                        // AgentTestActivity已移除
+                        // AgentTestActivity has been removed
                         Toast.makeText(this, "Agent测试功能已废弃", Toast.LENGTH_SHORT).show()
                     }
                 )
             }
         }
 
-        // 注册 ADB 测试接口
+        // Register ADB test interface
         registerChatBroadcastReceiver()
         registerLocalBroadcastReceiver()
     }
 
     override fun onResume() {
         super.onResume()
-        // 主页面可见时通知悬浮窗管理器
+        // Notify float window manager when main activity is visible
         SessionFloatWindow.setMainActivityVisible(true, this)
     }
 
     override fun onPause() {
         super.onPause()
-        // 主页面不可见时通知悬浮窗管理器
+        // Notify float window manager when main activity is not visible
         SessionFloatWindow.setMainActivityVisible(false, this)
     }
 
@@ -174,28 +174,28 @@ class MainActivityCompose : ComponentActivity() {
     }
 
     /**
-     * 注册 Chat Broadcast Receiver
+     * Register Chat Broadcast Receiver
      *
-     * 注意：使用 RECEIVER_EXPORTED 以支持 ADB 测试
+     * Note: Uses RECEIVER_EXPORTED to support ADB testing
      */
     private fun registerChatBroadcastReceiver() {
         chatBroadcastReceiver = ChatBroadcastReceiver { message ->
-            Log.d(TAG, "📨 [BroadcastReceiver] 收到消息: $message")
+            Log.d(TAG, "📨 [BroadcastReceiver] Received message: $message")
             chatViewModel?.sendMessage(message)
         }
 
         val filter = ChatBroadcastReceiver.createIntentFilter()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Log.i(TAG, "✅ 注册 ChatBroadcastReceiver (EXPORTED, SDK >= 33)")
+            Log.i(TAG, "✅ Register ChatBroadcastReceiver (EXPORTED, SDK >= 33)")
             registerReceiver(chatBroadcastReceiver, filter, RECEIVER_EXPORTED)
         } else {
-            Log.i(TAG, "✅ 注册 ChatBroadcastReceiver (SDK < 33)")
+            Log.i(TAG, "✅ Register ChatBroadcastReceiver (SDK < 33)")
             registerReceiver(chatBroadcastReceiver, filter)
         }
     }
 
     /**
-     * 注销 Chat Broadcast Receiver
+     * Unregister Chat Broadcast Receiver
      */
     private fun unregisterChatBroadcastReceiver() {
         chatBroadcastReceiver?.let {
@@ -208,14 +208,14 @@ class MainActivityCompose : ComponentActivity() {
     }
 
     /**
-     * 注册本地广播接收器 - 接收来自静态BroadcastReceiver的消息
+     * Register local broadcast receiver - Receive messages from static BroadcastReceiver
      */
     private fun registerLocalBroadcastReceiver() {
         localBroadcastReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 val message = intent?.getStringExtra("message")
                 if (!message.isNullOrBlank()) {
-                    Log.d(TAG, "📨 [LocalBroadcast] 收到消息: $message")
+                    Log.d(TAG, "📨 [LocalBroadcast] Received message: $message")
                     chatViewModel?.sendMessage(message)
                 }
             }
@@ -225,11 +225,11 @@ class MainActivityCompose : ComponentActivity() {
         androidx.localbroadcastmanager.content.LocalBroadcastManager
             .getInstance(this)
             .registerReceiver(localBroadcastReceiver!!, filter)
-        Log.i(TAG, "✅ 注册本地广播接收器")
+        Log.i(TAG, "✅ Registered local broadcast receiver")
     }
 
     /**
-     * 注销本地广播接收器
+     * Unregister local broadcast receiver
      */
     private fun unregisterLocalBroadcastReceiver() {
         localBroadcastReceiver?.let {
@@ -244,40 +244,40 @@ class MainActivityCompose : ComponentActivity() {
     }
 
     /**
-     * 检查并请求文件管理权限
+     * Check and request file management permission
      */
     private fun checkAndRequestStoragePermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11+ 需要 MANAGE_EXTERNAL_STORAGE 权限
+            // Android 11+ requires MANAGE_EXTERNAL_STORAGE permission
             if (!Environment.isExternalStorageManager()) {
-                // Debug版本跳过权限请求页面,避免跳转Settings导致Activity进入后台影响测试
+                // Debug version skips permission request page to avoid jumping to Settings causing Activity to go background affecting tests
                 if (com.draco.ladb.BuildConfig.SKIP_PERMISSION_REQUEST) {
-                    Log.w(TAG, "⚠️ DEBUG模式: 文件管理权限未授予,但跳过请求页面")
-                    Log.w(TAG, "   配置文件读写可能失败,请手动授予权限")
+                    Log.w(TAG, "⚠️ DEBUG mode: File management permission not granted, but skipping request page")
+                    Log.w(TAG, "   Config file read/write may fail, please grant permission manually")
                     return
                 }
 
-                Log.i(TAG, "文件管理权限未授予，请求权限...")
+                Log.i(TAG, "File management permission not granted, requesting permission...")
                 try {
                     val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
                     intent.data = Uri.parse("package:$packageName")
                     startActivityForResult(intent, REQUEST_MANAGE_EXTERNAL_STORAGE)
                 } catch (e: Exception) {
-                    Log.e(TAG, "无法打开文件管理权限设置页面", e)
-                    // 降级到通用设置页面
+                    Log.e(TAG, "Cannot open file management permission settings page", e)
+                    // Fallback to general settings page
                     try {
                         val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
                         startActivityForResult(intent, REQUEST_MANAGE_EXTERNAL_STORAGE)
                     } catch (e2: Exception) {
-                        Log.e(TAG, "无法打开文件管理权限设置", e2)
+                        Log.e(TAG, "Cannot open file management permission settings", e2)
                     }
                 }
             } else {
-                Log.i(TAG, "✅ 文件管理权限已授予")
+                Log.i(TAG, "✅ File management permission granted")
             }
         } else {
-            // Android 10 及以下使用传统权限
-            Log.i(TAG, "Android 10 及以下，使用传统存储权限")
+            // Android 10 and below use traditional permissions
+            Log.i(TAG, "Android 10 and below, using traditional storage permissions")
         }
     }
 
@@ -288,9 +288,9 @@ class MainActivityCompose : ComponentActivity() {
         if (requestCode == REQUEST_MANAGE_EXTERNAL_STORAGE) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 if (Environment.isExternalStorageManager()) {
-                    Log.i(TAG, "✅ 文件管理权限已授予")
+                    Log.i(TAG, "✅ File management permission granted")
                 } else {
-                    Log.w(TAG, "⚠️ 文件管理权限未授予，配置文件读取可能失败")
+                    Log.w(TAG, "⚠️ File management permission not granted, config file reading may fail")
                 }
             }
         }
@@ -373,10 +373,10 @@ fun StatusTab(
 ) {
     val context = LocalContext.current
 
-    // 动态获取 Gateway 状态
+    // Dynamically get Gateway status
     val gatewayRunning = remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        // 检查 Gateway 端口是否在监听
+        // Check if Gateway port is listening
         try {
             val result = withContext(Dispatchers.IO) {
                 java.net.Socket().use { socket ->
@@ -390,7 +390,7 @@ fun StatusTab(
         }
     }
 
-    // 动态获取 Skills 数量
+    // Dynamically get Skills count
     val skillsCount = remember { mutableStateOf(0) }
     LaunchedEffect(Unit) {
         try {
@@ -398,7 +398,7 @@ fun StatusTab(
             val stats = loader.getStatistics()
             skillsCount.value = stats.totalSkills
         } catch (e: Exception) {
-            Log.e("StatusTab", "获取 Skills 数量失败", e)
+            Log.e("StatusTab", "Failed to get Skills count", e)
             skillsCount.value = 0
         }
     }
@@ -472,63 +472,63 @@ fun StatusTab(
 fun PermissionsCard(onClick: () -> Unit) {
     val context = LocalContext.current
 
-    // 使用 remember 和 LaunchedEffect 异步加载权限状态
+    // Use remember and LaunchedEffect to load permission status asynchronously
     var accessibility by remember { mutableStateOf(false) }
     var overlay by remember { mutableStateOf(false) }
     var screenCapture by remember { mutableStateOf(false) }
 
-    // 防止重复连接尝试
+    // Prevent duplicate connection attempts
     var isConnecting by remember { mutableStateOf(false) }
 
-    // 定期刷新权限状态（每3秒）
+    // Periodically refresh permission status (every 3 seconds)
     LaunchedEffect(Unit) {
         while (true) {
-            // 在后台线程检查权限
+            // Check permissions in background thread
             withContext(Dispatchers.IO) {
                 try {
-                    // 检查悬浮窗权限
+                    // Check overlay permission
                     overlay = Settings.canDrawOverlays(context)
 
-                    // 检查 S4Claw (observer) 的无障碍服务
+                    // Check S4Claw (observer) accessibility service
                     accessibility = isS4ClawAccessibilityEnabled(context)
 
-                    // 检查截图权限 - 查询 observer APK 的权限状态
+                    // Check screenshot permission - query observer APK permission status
                     screenCapture = try {
-                        // 如果连接断开且不在连接中，尝试重连
+                        // If connection is disconnected and not connecting, try to reconnect
                         val isConnected = com.xiaomo.androidforclaw.accessibility.AccessibilityProxy.isConnected.value ?: false
                         if (!isConnected && !isConnecting) {
                             isConnecting = true
-                            Log.d("PermissionsCard", "AccessibilityProxy 未连接，启动连接...")
+                            Log.d("PermissionsCard", "AccessibilityProxy not connected, starting connection...")
                             com.xiaomo.androidforclaw.accessibility.AccessibilityProxy.bindService(context)
 
-                            // 等待一小段时间看是否能快速连接
+                            // Wait a short time to see if quick connection succeeds
                             delay(300)
                             val quickConnect = com.xiaomo.androidforclaw.accessibility.AccessibilityProxy.isConnected.value ?: false
                             if (quickConnect) {
-                                Log.d("PermissionsCard", "AccessibilityProxy 快速连接成功")
+                                Log.d("PermissionsCard", "AccessibilityProxy quick connection succeeded")
                             }
                             isConnecting = false
                         }
 
-                        // 立即返回当前状态
+                        // Return current status immediately
                         if (com.xiaomo.androidforclaw.accessibility.AccessibilityProxy.isConnected.value == true) {
                             com.xiaomo.androidforclaw.accessibility.AccessibilityProxy.getMediaProjectionStatus() == "已授权"
                         } else {
                             false
                         }
                     } catch (e: Exception) {
-                        Log.e("PermissionsCard", "检查录屏权限失败", e)
+                        Log.e("PermissionsCard", "Failed to check screen capture permission", e)
                         isConnecting = false
                         false
                     }
 
-                    Log.d("PermissionsCard", "权限状态: 无障碍=$accessibility, 悬浮窗=$overlay, 录屏=$screenCapture")
+                    Log.d("PermissionsCard", "Permission status: accessibility=$accessibility, overlay=$overlay, screenCapture=$screenCapture")
                 } catch (e: Exception) {
-                    Log.e("PermissionsCard", "检查权限时出错", e)
+                    Log.e("PermissionsCard", "Error checking permissions", e)
                 }
             }
 
-            // 每3秒刷新一次
+            // Refresh every 3 seconds
             delay(3000)
         }
     }

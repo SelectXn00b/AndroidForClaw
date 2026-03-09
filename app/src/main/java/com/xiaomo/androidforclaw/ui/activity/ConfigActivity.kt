@@ -12,8 +12,8 @@ import com.draco.ladb.databinding.ActivityConfigBinding
 import com.tencent.mmkv.MMKV
 
 /**
- * 配置页面
- * 映射 OpenClaw CLI: openclaw config
+ * Configuration Activity
+ * Maps to OpenClaw CLI: openclaw config
  */
 class ConfigActivity : AppCompatActivity() {
 
@@ -41,14 +41,14 @@ class ConfigActivity : AppCompatActivity() {
 
     private fun loadConfig() {
         try {
-            Log.d(TAG, "开始加载配置...")
+            Log.d(TAG, "Starting to load config...")
 
-            // 从 openclaw.json 加载配置
+            // Load config from openclaw.json
             val config = configLoader.loadOpenClawConfig()
-            Log.d(TAG, "配置加载成功")
+            Log.d(TAG, "Config loaded successfully")
 
             binding.apply {
-                // 显示模型配置 - 使用 resolveProviders() 方法
+                // Display model configuration - use resolveProviders() method
                 val providers = config.resolveProviders()
                 Log.d(TAG, "providers: $providers")
                 Log.d(TAG, "providers.size: ${providers.size}")
@@ -56,43 +56,43 @@ class ConfigActivity : AppCompatActivity() {
                 if (providers.isNotEmpty()) {
                     val firstProvider = providers.entries.first()
                     val providerConfig = firstProvider.value
-                    Log.d(TAG, "第一个 provider: ${firstProvider.key}, baseUrl: ${providerConfig.baseUrl}")
+                    Log.d(TAG, "First provider: ${firstProvider.key}, baseUrl: ${providerConfig.baseUrl}")
 
                     etApiBase.setText(providerConfig.baseUrl)
                     etApiKey.setText("*** (已配置)")
 
-                    // 显示第一个模型
+                    // Display first model
                     if (providerConfig.models.isNotEmpty()) {
                         val firstModel = providerConfig.models.first()
-                        Log.d(TAG, "第一个模型: ${firstModel.name} (${firstModel.id})")
+                        Log.d(TAG, "First model: ${firstModel.name} (${firstModel.id})")
                     }
 
-                    Log.d(TAG, "模型配置显示成功")
+                    Log.d(TAG, "Model config displayed successfully")
                 } else {
-                    Log.w(TAG, "providers 为空")
+                    Log.w(TAG, "providers is empty")
                     etApiBase.setText("未配置")
                     etApiKey.setText("未配置")
                 }
 
-                // 功能开关 - 从 openclaw.json 读取
+                // Feature switches - read from openclaw.json
                 Log.d(TAG, "thinking.enabled: ${config.thinking.enabled}")
                 Log.d(TAG, "agent.mode: ${config.agent.mode}")
 
                 switchReasoning.isChecked = config.thinking.enabled
                 switchExploration.isChecked = config.agent.mode == "exploration"
 
-                // Gateway 配置
+                // Gateway configuration
                 Log.d(TAG, "gateway.port: ${config.gateway.port}")
                 etGatewayPort.setText(config.gateway.port.toString())
 
-                Log.d(TAG, "所有配置加载完成")
+                Log.d(TAG, "All config loaded successfully")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "加载配置失败", e)
-            Log.e(TAG, "错误详情: ${e.stackTraceToString()}")
+            Log.e(TAG, "Failed to load config", e)
+            Log.e(TAG, "Error details: ${e.stackTraceToString()}")
             Toast.makeText(this, "加载配置失败: ${e.message}", Toast.LENGTH_SHORT).show()
 
-            // 加载失败时使用默认值
+            // Use default values on failure
             binding.apply {
                 etApiKey.setText("")
                 etApiBase.setText("")
@@ -105,22 +105,22 @@ class ConfigActivity : AppCompatActivity() {
 
     private fun setupListeners() {
         binding.apply {
-            // 保存按钮
+            // Save button
             btnSave.setOnClickListener {
                 saveConfig()
             }
 
-            // 恢复默认按钮
+            // Reset to default button
             btnReset.setOnClickListener {
                 resetToDefault()
             }
 
-            // Skills 管理入口
+            // Skills management entry
             cardSkills.setOnClickListener {
                 startActivity(Intent(this@ConfigActivity, SkillsActivity::class.java))
             }
 
-            // Channels 管理入口
+            // Channels management entry
             cardChannels.setOnClickListener {
                 startActivity(Intent(this@ConfigActivity, ChannelListActivity::class.java))
             }

@@ -7,10 +7,20 @@ plugins {
 android {
     signingConfigs {
         release {
-            keyAlias 'key0'
-            keyPassword 'phoneforclaw'
-            storeFile project.rootProject.file('test.keystore')
-            storePassword 'phoneforclaw'
+            keyAlias 'android'
+            keyPassword 'android'
+            storeFile project.rootProject.file('../keystore.jks')
+            storePassword 'android'
+            enableV1Signing true
+            enableV2Signing true
+            enableV3Signing true
+            enableV4Signing true
+        }
+        debug {
+            keyAlias 'android'
+            keyPassword 'android'
+            storeFile project.rootProject.file('../keystore.jks')
+            storePassword 'android'
             enableV1Signing true
             enableV2Signing true
             enableV3Signing true
@@ -33,6 +43,9 @@ android {
             signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            signingConfig signingConfigs.debug
         }
     }
 

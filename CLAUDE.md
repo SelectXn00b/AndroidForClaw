@@ -18,6 +18,7 @@
 **核心功能**:
 - **Agent Runtime**: 完整的 AgentLoop 执行引擎
 - **Skills System**: 与 OpenClaw 兼容的 Skills 系统
+- **ClawHub Integration**: ✅ 完全支持 ClawHub skill 安装和搜索 (参考 [CLAWHUB_GUIDE.md](CLAWHUB_GUIDE.md))
 - **Gateway**: WebSocket RPC (35-60 methods 目标)
 - **Multi-Channel**: 多渠道支持 (Discord, Feishu, WebChat)
 - **Android Tools**: 移动平台特化工具 (screenshot, UI 交互, 设备控制)
@@ -91,6 +92,7 @@
 - [MOBILE_OPENCLAW_ALIGNMENT.md](MOBILE_OPENCLAW_ALIGNMENT.md) - 完整对齐策略
 - [GATEWAY_ALIGNMENT_DECISION.md](GATEWAY_ALIGNMENT_DECISION.md) - Gateway 对齐决策
 - [OPENCLAW_REAL_COMPARISON.md](OPENCLAW_REAL_COMPARISON.md) - 与真实源码对比
+- [CLAWHUB_GUIDE.md](CLAWHUB_GUIDE.md) - ClawHub 集成指南 ⚠️ **重要**: clawhub.com 网站 404 不代表 API 不可用,API 端点 clawhub.ai 工作正常!
 
 ---
 

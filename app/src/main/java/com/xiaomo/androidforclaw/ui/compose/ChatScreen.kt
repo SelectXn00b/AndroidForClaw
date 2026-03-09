@@ -34,13 +34,13 @@ import java.text.SimpleDateFormat
 import java.util.*
 
 /**
- * 聊天界面 - 借鉴 Stream Chat Android 的 UI 设计风格
+ * Chat interface - Inspired by Stream Chat Android UI design style
  *
- * 设计参考：
- * - 消息气泡：圆角设计，左右对齐不同
- * - 颜色主题：用户消息蓝色，AI消息白色/灰色
- * - 输入框：圆角矩形，带发送按钮
- * - 头像：圆形，区分用户和AI
+ * Design reference:
+ * - Message bubbles: Rounded corners, different alignment for left and right
+ * - Color theme: User messages blue, AI messages white/gray
+ * - Input box: Rounded rectangle with send button
+ * - Avatar: Circular, distinguishing between user and AI
  */
 
 data class ChatMessage(
@@ -63,7 +63,7 @@ fun ChatScreen(
     onSendMessage: (String) -> Unit,
     modifier: Modifier = Modifier,
     isLoading: Boolean = false,
-    // Session 相关参数
+    // Session-related parameters
     sessions: List<SessionManager.Session> = emptyList(),
     currentSession: SessionManager.Session? = null,
     onSessionChange: (String) -> Unit = {},
@@ -73,7 +73,7 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
-    // 自动滚动到底部
+    // Auto-scroll to bottom
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
             coroutineScope.launch {
@@ -85,9 +85,9 @@ fun ChatScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.White) // Stream Chat 风格：白色背景
+            .background(Color.White) // Stream Chat style: white background
     ) {
-        // Session 控制栏 (参考 OpenClaw)
+        // Session control bar (reference OpenClaw)
         if (sessions.isNotEmpty()) {
             SessionControlBar(
                 sessions = sessions,
@@ -98,14 +98,14 @@ fun ChatScreen(
             )
         }
 
-        // 消息列表
+        // Message list
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
         ) {
             if (messages.isEmpty()) {
-                // 空状态
+                // Empty state
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -148,7 +148,7 @@ fun ChatScreen(
                 }
             }
 
-            // 加载指示器
+            // Loading indicator
             if (isLoading) {
                 Surface(
                     modifier = Modifier
@@ -179,13 +179,13 @@ fun ChatScreen(
             }
         }
 
-        // 分隔线
+        // Divider
         Divider(
             color = Color(0xFFE0E0E0),
             thickness = 1.dp
         )
 
-        // 消息输入框
+        // Message input box
         MessageComposer(
             value = inputText,
             onValueChange = { inputText = it },
@@ -206,7 +206,7 @@ fun MessageItem(
     modifier: Modifier = Modifier
 ) {
     val alignment = if (message.isUser) Alignment.End else Alignment.Start
-    // Stream Chat 风格配色
+    // Stream Chat style colors
     val backgroundColor = if (message.isUser) Color(0xFF005FFF) else Color(0xFFEFEFEF)
     val textColor = if (message.isUser) Color.White else Color(0xFF000000)
 
@@ -216,7 +216,7 @@ fun MessageItem(
             .padding(horizontal = 8.dp, vertical = 4.dp),
         horizontalArrangement = if (message.isUser) Arrangement.End else Arrangement.Start
     ) {
-        // AI 头像 (左侧)
+        // AI avatar (left)
         if (!message.isUser) {
             Avatar(
                 text = "AI",
@@ -225,7 +225,7 @@ fun MessageItem(
             )
         }
 
-        // 消息气泡
+        // Message bubble
         Column(
             horizontalAlignment = alignment,
             modifier = Modifier.weight(1f, fill = false)
@@ -249,7 +249,7 @@ fun MessageItem(
                         vertical = 8.dp
                     )
                 ) {
-                    // 消息内容
+                    // Message content
                     Text(
                         text = message.content,
                         style = TextStyle(
@@ -259,7 +259,7 @@ fun MessageItem(
                         )
                     )
 
-                    // 时间戳和状态
+                    // Timestamp and status
                     Row(
                         modifier = Modifier
                             .align(Alignment.End)
@@ -283,7 +283,7 @@ fun MessageItem(
             }
         }
 
-        // 用户头像 (右侧)
+        // User avatar (right)
         if (message.isUser) {
             Avatar(
                 text = "You",
@@ -295,7 +295,7 @@ fun MessageItem(
 }
 
 /**
- * 圆形头像组件
+ * Circular avatar component
  */
 @Composable
 fun Avatar(
@@ -360,7 +360,7 @@ fun MessageComposer(
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.Bottom
         ) {
-            // 输入框 - Stream Chat 风格
+            // Input box - Stream Chat style
             Surface(
                 modifier = Modifier
                     .weight(1f)
@@ -416,7 +416,7 @@ fun MessageComposer(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // 发送按钮 - Stream Chat 风格
+            // Send button - Stream Chat style
             Surface(
                 modifier = Modifier
                     .size(44.dp)

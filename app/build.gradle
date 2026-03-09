@@ -11,22 +11,22 @@ def buildTime = new Date().format("yyyyMMddHH", TimeZone.getTimeZone("Asia/Shang
 android {
     signingConfigs {
         debug {
-            // Debug和Release使用相同签名
-            keyAlias 'key0'
-            keyPassword 'phoneforclaw'
-            storeFile project.rootProject.file('test.keystore')
-            storePassword 'phoneforclaw'
+            // Debug和Release使用相同签名 (从上级目录加载)
+            keyAlias 'android'
+            keyPassword 'android'
+            storeFile project.rootProject.file('../keystore.jks')
+            storePassword 'android'
             enableV1Signing true
             enableV2Signing true
             enableV3Signing true
             enableV4Signing true
         }
         release {
-            // Release使用与Debug相同的签名
-            keyAlias 'key0'
-            keyPassword 'phoneforclaw'
-            storeFile project.rootProject.file('test.keystore')
-            storePassword 'phoneforclaw'
+            // Release使用与Debug相同的签名 (从上级目录加载)
+            keyAlias 'android'
+            keyPassword 'android'
+            storeFile project.rootProject.file('../keystore.jks')
+            storePassword 'android'
             enableV1Signing true
             enableV2Signing true
             enableV3Signing true
