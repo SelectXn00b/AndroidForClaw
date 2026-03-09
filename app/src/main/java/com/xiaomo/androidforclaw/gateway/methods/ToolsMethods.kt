@@ -20,7 +20,7 @@ class ToolsMethods(
     fun toolsCatalog(): ToolsCatalogResult {
         val allTools = mutableListOf<ToolInfo>()
 
-        // 从 ToolRegistry 获取通用工具
+        // Get general tools from ToolRegistry
         val toolDefinitions = toolRegistry.getToolDefinitions()
         toolDefinitions.forEach { def ->
             allTools.add(ToolInfo(
@@ -31,7 +31,7 @@ class ToolsMethods(
             ))
         }
 
-        // 从 AndroidToolRegistry 获取 Android 工具
+        // Get Android tools from AndroidToolRegistry
         val androidDefinitions = androidToolRegistry.getToolDefinitions()
         androidDefinitions.forEach { def ->
             allTools.add(ToolInfo(

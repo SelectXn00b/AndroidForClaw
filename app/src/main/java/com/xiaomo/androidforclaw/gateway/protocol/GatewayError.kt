@@ -1,7 +1,7 @@
 package com.xiaomo.androidforclaw.gateway.protocol
 
 /**
- * Gateway 错误异常
+ * Gateway error exception
  */
 class GatewayError(
     val code: String,

@@ -15,12 +15,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
- * AgentHandler 实现 - 连接 GatewayService 和 AgentLoop
+ * AgentHandler implementation - connects GatewayService and AgentLoop
  *
- * 负责：
- * 1. 接收 Gateway RPC 请求
- * 2. 调用 AgentLoop 执行任务
- * 3. 回传进度和结果
+ * Responsibilities:
+ * 1. Receive Gateway RPC requests
+ * 2. Call AgentLoop to execute tasks
+ * 3. Send back progress and results
  */
 class MainEntryAgentHandler(
     private val application: Application
@@ -33,7 +33,7 @@ class MainEntryAgentHandler(
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val taskDataManager: TaskDataManager = TaskDataManager.getInstance()
 
-    // 核心组件 - 使用统一 LLM Provider
+    // Core components - use unified LLM Provider
     private val llmProvider: UnifiedLLMProvider by lazy {
         UnifiedLLMProvider(application)
     }
@@ -73,7 +73,7 @@ class MainEntryAgentHandler(
 
         scope.launch {
             try {
-                // 1. 构建系统提示词（如果未提供）
+                // 1. Build system prompt (if not provided)
                 val finalSystemPrompt = systemPrompt ?: contextBuilder.buildSystemPrompt(
                     userGoal = userMessage,
                     packageName = "",
@@ -82,7 +82,7 @@ class MainEntryAgentHandler(
 
                 Log.d(TAG, "System prompt ready (${finalSystemPrompt.length} chars)")
 
-                // 2. 创建 AgentLoop（带上下文管理）
+                // 2. Create AgentLoop (with context management)
                 val contextManager = com.xiaomo.androidforclaw.agent.context.ContextManager(llmProvider)
                 val agentLoop = AgentLoop(
                     llmProvider = llmProvider,
@@ -90,10 +90,10 @@ class MainEntryAgentHandler(
                     androidToolRegistry = androidToolRegistry,
                     contextManager = contextManager,
                     maxIterations = maxIterations,
-                    modelRef = null  // 使用默认模型，可从配置读取
+                    modelRef = null  // Use default model, can be read from config
                 )
 
-                // 3. 监听进度
+                // 3. Listen to progress
                 val progressJob = launch {
                     agentLoop.progressFlow.collect { update ->
                         val progressData = convertProgressToMap(update)
@@ -101,17 +101,17 @@ class MainEntryAgentHandler(
                     }
                 }
 
-                // 4. 执行 Agent
+                // 4. Execute Agent
                 Log.d(TAG, "Starting AgentLoop execution...")
                 val result = agentLoop.run(
                     systemPrompt = finalSystemPrompt,
                     userMessage = userMessage,
-                    reasoningEnabled = true  // 默认启用 reasoning
+                    reasoningEnabled = true  // Enable reasoning by default
                 )
 
                 Log.d(TAG, "AgentLoop completed: ${result.iterations} iterations")
 
-                // 5. 返回结果
+                // 5. Return result
                 completeCallback(mapOf(
                     "success" to true,
                     "iterations" to result.iterations,
@@ -134,7 +134,7 @@ class MainEntryAgentHandler(
     }
 
     /**
-     * 将 ProgressUpdate 转换为 Map（用于 JSON 序列化）
+     * Convert ProgressUpdate to Map (for JSON serialization)
      */
     private fun convertProgressToMap(update: ProgressUpdate): Map<String, Any> {
         return when (update) {

@@ -10,28 +10,28 @@ import java.io.IOException
 import java.util.UUID
 
 /**
- * Gateway Server - HTTP + WebSocket 服务器
+ * Gateway Server - HTTP + WebSocket server
  *
- * 提供 WebUI 访问接口:
- * - HTTP: 静态文件服务 (WebUI)
- * - WebSocket: 实时通信 (RPC + Events)
+ * Provides WebUI access interface:
+ * - HTTP: Static file service (WebUI)
+ * - WebSocket: Real-time communication (RPC + Events)
  */
 class GatewayServer(
     private val context: Context,
     private val port: Int = 8080
-) : NanoWSD(null, port) {  // null = 监听所有网络接口 (0.0.0.0)
+) : NanoWSD(null, port) {  // null = listen on all network interfaces (0.0.0.0)
 
     companion object {
         private const val TAG = "GatewayServer"
 
-        // 静态实例,用于从其他地方广播消息
+        // Static instance for broadcasting messages from elsewhere
         @Volatile
         private var instance: GatewayServer? = null
 
         fun getInstance(): GatewayServer? = instance
 
         /**
-         * 广播聊天消息到所有连接的客户端
+         * Broadcast chat message to all connected clients
          */
         fun broadcastChatMessage(sessionId: String, role: String, content: String) {
             instance?.let { server ->
@@ -61,7 +61,7 @@ class GatewayServer(
 
         Log.d(TAG, "HTTP Request: ${session.method} $uri")
 
-        // WebSocket upgrade - 检查 Upgrade 头
+        // WebSocket upgrade - check Upgrade header
         val headers = session.headers
         if (headers["upgrade"]?.lowercase()?.contains("websocket") == true) {
             return super.serve(session)
@@ -82,7 +82,7 @@ class GatewayServer(
     }
 
     /**
-     * 处理 API 请求
+     * Handle API requests
      */
     private fun handleApiRequest(session: IHTTPSession): Response {
         val uri = session.uri.removePrefix("/api")
@@ -121,7 +121,7 @@ class GatewayServer(
     }
 
     /**
-     * 提供 WebUI 静态文件
+     * Serve WebUI static files
      */
     private fun serveWebUI(uri: String): Response {
         var path = uri
@@ -154,7 +154,7 @@ class GatewayServer(
     }
 
     /**
-     * 获取 MIME 类型
+     * Get MIME type
      */
     private fun getMimeType(path: String): String {
         return when {
@@ -171,7 +171,7 @@ class GatewayServer(
     }
 
     /**
-     * WebSocket 连接
+     * WebSocket connection
      */
     inner class GatewayWebSocket(
         handshakeRequest: IHTTPSession,
@@ -202,7 +202,7 @@ class GatewayServer(
             send(hello.toString())
             Log.d(TAG, "✅ [Gateway] Hello message sent")
 
-            // 启动心跳 - 每 30 秒发送一次 ping
+            // Start heartbeat - send ping every 30 seconds
             startHeartbeat()
         }
 
@@ -220,7 +220,7 @@ class GatewayServer(
                         cancel()
                     }
                 }
-            }, 30000, 30000) // 30 秒间隔
+            }, 30000, 30000) // 30 second interval
             Log.d(TAG, "💓 [Gateway] Heartbeat started: $connectionId")
         }
 
@@ -254,9 +254,9 @@ class GatewayServer(
                         handleRequest(frame)
                     }
                     "ping" -> {
-                        // 收到客户端心跳
+                        // Received client heartbeat
                         Log.d(TAG, "💓 [Gateway] Received ping from client: $connectionId")
-                        // NanoWSD 会自动发送 pong
+                        // NanoWSD will automatically send pong
                     }
                     else -> {
                         Log.w(TAG, "⚠️ [Gateway] Unknown frame type: $type")
@@ -277,7 +277,7 @@ class GatewayServer(
         }
 
         /**
-         * 处理 RPC 请求
+         * Handle RPC request
          */
         private fun handleRequest(frame: JSONObject) {
             val id = frame.getString("id")
@@ -383,7 +383,7 @@ class GatewayServer(
         }
 
         private fun handleSessionsList(): JSONObject {
-            // 返回所有会话列表
+            // Return all session list
             return JSONObject().apply {
                 put("sessions", org.json.JSONArray().apply {
                     put(JSONObject().apply {
@@ -400,12 +400,12 @@ class GatewayServer(
             Log.d(TAG, "📋 [Gateway] 获取会话历史: $sessionId")
 
             try {
-                // 从 MainEntryNew 获取 SessionManager
+                // Get SessionManager from MainEntryNew
                 val sessionManager = com.xiaomo.androidforclaw.core.MainEntryNew.getSessionManager()
                 val session = sessionManager?.get(sessionId)
 
                 if (session != null) {
-                    Log.d(TAG, "✅ [Gateway] 找到会话: ${session.messageCount()} 条消息")
+                    Log.d(TAG, "✅ [Gateway] Found session: ${session.messageCount()} messages")
                     return JSONObject().apply {
                         put("sessionId", sessionId)
                         put("messages", org.json.JSONArray().apply {
@@ -413,20 +413,20 @@ class GatewayServer(
                                 put(JSONObject().apply {
                                     put("role", msg.role)
                                     put("content", msg.content ?: "")
-                                    // 忽略 tool_calls 等复杂字段,只返回基本对话
+                                    // Ignore complex fields like tool_calls, only return basic conversation
                                 })
                             }
                         })
                     }
                 } else {
-                    Log.w(TAG, "⚠️ [Gateway] 会话不存在: $sessionId")
+                    Log.w(TAG, "⚠️ [Gateway] Session not found: $sessionId")
                     return JSONObject().apply {
                         put("sessionId", sessionId)
                         put("messages", org.json.JSONArray())
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "❌ [Gateway] 获取会话历史失败", e)
+                Log.e(TAG, "❌ [Gateway] Failed to get session history", e)
                 throw e
             }
         }
@@ -472,7 +472,7 @@ class GatewayServer(
     }
 
     /**
-     * 广播事件到所有连接
+     * Broadcast event to all connections
      */
     fun broadcast(event: String, payload: Any) {
         val message = JSONObject().apply {
@@ -492,7 +492,7 @@ class GatewayServer(
     }
 
     /**
-     * 获取服务器地址
+     * Get server address
      */
     fun getServerUrl(): String {
         return "http://0.0.0.0:$port"

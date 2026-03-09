@@ -30,7 +30,7 @@ class ConfigMethods(
             val config = configLoader.loadOpenClawConfig()
             val configMap = gson.fromJson(gson.toJson(config), Map::class.java)
 
-            // 如果指定了 path,返回特定字段
+            // If path is specified, return specific field
             val value = if (path != null) {
                 getValueByPath(configMap, path)
             } else {
@@ -75,10 +75,10 @@ class ConfigMethods(
             @Suppress("UNCHECKED_CAST")
             val config = gson.fromJson(configText, MutableMap::class.java) as MutableMap<String, Any?>
 
-            // 设置值
+            // Set value
             setValueByPath(config, path, value)
 
-            // 写回文件
+            // Write back to file
             configFile.writeText(gson.toJson(config))
 
             ConfigSetResult(
@@ -113,7 +113,7 @@ class ConfigMethods(
     }
 
     /**
-     * 通过路径获取值 (支持点号分隔,如 "agent.maxIterations")
+     * Get value by path (supports dot notation, e.g. "agent.maxIterations")
      */
     @Suppress("UNCHECKED_CAST")
     private fun getValueByPath(config: Any?, path: String): Any? {
@@ -134,7 +134,7 @@ class ConfigMethods(
     }
 
     /**
-     * 通过路径设置值
+     * Set value by path
      */
     @Suppress("UNCHECKED_CAST")
     private fun setValueByPath(config: MutableMap<String, Any?>, path: String, value: Any?) {

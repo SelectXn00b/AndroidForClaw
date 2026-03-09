@@ -8,17 +8,17 @@ import fi.iki.elonen.NanoWSD
 import java.io.IOException
 
 /**
- * Gateway Service - WebSocket RPC 服务
- * 
- * 功能：
- * - 提供 WebSocket 连接
- * - RPC 接口（agent, agent.wait, health）
- * - Session 管理
- * - 远程控制能力
- * 
- * 参考：OpenClaw Gateway 架构
+ * Gateway Service - WebSocket RPC service
+ *
+ * Features:
+ * - Provide WebSocket connection
+ * - RPC interface (agent, agent.wait, health)
+ * - Session management
+ * - Remote control capability
+ *
+ * Reference: OpenClaw Gateway architecture
  */
-class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听所有网络接口 (0.0.0.0)
+class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = listen on all network interfaces (0.0.0.0)
     
     companion object {
         private const val TAG = "GatewayService"
@@ -29,7 +29,7 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
     private var agentHandler: AgentHandler? = null
 
     /**
-     * 设置 Agent 处理器
+     * Set Agent handler
      */
     fun setAgentHandler(handler: AgentHandler) {
         this.agentHandler = handler
@@ -40,7 +40,7 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
     }
 
     /**
-     * WebSocket 连接处理
+     * WebSocket connection handling
      */
     inner class GatewayWebSocket(handshake: IHTTPSession) : WebSocket(handshake) {
         
@@ -53,7 +53,7 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
             
             Log.i(TAG, "✅ WebSocket 连接建立: session=$sessionId")
             
-            // 发送欢迎消息
+            // Send welcome message
             sendMessage(JsonObject().apply {
                 addProperty("type", "connected")
                 addProperty("sessionId", sessionId)
@@ -85,7 +85,7 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
         }
 
         override fun onPong(pong: WebSocketFrame) {
-            // 心跳响应
+            // Heartbeat response
         }
 
         override fun onException(exception: IOException) {
@@ -93,7 +93,7 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
         }
 
         /**
-         * 处理 RPC 请求
+         * Handle RPC request
          */
         private fun handleRpcRequest(request: RpcRequest) {
             when (request.method) {
@@ -108,7 +108,7 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
         }
 
         /**
-         * agent() - 执行 Agent 任务
+         * agent() - Execute Agent task
          */
         private fun handleAgentRequest(request: RpcRequest) {
             val params = request.params ?: run {
@@ -125,18 +125,18 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
             val tools = params.tools
             val maxIterations = params.maxIterations ?: 20
 
-            // 🆔 支持指定 sessionId 来切换到其他 channel 的 session
-            // 如果 params 中指定了 sessionId，使用指定的；否则使用当前 WebSocket 的 sessionId
+            // 🆔 Support specifying sessionId to switch to another channel's session
+            // If sessionId is specified in params, use it; otherwise use current WebSocket's sessionId
             val targetSessionId = params.sessionId ?: sessionId!!
 
             Log.d(TAG, "🆔 [Agent Request] Target Session: $targetSessionId")
             if (params.sessionId != null) {
-                Log.d(TAG, "   ↳ 切换到外部 session: ${params.sessionId}")
+                Log.d(TAG, "   ↳ Switch to external session: ${params.sessionId}")
             } else {
-                Log.d(TAG, "   ↳ 使用当前 WebSocket session")
+                Log.d(TAG, "   ↳ Use current WebSocket session")
             }
 
-            // 异步执行 Agent
+            // Execute Agent asynchronously
             Thread {
                 try {
                     agentHandler?.executeAgent(
@@ -146,7 +146,7 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
                         tools = tools,
                         maxIterations = maxIterations,
                         progressCallback = { progress ->
-                            // 发送进度更新（在新线程避免 NetworkOnMainThreadException）
+                            // Send progress update (in new thread to avoid NetworkOnMainThreadException)
                             Thread {
                                 try {
                                     sendMessage(JsonObject().apply {
@@ -160,7 +160,7 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
                             }.start()
                         },
                         completeCallback = { result ->
-                            // 发送完成结果（在新线程避免 NetworkOnMainThreadException）
+                            // Send completion result (in new thread to avoid NetworkOnMainThreadException)
                             Thread {
                                 try {
                                     sendResponse(request.id, result)
@@ -177,7 +177,7 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
         }
 
         /**
-         * agent.wait() - 等待 Agent 完成
+         * agent.wait() - Wait for Agent completion
          */
         private fun handleAgentWaitRequest(request: RpcRequest) {
             val params = request.params ?: run {
@@ -190,7 +190,7 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
                 return
             }
 
-            // TODO: 实现 agent.wait 逻辑
+            // TODO: implement agent.wait logic
             sendResponse(request.id, mapOf(
                 "status" to "completed",
                 "runId" to runId
@@ -198,7 +198,7 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
         }
 
         /**
-         * health() - 健康检查
+         * health() - Health check
          */
         private fun handleHealthRequest(request: RpcRequest) {
             sendResponse(request.id, mapOf(
@@ -209,19 +209,19 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
         }
 
         /**
-         * session.list() - 列出所有会话（包括 channel 创建的）
+         * session.list() - List all sessions (including those created by channels)
          */
         private fun handleSessionListRequest(request: RpcRequest) {
             try {
                 val sessionManager = com.xiaomo.androidforclaw.core.MainEntryNew.getSessionManager()
                 if (sessionManager == null) {
-                    // 如果 SessionManager 未初始化，只返回 WebSocket sessions
+                    // If SessionManager is not initialized, only return WebSocket sessions
                     val sessionList = sessions.keys.map { mapOf("id" to it) }
                     sendResponse(request.id, mapOf("sessions" to sessionList, "total" to sessionList.size))
                     return
                 }
 
-                // 获取所有 sessions（飞书、Discord、WebSocket）
+                // Get all sessions (Feishu, Discord, WebSocket)
                 val allKeys = sessionManager.getAllKeys()
                 val sessionList = allKeys.map { key ->
                     val session = sessionManager.get(key)
@@ -253,7 +253,7 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
         }
 
         /**
-         * session.reset() - 重置会话
+         * session.reset() - Reset session
          */
         private fun handleSessionResetRequest(request: RpcRequest) {
             val params = request.params
@@ -266,7 +266,7 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
         }
 
         /**
-         * session.listAll() - 列出所有会话（包括 channel 创建的）
+         * session.listAll() - List all sessions (including those created by channels)
          */
         private fun handleSessionListAllRequest(request: RpcRequest) {
             try {
@@ -309,7 +309,7 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
         }
 
         /**
-         * 发送响应
+         * Send response
          */
         private fun sendResponse(requestId: String?, data: Any) {
             sendMessage(JsonObject().apply {
@@ -320,7 +320,7 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
         }
 
         /**
-         * 发送错误
+         * Send error
          */
         private fun sendError(message: String, requestId: String? = null) {
             sendMessage(JsonObject().apply {
@@ -331,7 +331,7 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
         }
 
         /**
-         * 发送消息
+         * Send message
          */
         private fun sendMessage(json: JsonObject) {
             try {
@@ -343,7 +343,7 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
     }
 
     /**
-     * 生成会话 ID
+     * Generate session ID
      */
     private fun generateSessionId(): String {
         return "session_${System.currentTimeMillis()}_${(1000..9999).random()}"
@@ -351,7 +351,7 @@ class GatewayService(port: Int = 8765) : NanoWSD(null, port) {  // null = 监听
 }
 
 /**
- * RPC 请求
+ * RPC request
  */
 data class RpcRequest(
     val id: String?,
@@ -360,7 +360,7 @@ data class RpcRequest(
 )
 
 /**
- * RPC 参数
+ * RPC parameters
  */
 data class RpcParams(
     val message: String?,
@@ -385,7 +385,7 @@ data class GatewaySession(
 }
 
 /**
- * Agent 处理器接口
+ * Agent handler interface
  */
 interface AgentHandler {
     fun executeAgent(

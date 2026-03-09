@@ -11,13 +11,13 @@ import kotlinx.coroutines.runBlocking
 /**
  * Skills Gateway Methods
  *
- * 完全对齐 OpenClaw Gateway Protocol
+ * Fully aligned with OpenClaw Gateway Protocol
  *
- * 方法:
- * - skills.status  - 获取技能状态报告
- * - skills.bins    - 获取所有二进制依赖
- * - skills.install - 安装技能
- * - skills.update  - 更新技能配置
+ * Methods:
+ * - skills.status  - Get skill status report
+ * - skills.bins    - Get all binary dependencies
+ * - skills.install - Install skill
+ * - skills.update  - Update skill configuration
  */
 class SkillsMethods(private val context: Context) {
     companion object {
@@ -29,31 +29,31 @@ class SkillsMethods(private val context: Context) {
     private val configLoader = ConfigLoader(context)
 
     /**
-     * skills.status - 获取技能状态报告
+     * skills.status - Get skill status report
      *
-     * 参数:
+     * Parameters:
      * {
-     *   agentId?: string  // 可选,默认为主 agent
+     *   agentId?: string  // Optional, defaults to main agent
      * }
      *
-     * 返回: SkillStatusReport
+     * Returns: SkillStatusReport
      */
     fun status(params: JsonObject): Result<JsonObject> {
         return try {
             Log.d(TAG, "skills.status called")
 
-            // 1. 解析参数
+            // 1. Parse parameters
             val agentId = params.get("agentId")?.asString
 
-            // 2. 验证 agent (暂时跳过,单 agent 模式)
+            // 2. Validate agent (skip for now, single-agent mode)
             if (agentId != null) {
                 Log.d(TAG, "  agentId: $agentId (ignored, single-agent mode)")
             }
 
-            // 3. 构建状态报告
+            // 3. Build status report
             val report = statusBuilder.buildStatus()
 
-            // 4. 转换为 JSON
+            // 4. Convert to JSON
             val result = JsonObject().apply {
                 addProperty("workspaceDir", report.workspaceDir)
                 addProperty("managedSkillsDir", report.managedSkillsDir)
@@ -75,11 +75,11 @@ class SkillsMethods(private val context: Context) {
     }
 
     /**
-     * skills.bins - 获取所有二进制依赖
+     * skills.bins - Get all binary dependencies
      *
-     * 参数: {}
+     * Parameters: {}
      *
-     * 返回:
+     * Returns:
      * {
      *   bins: string[]
      * }
@@ -88,10 +88,10 @@ class SkillsMethods(private val context: Context) {
         return try {
             Log.d(TAG, "skills.bins called")
 
-            // 1. 获取所有技能
+            // 1. Get all skills
             val report = statusBuilder.buildStatus()
 
-            // 2. 收集所有二进制依赖
+            // 2. Collect all binary dependencies
             val binsSet = mutableSetOf<String>()
             report.skills.forEach { skill ->
                 skill.requirements?.bins?.forEach { bin ->
@@ -102,7 +102,7 @@ class SkillsMethods(private val context: Context) {
                 }
             }
 
-            // 3. 返回结果
+            // 3. Return result
             val result = JsonObject().apply {
                 add("bins", com.google.gson.Gson().toJsonTree(binsSet.sorted()))
             }
@@ -122,16 +122,16 @@ class SkillsMethods(private val context: Context) {
     }
 
     /**
-     * skills.install - 安装技能
+     * skills.install - Install skill
      *
-     * 参数:
+     * Parameters:
      * {
-     *   name: string;           // 技能名称
-     *   installId: string;      // 安装器 ID
-     *   timeoutMs?: number;     // 超时(默认 300 秒,最多 900 秒)
+     *   name: string;           // Skill name
+     *   installId: string;      // Installer ID
+     *   timeoutMs?: number;     // Timeout (default 300 sec, max 900 sec)
      * }
      *
-     * 返回:
+     * Returns:
      * {
      *   ok: boolean;
      *   message: string;
@@ -145,7 +145,7 @@ class SkillsMethods(private val context: Context) {
         return try {
             Log.d(TAG, "skills.install called")
 
-            // 1. 解析参数
+            // 1. Parse parameters
             val name = params.get("name")?.asString
                 ?: return Result.failure(
                     GatewayError(code = "INVALID_PARAMS", message = "Missing required parameter: name")
@@ -162,7 +162,7 @@ class SkillsMethods(private val context: Context) {
             Log.d(TAG, "  installId: $installId")
             Log.d(TAG, "  timeoutMs: $timeoutMs")
 
-            // 2. 验证 installId (Android 只支持 "download" 类型安装)
+            // 2. Validate installId (Android only supports "download" installation)
             if (installId != "download") {
                 return Result.failure(
                     GatewayError(
@@ -172,12 +172,12 @@ class SkillsMethods(private val context: Context) {
                 )
             }
 
-            // 3. 直接从 ClawHub 安装 (name 实际上是 slug)
+            // 3. Install directly from ClawHub (name is actually slug)
             Log.i(TAG, "Installing skill from ClawHub: $name")
 
             val installResult = runBlocking {
                 installer.installFromClawHub(
-                    slug = name,  // name 参数实际上是 slug
+                    slug = name,  // name parameter is actually slug
                     version = "latest"
                 ) { progress ->
                     Log.d(TAG, "Install progress: $progress")
@@ -197,7 +197,7 @@ class SkillsMethods(private val context: Context) {
 
             val installed = installResult.getOrNull()!!
 
-            // 6. 返回成功结果
+            // 6. Return success result
             val result = JsonObject().apply {
                 addProperty("ok", true)
                 addProperty("message", "Skill installed successfully")
@@ -228,9 +228,9 @@ class SkillsMethods(private val context: Context) {
     }
 
     /**
-     * skills.update - 更新技能配置
+     * skills.update - Update skill configuration
      *
-     * 参数:
+     * Parameters:
      * {
      *   skillKey: string;
      *   enabled?: boolean;
@@ -238,7 +238,7 @@ class SkillsMethods(private val context: Context) {
      *   env?: Record<string, string>;
      * }
      *
-     * 返回:
+     * Returns:
      * {
      *   ok: true;
      *   skillKey: string;
@@ -249,7 +249,7 @@ class SkillsMethods(private val context: Context) {
         return try {
             Log.d(TAG, "skills.update called")
 
-            // 1. 解析参数
+            // 1. Parse parameters
             val skillKey = params.get("skillKey")?.asString
                 ?: return Result.failure(
                     GatewayError(code = "INVALID_PARAMS", message = "Missing required parameter: skillKey")
@@ -266,10 +266,10 @@ class SkillsMethods(private val context: Context) {
             Log.d(TAG, "  apiKey: ${if (apiKey != null) "***" else "null"}")
             Log.d(TAG, "  env: $env")
 
-            // 2. 加载当前配置
+            // 2. Load current configuration
             val config = configLoader.loadOpenClawConfig()
 
-            // 3. 更新技能配置
+            // 3. Update skill configuration
             val existingConfig = config.skills.entries[skillKey] ?: com.xiaomo.androidforclaw.config.SkillConfig()
 
             val updatedConfig = existingConfig.copy(
@@ -278,7 +278,7 @@ class SkillsMethods(private val context: Context) {
                 env = env ?: existingConfig.env
             )
 
-            // 4. 写回配置文件
+            // 4. Write back to configuration file
             val updatedEntries = config.skills.entries.toMutableMap()
             updatedEntries[skillKey] = updatedConfig
 
@@ -298,7 +298,7 @@ class SkillsMethods(private val context: Context) {
                 )
             }
 
-            // 5. 返回结果
+            // 5. Return result
             val result = JsonObject().apply {
                 addProperty("ok", true)
                 addProperty("skillKey", skillKey)
@@ -324,11 +324,11 @@ class SkillsMethods(private val context: Context) {
     }
 
     /**
-     * skills.reload - 重新加载所有技能
+     * skills.reload - Reload all skills
      *
-     * 参数: {}
+     * Parameters: {}
      *
-     * 返回:
+     * Returns:
      * {
      *   ok: true;
      *   message: string;
@@ -339,13 +339,13 @@ class SkillsMethods(private val context: Context) {
         return try {
             Log.d(TAG, "skills.reload called")
 
-            // 1. 重新加载配置
+            // 1. Reload configuration
             configLoader.reloadOpenClawConfig()
 
-            // 2. 重新构建技能状态
+            // 2. Rebuild skill status
             val report = statusBuilder.buildStatus()
 
-            // 3. 返回结果
+            // 3. Return result
             val result = JsonObject().apply {
                 addProperty("ok", true)
                 addProperty("message", "Skills reloaded successfully")
@@ -372,16 +372,16 @@ class SkillsMethods(private val context: Context) {
     }
 
     /**
-     * skills.search - 搜索 ClawHub 技能
+     * skills.search - Search ClawHub skills
      *
-     * 参数:
+     * Parameters:
      * {
      *   query: string;
      *   limit?: number;
      *   offset?: number;
      * }
      *
-     * 返回: SkillSearchResult
+     * Returns: SkillSearchResult
      */
     fun search(params: JsonObject): Result<JsonObject> {
         return try {
@@ -398,7 +398,7 @@ class SkillsMethods(private val context: Context) {
             Log.d(TAG, "  query: $query")
             Log.d(TAG, "  limit: $limit, offset: $offset")
 
-            // 调用 ClawHub API
+            // Call ClawHub API
             val clawHubClient = ClawHubClient()
             val searchResult = runBlocking {
                 clawHubClient.searchSkills(query, limit, offset)
@@ -431,14 +431,14 @@ class SkillsMethods(private val context: Context) {
     }
 
     /**
-     * skills.uninstall - 卸载技能
+     * skills.uninstall - Uninstall skill
      *
-     * 参数:
+     * Parameters:
      * {
      *   slug: string;
      * }
      *
-     * 返回:
+     * Returns:
      * {
      *   ok: true;
      *   message: string;
@@ -455,7 +455,7 @@ class SkillsMethods(private val context: Context) {
 
             Log.d(TAG, "  slug: $slug")
 
-            // 执行卸载
+            // Execute uninstallation
             val uninstallResult = runBlocking {
                 installer.uninstall(slug)
             }

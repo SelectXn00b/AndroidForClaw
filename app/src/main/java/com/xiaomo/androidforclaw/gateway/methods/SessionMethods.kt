@@ -83,9 +83,9 @@ class SessionMethods(
     /**
      * sessions.patch() - Patch a session
      *
-     * 支持的操作:
-     * - metadata: 更新 session metadata
-     * - messages: 操作消息列表 (add, remove, update)
+     * Supported operations:
+     * - metadata: Update session metadata
+     * - messages: Manipulate message list (add, remove, update)
      */
     @Suppress("UNCHECKED_CAST")
     fun sessionsPatch(params: Any?): Map<String, Boolean> {
@@ -97,37 +97,37 @@ class SessionMethods(
         val session = sessionManager.get(key)
             ?: throw IllegalArgumentException("Session not found: $key")
 
-        // 更新 metadata
+        // Update metadata
         val metadata = paramsMap["metadata"] as? Map<String, Any?>
         if (metadata != null) {
             session.metadata.putAll(metadata)
         }
 
-        // 操作消息
+        // Manipulate messages
         val messagesOp = paramsMap["messages"] as? Map<String, Any?>
         if (messagesOp != null) {
             val operation = messagesOp["op"] as? String
 
             when (operation) {
                 "add" -> {
-                    // 添加消息
+                    // Add message
                     val role = messagesOp["role"] as? String ?: "user"
                     val content = messagesOp["content"] as? String ?: ""
                     session.addMessage(LegacyMessage(role = role, content = content))
                 }
                 "remove" -> {
-                    // 删除指定索引的消息
+                    // Remove message at specified index
                     val index = (messagesOp["index"] as? Number)?.toInt()
                     if (index != null && index >= 0 && index < session.messages.size) {
                         session.messages.removeAt(index)
                     }
                 }
                 "clear" -> {
-                    // 清空所有消息
+                    // Clear all messages
                     session.clearMessages()
                 }
                 "truncate" -> {
-                    // 保留最后 N 条消息
+                    // Keep last N messages
                     val count = (messagesOp["count"] as? Number)?.toInt() ?: 10
                     if (session.messages.size > count) {
                         val keep = session.messages.takeLast(count)
@@ -138,7 +138,7 @@ class SessionMethods(
             }
         }
 
-        // 保存 session
+        // Save session
         sessionManager.save(session)
 
         return mapOf("success" to true)

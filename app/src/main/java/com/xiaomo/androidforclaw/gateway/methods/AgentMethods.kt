@@ -31,7 +31,7 @@ class AgentMethods(
     private val TAG = "AgentMethods"
     private val agentScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    // 存储运行中的 agent 任务
+    // Store running agent tasks
     private val runningTasks = ConcurrentHashMap<String, AgentTask>()
 
     /**
@@ -41,7 +41,7 @@ class AgentMethods(
         val runId = "run_${UUID.randomUUID()}"
         val acceptedAt = System.currentTimeMillis()
 
-        // 创建任务
+        // Create task
         val task = AgentTask(
             runId = runId,
             sessionKey = params.sessionKey,
@@ -50,7 +50,7 @@ class AgentMethods(
         )
         runningTasks[runId] = task
 
-        // 发送 agent.start 事件
+        // Send agent.start event
         broadcastEvent("agent.start", mapOf(
             "runId" to runId,
             "sessionKey" to params.sessionKey,
@@ -58,7 +58,7 @@ class AgentMethods(
             "acceptedAt" to acceptedAt
         ))
 
-        // 异步执行 agent
+        // Execute agent asynchronously
         agentScope.launch {
             try {
                 executeAgent(runId, params)
@@ -67,14 +67,14 @@ class AgentMethods(
                 task.status = "error"
                 task.error = e.message
 
-                // 发送 agent.error 事件
+                // Send agent.error event
                 broadcastEvent("agent.error", mapOf(
                     "runId" to runId,
                     "error" to e.message
                 ))
             } finally {
-                // 任务完成后保留一段时间供 wait() 查询
-                // 实际应该有 TTL 清理机制
+                // Keep task for a while after completion for wait() queries
+                // Should have TTL cleanup mechanism
             }
         }
 
@@ -97,7 +97,7 @@ class AgentMethods(
 
         val timeout = params.timeout ?: 30000L
 
-        // 等待任务完成
+        // Wait for task completion
         val result = withTimeoutOrNull(timeout) {
             task.resultChannel.receive()
         }
@@ -142,13 +142,13 @@ class AgentMethods(
     }
 
     /**
-     * 执行 agent 任务
+     * Execute agent task
      */
     private suspend fun executeAgent(runId: String, params: AgentParams) {
         val task = runningTasks[runId] ?: return
 
         try {
-            // 使用简单的系统提示词
+            // Use simple system prompt
             val systemPrompt = """
 You are an AI agent controlling an Android device.
 
@@ -168,10 +168,10 @@ Instructions:
 4. Use stop() when task is complete
             """.trimIndent()
 
-            // 获取或创建 session
+            // Get or create session
             val session = sessionManager.getOrCreate(params.sessionKey)
 
-            // 订阅 AgentLoop 进度更新并转发为 Gateway Events
+            // Subscribe to AgentLoop progress updates and forward as Gateway Events
             val progressJob = agentLoop.progressFlow
                 .onEach { progress ->
                     when (progress) {
@@ -182,7 +182,7 @@ Instructions:
                             ))
                         }
                         is ProgressUpdate.Thinking -> {
-                            // 中间反馈: 正在思考第 X 步
+                            // Intermediate feedback: thinking at step X
                             broadcastEvent("agent.thinking", mapOf(
                                 "runId" to runId,
                                 "iteration" to progress.iteration,
@@ -205,15 +205,15 @@ Instructions:
                             ))
                         }
                         is ProgressUpdate.Reasoning -> {
-                            // Extended thinking 进度 (可选)
+                            // Extended thinking progress (optional)
                             broadcastEvent("agent.thinking", mapOf(
                                 "runId" to runId,
-                                "content" to progress.content.take(200), // 限制长度
+                                "content" to progress.content.take(200), // Limit length
                                 "duration" to progress.llmDuration
                             ))
                         }
                         is ProgressUpdate.IterationComplete -> {
-                            // 迭代完成统计 (可选)
+                            // Iteration completion statistics (optional)
                             Log.d(TAG, "Iteration ${progress.number} complete: ${progress.iterationDuration}ms")
                         }
                         is ProgressUpdate.ContextOverflow -> {
@@ -239,14 +239,14 @@ Instructions:
                             ))
                         }
                         is ProgressUpdate.Error -> {
-                            // Error 已通过 agent.error 事件发送
+                            // Error already sent via agent.error event
                             Log.w(TAG, "Progress error: ${progress.message}")
                         }
                     }
                 }
                 .launchIn(agentScope)
 
-            // 执行 agent loop
+            // Execute agent loop
             val result = agentLoop.run(
                 systemPrompt = systemPrompt,
                 userMessage = params.message,
@@ -254,17 +254,17 @@ Instructions:
                 reasoningEnabled = true
             )
 
-            // 取消进度订阅
+            // Cancel progress subscription
             progressJob.cancel()
 
-            // 更新任务状态
+            // Update task status
             task.status = "completed"
             task.result = result
 
-            // 发送完成信号
+            // Send completion signal
             task.resultChannel.send(result)
 
-            // 发送 agent.complete 事件
+            // Send agent.complete event
             broadcastEvent("agent.complete", mapOf(
                 "runId" to runId,
                 "status" to "completed",
@@ -283,7 +283,7 @@ Instructions:
     }
 
     /**
-     * 广播事件 (OpenClaw Protocol v45: uses "payload" not "data")
+     * Broadcast event (OpenClaw Protocol v45: uses "payload" not "data")
      */
     private var eventSeq = 0L
 
@@ -301,7 +301,7 @@ Instructions:
 }
 
 /**
- * Agent 任务
+ * Agent task
  */
 private data class AgentTask(
     val runId: String,
