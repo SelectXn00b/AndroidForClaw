@@ -10,6 +10,7 @@ import com.xiaomo.androidforclaw.agent.tools.ToolRegistry
 import com.xiaomo.androidforclaw.agent.loop.AgentLoop
 import com.xiaomo.androidforclaw.agent.loop.ProgressUpdate
 import com.xiaomo.androidforclaw.agent.session.SessionManager
+import com.xiaomo.androidforclaw.config.ConfigLoader
 import com.xiaomo.androidforclaw.data.model.TaskDataManager
 import kotlinx.coroutines.flow.asSharedFlow
 import com.xiaomo.androidforclaw.ext.mmkv
@@ -49,6 +50,7 @@ object MainEntryNew {
     private lateinit var agentLoop: AgentLoop
     private lateinit var contextBuilder: ContextBuilder
     private lateinit var sessionManager: SessionManager
+    private lateinit var configLoader: ConfigLoader
 
     // ================ State Management ================
     var user: String = ""
@@ -86,6 +88,10 @@ object MainEntryNew {
         Log.d(TAG, "Initializing MainEntryNew...")
 
         try {
+            // 0. Initialize ConfigLoader
+            configLoader = ConfigLoader(application)
+            Log.d(TAG, "✓ ConfigLoader initialized")
+
             // 1. Initialize LLM Provider (unified Provider - supports all OpenClaw-compatible APIs)
             val llmProvider = com.xiaomo.androidforclaw.providers.UnifiedLLMProvider(application)
             Log.d(TAG, "✓ UnifiedLLMProvider initialized (supports multi-model APIs)")
@@ -279,12 +285,10 @@ object MainEntryNew {
         currentTaskId = newTaskId
         Log.d(TAG, "========== 新测试任务: $newTaskId ==========")
 
-        // Set user-selected mode
-        val isExplorationMode = mmkv.decodeBool(MMKVKeys.EXPLORATION_MODE.key, false)
-        val testMode = if (isExplorationMode) "exploration" else "planning"
-        // TODO: updateIsExplorationMode removed (old architecture), new architecture doesn't need to store this state in TaskData
-        // taskDataManager.getCurrentTaskData()?.updateIsExplorationMode(isExplorationMode)
-        Log.d(TAG, "测试模式: $testMode")
+        // Read mode from openclaw.json instead of MMKV
+        val openClawConfig = configLoader.loadOpenClawConfig()
+        val testMode = openClawConfig.agent.mode
+        Log.d(TAG, "测试模式: $testMode (from openclaw.json)")
 
         // Cancel old task
         cancelCurrentJobWithoutClearingTaskData()

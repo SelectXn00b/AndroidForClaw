@@ -345,7 +345,8 @@ class ConfigLoader(private val context: Context) {
      * Lookup priority:
      * 1. System environment variables
      * 2. AppConstants 常量
-     * 3. MMKV 配置
+     *
+     * Note: Removed MMKV as source to prevent config loss on app data clear
      */
     private fun getEnvVar(name: String): String? {
         // 1. Try to get from system environment variables
@@ -369,17 +370,8 @@ class ConfigLoader(private val context: Context) {
             // Continue to next source
         }
 
-        // 3. Try to get from MMKV
-        try {
-            val mmkv = com.tencent.mmkv.MMKV.defaultMMKV()
-            val value = mmkv?.decodeString(name)
-            if (value != null) {
-                Log.d(TAG, "从 MMKV 获取: $name")
-                return value
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "从 MMKV 读取失败: $name", e)
-        }
+        // Note: Do not read from MMKV to avoid config loss on app data clear
+        // User should write actual values in openclaw.json instead of using ${VAR_NAME}
 
         return null
     }

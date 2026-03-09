@@ -36,16 +36,16 @@ class ChannelListActivity : ComponentActivity() {
 @Composable
 fun ChannelListScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    val mmkv = remember { MMKV.defaultMMKV() }
+    val configLoader = remember { com.xiaomo.androidforclaw.config.ConfigLoader(context) }
 
-    // Read Feishu Channel enabled status
+    // Read channel enabled status from openclaw.json instead of MMKV
+    val config = remember { configLoader.loadOpenClawConfig() }
     var feishuEnabled by remember {
-        mutableStateOf(mmkv.decodeBool("channel_feishu_enabled", false))
+        mutableStateOf(config.gateway.feishu.enabled)
     }
 
-    // Read Discord Channel enabled status
     var discordEnabled by remember {
-        mutableStateOf(mmkv.decodeBool("channel_discord_enabled", false))
+        mutableStateOf(config.gateway.discord?.enabled ?: false)
     }
 
     Scaffold(

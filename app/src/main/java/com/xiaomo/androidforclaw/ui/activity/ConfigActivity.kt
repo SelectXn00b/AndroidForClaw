@@ -1,7 +1,11 @@
 package com.xiaomo.androidforclaw.ui.activity
 
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -23,6 +27,7 @@ class ConfigActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "ConfigActivity"
+        private const val REQUEST_MANAGE_STORAGE = 1001
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -35,8 +40,54 @@ class ConfigActivity : AppCompatActivity() {
             title = "配置"
         }
 
-        loadConfig()
+        // Check storage permission first
+        if (!checkStoragePermission()) {
+            requestStoragePermission()
+        } else {
+            loadConfig()
+        }
+
         setupListeners()
+    }
+
+    /**
+     * Check if app has MANAGE_EXTERNAL_STORAGE permission
+     */
+    private fun checkStoragePermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            true // Old Android versions don't need this permission
+        }
+    }
+
+    /**
+     * Request MANAGE_EXTERNAL_STORAGE permission
+     */
+    private fun requestStoragePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                intent.data = Uri.parse("package:$packageName")
+                startActivityForResult(intent, REQUEST_MANAGE_STORAGE)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to open storage permission settings", e)
+                Toast.makeText(this, "无法打开权限设置页面", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_MANAGE_STORAGE) {
+            if (checkStoragePermission()) {
+                Log.i(TAG, "✅ Storage permission granted")
+                loadConfig()
+            } else {
+                Log.w(TAG, "Storage permission not granted")
+                Toast.makeText(this, "需要文件管理权限才能读取配置", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private fun loadConfig() {
@@ -169,14 +220,8 @@ class ConfigActivity : AppCompatActivity() {
                 models = updatedModels
             )
 
-            // Save to openclaw.json
+            // Save to openclaw.json only (not MMKV)
             configLoader.saveOpenClawConfig(updatedConfig)
-
-            // Also save to MMKV for backward compatibility
-            mmkv?.apply {
-                encode("reasoning_enabled", reasoningEnabled)
-                encode("exploration_mode", explorationMode)
-            }
 
             Toast.makeText(this, "配置已保存到 openclaw.json", Toast.LENGTH_SHORT).show()
             finish()
@@ -191,12 +236,18 @@ class ConfigActivity : AppCompatActivity() {
             .setTitle("恢复默认")
             .setMessage("确定要恢复所有配置为默认值吗？")
             .setPositiveButton("确定") { _, _ ->
-                mmkv?.apply {
-                    encode("reasoning_enabled", true)
-                    encode("exploration_mode", false)
+                // Delete current openclaw.json, will be recreated with defaults on next load
+                try {
+                    val configFile = java.io.File("/sdcard/.androidforclaw/openclaw.json")
+                    if (configFile.exists()) {
+                        configFile.delete()
+                    }
+                    loadConfig()
+                    Toast.makeText(this, "已恢复默认配置", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to reset config", e)
+                    Toast.makeText(this, "恢复默认配置失败", Toast.LENGTH_SHORT).show()
                 }
-                loadConfig()
-                Toast.makeText(this, "已恢复默认配置", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("取消", null)
             .show()
