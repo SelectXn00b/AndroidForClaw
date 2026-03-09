@@ -1,0 +1,116 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.3.2",
+    "lastTouchedAt": "2026-03-07T14:16:33.315Z"
+  },
+  "wizard": {
+    "lastRunAt": "2026-03-07T14:16:33.310Z",
+    "lastRunVersion": "2026.3.2",
+    "lastRunCommand": "doctor",
+    "lastRunMode": "local"
+  },
+  "browser": {
+    "defaultProfile": "openclaw"
+  },
+  "models": {
+    "providers": {
+
+      "openrouter": {
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "apiKey": "sk-or-v1-xxx",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "anthropic/claude-opus-4-6",
+            "name": "Claude 4.6",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openrouter/anthropic/claude-opus-4-6"
+      }
+    }
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "session-memory": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "channels": {
+    "imessage": {
+      "enabled": false,
+      "dmPolicy": "pairing",
+      "groupPolicy": "allowlist"
+    },
+    "feishu": {
+      "enabled": false
+    },
+    "feishu": {
+      "accounts": {
+        "default": {
+          "enabled": true,
+          "appId": "cli_a92xx 改成自己的",
+          "appSecret": "Pqj49xxx改成自己的",
+          "dmPolicy": "open",
+          "allowFrom": ["*"]
+        }
+
+      }
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "controlUi": {
+      "allowedOrigins": [
+        "null"
+      ]
+    },
+    "auth": {
+      "mode": "token",
+      "token": "68aabc9f037218d031ac75264bdc1085"
+    }
+  },
+  "messages": {
+    "tts": {
+      "auto": "always",
+      "provider": "edge",
+      "edge": {
+        "enabled": true,
+        "voice": "zh-CN-XiaoxiaoNeural",
+        "lang": "zh-CN",
+        "outputFormat": "audio-24khz-48kbitrate-mono-mp3"
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "feishu": {
+        "enabled": true
+      },
+      "feishu-swarm": {
+        "enabled": true
+      }
+    }
+  }
+}
