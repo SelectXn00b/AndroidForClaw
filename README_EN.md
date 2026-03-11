@@ -360,7 +360,7 @@ All files are accessible and editable through your phone's file manager!
 }
 ```
 
-See [config/openclaw.json.example](config/openclaw.json.example) for full options.
+See [app/src/main/assets/openclaw.json.default.txt](app/src/main/assets/openclaw.json.default.txt) for full options.
 
 ---
 
