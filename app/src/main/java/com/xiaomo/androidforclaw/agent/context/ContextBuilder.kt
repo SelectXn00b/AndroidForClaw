@@ -305,68 +305,112 @@ When calling tools:
     /**
      * 6. Skills Section (aligned with OpenClaw "Skills (mandatory)" format)
      */
+    /**
+     * Build Skills section — aligned with OpenClaw's lightweight catalog approach.
+     *
+     * OpenClaw only injects skill name + description + location (XML catalog).
+     * The agent reads full SKILL.md on demand using the file.read tool.
+     * This keeps the system prompt small (~1-3K chars for skills instead of ~30-50K).
+     *
+     * Exception: "always" skills still inject their full content (they're needed every turn).
+     *
+     * Limits (aligned with OpenClaw skills-BcTP9HTD.js):
+     * - MAX_SKILLS_IN_PROMPT = 150
+     * - MAX_SKILLS_PROMPT_CHARS = 30,000
+     */
     private fun buildSkillsSection(userGoal: String): String {
-        // Always Skills
+        val allSkills = skillsLoader.getAllSkills()
         val alwaysSkills = skillsLoader.getAlwaysSkills()
 
-        // Relevant Skills
-        val relevantSkills = if (userGoal.isNotEmpty()) {
-            skillsLoader.selectRelevantSkills(userGoal, excludeAlways = true)
-        } else {
-            emptyList()
-        }
-
-        // If no skills available, don't generate Skills Section
-        if (alwaysSkills.isEmpty() && relevantSkills.isEmpty()) {
-            Log.w(TAG, "⚠️ No skills available (always=0, relevant=0)")
+        if (allSkills.isEmpty()) {
+            Log.w(TAG, "⚠️ No skills available")
             return ""
         }
 
         val parts = mutableListOf<String>()
         parts.add("## Skills (mandatory)")
-        parts.add("Before replying: scan available skills below.")
-        parts.add("- If a skill clearly applies: follow its guidance and workflow")
-        parts.add("- If multiple could apply: choose the most specific one")
-        parts.add("- If none clearly apply: proceed without skills")
+        parts.add("Before replying: scan <available_skills> <description> entries.")
+        parts.add("- If exactly one skill clearly applies: read its SKILL.md at <location> with `file.read`, then follow it.")
+        parts.add("- If multiple could apply: choose the most specific one, then read/follow it.")
+        parts.add("- If none clearly apply: do not read any SKILL.md.")
+        parts.add("Constraints: never read more than one skill up front; only read after selecting.")
+        parts.add("- When a skill drives external API writes, assume rate limits: prefer fewer larger writes, avoid tight one-item loops, serialize bursts when possible.")
         parts.add("")
 
-        // Always Skills (always available skills)
+        // Always Skills — inject full content (needed every turn)
         if (alwaysSkills.isNotEmpty()) {
-            parts.add("### Always Available Skills")
-            parts.add("")
-
             for (skill in alwaysSkills) {
                 val reqCheck = skillsLoader.checkRequirements(skill)
                 if (reqCheck is RequirementsCheckResult.Satisfied) {
-                    parts.add("#### ${skill.metadata.emoji ?: "📋"} ${skill.name}")
+                    parts.add("#### ${skill.metadata.emoji ?: "📋"} ${skill.name} (always)")
                     parts.add(skill.description)
                     parts.add("")
                     parts.add(skill.content)
                     parts.add("")
-                    Log.d(TAG, "✅ Injected Always Skill: ${skill.name} (~${skill.estimateTokens()} tokens)")
+                    Log.d(TAG, "✅ Injected Always Skill (full): ${skill.name} (~${skill.estimateTokens()} tokens)")
                 }
             }
         }
 
-        // Relevant Skills (skills relevant to the task)
-        if (relevantSkills.isNotEmpty()) {
-            parts.add("### Relevant Skills for Your Task")
-            parts.add("")
+        // All other skills — lightweight XML catalog (name + description + location only)
+        val catalogSkills = allSkills.filter { !it.metadata.always }
+        if (catalogSkills.isNotEmpty()) {
+            val maxSkills = 150
+            val maxChars = 30_000
 
-            for (skill in relevantSkills) {
+            val xmlLines = mutableListOf<String>()
+            xmlLines.add("<available_skills>")
+
+            var charCount = 0
+            var skillCount = 0
+
+            for (skill in catalogSkills) {
+                if (skillCount >= maxSkills) break
+
                 val reqCheck = skillsLoader.checkRequirements(skill)
-                if (reqCheck is RequirementsCheckResult.Satisfied) {
-                    parts.add("#### ${skill.metadata.emoji ?: "📋"} ${skill.name}")
-                    parts.add(skill.description)
-                    parts.add("")
-                    parts.add(skill.content)
-                    parts.add("")
-                    Log.d(TAG, "✅ Injected Relevant Skill: ${skill.name} (~${skill.estimateTokens()} tokens)")
+                if (reqCheck !is RequirementsCheckResult.Satisfied) continue
+
+                val emoji = skill.metadata.emoji ?: "📋"
+                val desc = skill.description.lines().first().trim()
+                val location = skill.filePath ?: "skills/${skill.name}/SKILL.md"
+
+                val entry = buildString {
+                    appendLine("  <skill>")
+                    appendLine("    <name>${escapeXml(skill.name)}</name>")
+                    appendLine("    <description>${escapeXml("$emoji $desc")}</description>")
+                    appendLine("    <location>${escapeXml(location)}</location>")
+                    append("  </skill>")
                 }
+
+                if (charCount + entry.length > maxChars) {
+                    Log.w(TAG, "⚠️ Skills prompt chars limit reached ($charCount/$maxChars), stopping at $skillCount skills")
+                    break
+                }
+
+                xmlLines.add(entry)
+                charCount += entry.length
+                skillCount++
             }
+
+            xmlLines.add("</available_skills>")
+            parts.add(xmlLines.joinToString("\n"))
+
+            Log.d(TAG, "✅ Skills catalog: $skillCount skills in XML (~$charCount chars), ${alwaysSkills.size} always skills (full)")
         }
 
         return parts.joinToString("\n")
+    }
+
+    /**
+     * Escape special characters for XML content.
+     */
+    private fun escapeXml(str: String): String {
+        return str
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&apos;")
     }
 
     /**

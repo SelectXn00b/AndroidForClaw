@@ -189,6 +189,13 @@ class SkillsLoader(private val context: Context) {
     fun isHotReloadEnabled(): Boolean = hotReloadEnabled
 
     /**
+     * Get all loaded skills
+     */
+    fun getAllSkills(): List<SkillDocument> {
+        return loadSkills().values.toList()
+    }
+
+    /**
      * Get Always Skills (always-loaded skills)
      * These skills are loaded into system prompt at startup
      */
