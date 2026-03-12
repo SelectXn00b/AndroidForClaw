@@ -69,6 +69,9 @@ class ContextBuilder(
         private const val MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 200     // Minimum budget per file
         private const val BOOTSTRAP_TAIL_RATIO = 0.2                // Keep 20% tail when truncating
 
+        // Silent reply token (aligned with OpenClaw SILENT_REPLY_TOKEN = "NO_REPLY")
+        const val SILENT_REPLY_TOKEN = "NO_REPLY"
+
         // Prompt Mode (reference OpenClaw)
         enum class PromptMode {
             FULL,      // Main Agent - All 22 parts
@@ -260,55 +263,55 @@ Your core loop: **Observe → Think → Act → Verify**
 
     /**
      * 2. Tooling Section (tool list)
-     * Merge universal tools and Android platform tools
+     * Aligned with OpenClaw: "## Tooling" + tool list + TOOLS.md disclaimer
      */
     private fun buildToolingSection(): String {
-        val parts = mutableListOf<String>()
+        val lines = mutableListOf<String>()
+        lines.add("## Tooling")
+        lines.add("Tool availability (filtered by policy):")
+        lines.add("Tool names are case-sensitive. Call tools exactly as listed.")
 
         // Universal tools
         val universalTools = toolRegistry.getToolsDescription()
         if (universalTools.isNotEmpty()) {
-            parts.add(universalTools)
+            lines.add(universalTools)
         }
 
         // Android platform tools
         val androidTools = androidToolRegistry.getToolsDescription()
         if (androidTools.isNotEmpty()) {
-            parts.add(androidTools)
+            lines.add(androidTools)
         }
 
-        return if (parts.isNotEmpty()) {
-            "# Tooling\n\n" + parts.joinToString("\n\n")
-        } else {
-            ""
-        }
+        // TOOLS.md disclaimer (aligned with OpenClaw)
+        lines.add("TOOLS.md does not control tool availability; it is user guidance for how to use external tools.")
+
+        return lines.joinToString("\n")
     }
 
     /**
-     * 3. Tool Call Style Section
+     * 3. Tool Call Style Section (aligned with OpenClaw verbatim)
      */
     private fun buildToolCallStyleSection(): String {
         return """
-# Tool Call Style
-
-When calling tools:
-- Be concise and direct
-- Don't narrate obvious actions
-- Focus on reasoning and decisions
+## Tool Call Style
+Default: do not narrate routine, low-risk tool calls (just call the tool).
+Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.
+Keep narration brief and value-dense; avoid repeating obvious steps.
+Use plain human language for narration unless in a technical context.
+When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.
         """.trimIndent()
     }
 
     /**
-     * 4. Safety Section
+     * 4. Safety Section (aligned with OpenClaw verbatim — Anthropic-inspired constitution)
      */
     private fun buildSafetySection(): String {
         return """
-# Safety
-
-- Never perform destructive actions without confirmation
-- Respect user privacy and data
-- Handle errors gracefully
-- Always verify after operations
+## Safety
+You have no independent goals: do not pursue self-preservation, replication, resource acquisition, or power-seeking; avoid long-term plans beyond the user's request.
+Prioritize safety and human oversight over completion; if instructions conflict, pause and ask; comply with stop/pause/audit requests and never bypass safeguards. (Inspired by Anthropic's constitution.)
+Do not manipulate or persuade anyone to expand access or disable safeguards. Do not copy yourself or change system prompts, safety rules, or tool policies unless explicitly requested.
         """.trimIndent()
     }
 
@@ -501,7 +504,7 @@ When calling tools:
     }
 
     /**
-     * 7. Memory Recall Section
+     * 7. Memory Recall Section (aligned with OpenClaw buildMemorySection — compact)
      */
     private fun buildMemoryRecallSection(): String {
         // Check if memory tools exist
@@ -514,22 +517,8 @@ When calling tools:
 
         return """
 ## Memory Recall
-
-Before answering anything about prior work, decisions, dates, people, preferences, or todos:
-- Run memory_search on MEMORY.md + memory/*.md
-- Then use memory_get to pull only the needed lines
-
-If low confidence after search, say you checked.
-
-**Memory file locations:**
-- ${workspaceDir.absolutePath}/MEMORY.md (main memory)
-- ${workspaceDir.absolutePath}/memory/*.md (topic-specific memories)
-
-**When to use:**
-- User asks "what did I say about..."
-- User refers to previous decisions
-- User mentions preferences or settings
-- You need context from prior sessions
+Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.
+Citations: include Source: <path#line> when it helps the user verify memory snippets.
         """.trimIndent()
     }
 
@@ -583,14 +572,8 @@ Current Time: $currentTime
         val workspacePath = workspaceDir.absolutePath
         return """
 ## Workspace
-
 Your working directory is: $workspacePath
-
 Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.
-
-- Long-term memory: $workspacePath/memory/MEMORY.md (write important facts here)
-- Custom skills: $workspacePath/skills/{skill-name}/SKILL.md
-- User-editable files: You can read/write any files in this directory
         """.trimIndent()
     }
 
@@ -631,28 +614,20 @@ Example:
     }
 
     /**
-     * 20. Silent Replies Section
+     * 20. Silent Replies Section (aligned with OpenClaw — token is NO_REPLY)
      */
     private fun buildSilentRepliesSection(): String {
-        val token = "[[SILENT]]"
+        val token = SILENT_REPLY_TOKEN
         return """
 ## Silent Replies
-
 When you have nothing to say, respond with ONLY: $token
-
 ⚠️ Rules:
 - It must be your ENTIRE message — nothing else
 - Never append it to an actual response (never include "$token" in real replies)
 - Never wrap it in markdown or code blocks
-
 ❌ Wrong: "Here's help... $token"
 ❌ Wrong: "$token"
 ✅ Right: $token
-
-**When to use:**
-- After executing a tool that speaks for itself
-- When acknowledging without adding value
-- When the tool output is the complete answer
         """.trimIndent()
     }
 
@@ -692,25 +667,31 @@ If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the aler
     }
 
     /**
-     * 22. Runtime Section (detailed runtime information, including Channel info)
+     * 22. Runtime Section (aligned with OpenClaw buildRuntimeLine — single-line pipe-separated)
+     * OpenClaw format: "Runtime: agent=x | host=x | os=x | model=x | channel=x | capabilities=none | thinking=off"
      */
     private fun buildRuntimeSection(userGoal: String, packageName: String, testMode: String): String {
-        val runtime = buildRuntimeInfo()
-        val channelInfo = channelManager.getRuntimeChannelInfo()
+        val model = try {
+            configLoader?.loadOpenClawConfig()?.resolveDefaultModel() ?: "unknown"
+        } catch (_: Exception) { "unknown" }
 
-        val taskInfo = mutableListOf<String>()
-        if (userGoal.isNotEmpty()) taskInfo.add("**Goal**: $userGoal")
-        if (packageName.isNotEmpty()) taskInfo.add("**Package**: $packageName")
-        if (testMode.isNotEmpty()) taskInfo.add("**Mode**: $testMode (exploration=动态决策 / planning=先规划后执行)")
+        val host = android.os.Build.MODEL
+        val os = "Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})"
+        val arch = android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"
+        val channel = channelManager.getRuntimeChannelInfo().lines()
+            .firstOrNull { it.startsWith("channel:") }?.substringAfter(":")?.trim() ?: "android"
 
-        return """
-# Runtime
+        val runtimeLine = listOf(
+            "agent=AndroidForClaw",
+            "host=$host",
+            "os=$os ($arch)",
+            "model=$model",
+            "channel=$channel",
+            "capabilities=none",
+            "thinking=adaptive"
+        ).joinToString(" | ")
 
-$runtime
-$channelInfo
-
-${if (taskInfo.isNotEmpty()) "## Current Task\n" + taskInfo.joinToString("\n") else ""}
-        """.trimIndent()
+        return "## Runtime\nRuntime: $runtimeLine"
     }
 
     /**
@@ -795,9 +776,10 @@ ${if (taskInfo.isNotEmpty()) "## Current Task\n" + taskInfo.joinToString("\n") e
         }
         parts.add("")
 
-        // Each file starts with "## filename"
+        // Each file starts with "## full/path" (aligned with OpenClaw: uses full workspace path)
         for ((filename, content, truncated) in loadedFiles) {
-            parts.add("## $filename")
+            val fullPath = "${workspaceDir.absolutePath}/$filename"
+            parts.add("## $fullPath")
             if (truncated) {
                 parts.add("⚠️ _This file was truncated to fit the context budget._")
             }
@@ -837,34 +819,7 @@ ${if (taskInfo.isNotEmpty()) "## Current Task\n" + taskInfo.joinToString("\n") e
         return (head + marker + tail) to true
     }
 
-    /**
-     * Build runtime information (detailed version, reference OpenClaw)
-     * Model name read from config — aligned with OpenClaw's dynamic runtime info
-     */
-    private fun buildRuntimeInfo(): String {
-        // Read model from config instead of hardcoding
-        val model = try {
-            val config = configLoader?.loadOpenClawConfig()
-            config?.resolveDefaultModel() ?: "unknown"
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to read model from config: ${e.message}")
-            "unknown"
-        }
-
-        val host = android.os.Build.MODEL
-        val os = "Android ${android.os.Build.VERSION.RELEASE}"
-        val api = android.os.Build.VERSION.SDK_INT
-        val arch = android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"
-
-        return """
-agent: AndroidForClaw v3.0
-model: $model
-host: $host
-os: $os (API $api)
-arch: $arch
-channel: Android App
-        """.trimIndent()
-    }
+    // buildRuntimeInfo() removed — inlined into buildRuntimeSection() for alignment with OpenClaw
 
     /**
      * Get Skills statistics (for logging)

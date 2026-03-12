@@ -928,9 +928,13 @@ class MyApplication : Application(), Application.ActivityLifecycleCallbacks {
         response: String,
         queuedMessage: MessageQueueManager.QueuedMessage
     ): Boolean {
-        // 1. Check if response contains noReply marker
-        if (response.contains("[noReply]", ignoreCase = true) ||
-            response.contains("no_reply", ignoreCase = true)) {
+        // 1. Check if response is a silent reply (aligned with OpenClaw SILENT_REPLY_TOKEN = "NO_REPLY")
+        val trimmed = response.trim()
+        if (trimmed.equals(ContextBuilder.SILENT_REPLY_TOKEN, ignoreCase = true) ||
+            trimmed.startsWith(ContextBuilder.SILENT_REPLY_TOKEN, ignoreCase = true) ||
+            trimmed.endsWith(ContextBuilder.SILENT_REPLY_TOKEN, ignoreCase = true) ||
+            trimmed.contains("[noReply]", ignoreCase = true)) {
+            Log.d(TAG, "Silent reply detected, skipping: ${trimmed.take(50)}")
             return true
         }
 
