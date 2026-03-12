@@ -3,7 +3,7 @@
         "providers": {
             "openrouter": {
                 "baseUrl": "https://openrouter.ai/api/v1",
-                "apiKey": "${OPENROUTER_API_KEY}",
+                "apiKey": "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",
                 "models": [
                     {
                         "id": "openrouter/hunter-alpha",

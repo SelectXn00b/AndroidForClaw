@@ -44,7 +44,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="只需一步：输入 OpenRouter API Key"
+                    android:text="已内置免费 Key，可直接开始使用"
                     android:textSize="14sp"
                     android:textColor="#666666"
                     android:layout_marginTop="8dp" />
@@ -116,7 +116,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:hint="OpenRouter API Key"
-                        app:helperText="以 sk-or- 开头"
+                        app:helperText="可选，留空则使用内置 Key"
                         style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox">
 
                         <com.google.android.material.textfield.TextInputEditText

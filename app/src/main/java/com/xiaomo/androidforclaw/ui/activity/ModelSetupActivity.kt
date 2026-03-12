@@ -239,13 +239,26 @@ class ModelSetupActivity : AppCompatActivity() {
     }
 
     private fun saveAndFinish() {
-        val apiKey = binding.etSetupApiKey.text?.toString()?.trim()
+        val userInputKey = binding.etSetupApiKey.text?.toString()?.trim()
         val selectedModelDisplay = binding.actModel.text?.toString()?.trim()
 
-        // Validate
-        if (apiKey.isNullOrEmpty()) {
-            binding.tilApiKey.error = "请输入 API Key"
-            return
+        // If user provided a key, use it; otherwise keep the built-in default key
+        val apiKey = if (userInputKey.isNullOrEmpty()) {
+            // Read built-in key from current config (openclaw.json.default.txt has a real key)
+            try {
+                val config = configLoader.loadOpenClawConfig()
+                val existingKey = config.models?.providers?.values?.firstOrNull()?.apiKey
+                if (existingKey.isNullOrEmpty() || existingKey.startsWith("\${")) {
+                    binding.tilApiKey.error = "请输入 API Key"
+                    return
+                }
+                existingKey
+            } catch (e: Exception) {
+                binding.tilApiKey.error = "请输入 API Key"
+                return
+            }
+        } else {
+            userInputKey
         }
         binding.tilApiKey.error = null
 
