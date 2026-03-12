@@ -1195,11 +1195,19 @@ class MyApplication : Application(), Application.ActivityLifecycleCallbacks {
                     modelRef = null
                 )
 
-                // Build system prompt
+                // Build system prompt (with channel context for messaging awareness)
+                val channelCtx = ContextBuilder.ChannelContext(
+                    channel = "feishu",
+                    chatId = event.chatId,
+                    chatType = event.chatType,
+                    senderId = event.senderId,
+                    messageId = event.messageId
+                )
                 val systemPrompt = contextBuilder.buildSystemPrompt(
                     userGoal = event.content,
                     packageName = "",
-                    testMode = "chat"
+                    testMode = "chat",
+                    channelContext = channelCtx
                 )
 
                 // ✅ Block Reply: send intermediate replies as they happen
