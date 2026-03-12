@@ -57,14 +57,14 @@ class ModelSetupActivity : AppCompatActivity() {
                 api = "openai-completions",
                 hint = "OpenRouter 聚合了 Claude、GPT、Gemini 等多个模型，一个 Key 即可使用全部。\n注册即可免费使用，无需充值！",
                 models = listOf(
-                    ModelPreset("openrouter/hunter-alpha", "🏹 Hunter Alpha (默认，免费，1M上下文)"),
+                    ModelPreset("openrouter/hunter-alpha", "🏹 Hunter Alpha (默认，免费，1M上下文)", reasoning = true, contextWindow = 1048576, maxTokens = 65536),
                     ModelPreset("openrouter/free", "🆓 免费自动路由 (无需充值)"),
-                    ModelPreset("qwen/qwen3-coder:free", "🆓 Qwen3 Coder (免费，262K)"),
-                    ModelPreset("deepseek/deepseek-r1:free", "🆓 DeepSeek R1 (免费，推理)"),
-                    ModelPreset("anthropic/claude-sonnet-4", "Claude Sonnet 4 (付费，推荐)"),
-                    ModelPreset("anthropic/claude-opus-4", "Claude Opus 4 (付费)"),
-                    ModelPreset("openai/gpt-4.1", "GPT-4.1 (付费)"),
-                    ModelPreset("google/gemini-2.5-pro", "Gemini 2.5 Pro (付费)")
+                    ModelPreset("qwen/qwen3-coder:free", "🆓 Qwen3 Coder (免费，262K)", contextWindow = 262000),
+                    ModelPreset("deepseek/deepseek-r1:free", "🆓 DeepSeek R1 (免费，推理)", reasoning = true, contextWindow = 163840),
+                    ModelPreset("anthropic/claude-sonnet-4", "Claude Sonnet 4 (付费，推荐)", contextWindow = 200000, maxTokens = 16384),
+                    ModelPreset("anthropic/claude-opus-4", "Claude Opus 4 (付费)", contextWindow = 200000, maxTokens = 32768),
+                    ModelPreset("openai/gpt-4.1", "GPT-4.1 (付费)", contextWindow = 1048576, maxTokens = 32768),
+                    ModelPreset("google/gemini-2.5-pro", "Gemini 2.5 Pro (付费)", contextWindow = 1048576, maxTokens = 65536)
                 ),
                 authHeader = true
             ),
@@ -263,12 +263,16 @@ class ModelSetupActivity : AppCompatActivity() {
 
         // Resolve model ID
         val preset = PROVIDERS[selectedProvider] ?: return
+        val matchedPreset = if (selectedProvider == "custom") {
+            null
+        } else {
+            preset.models.find { it.displayName == selectedModelDisplay }
+                ?: preset.models.firstOrNull()
+        }
         val modelId = if (selectedProvider == "custom") {
             selectedModelDisplay ?: ""
         } else {
-            preset.models.find { it.displayName == selectedModelDisplay }?.id
-                ?: preset.models.firstOrNull()?.id
-                ?: ""
+            matchedPreset?.id ?: ""
         }
 
         try {
@@ -283,9 +287,9 @@ class ModelSetupActivity : AppCompatActivity() {
                     ModelDefinition(
                         id = modelId,
                         name = selectedModelDisplay ?: modelId,
-                        reasoning = modelId.contains("o3") || modelId.contains("r1") || modelId.contains("opus"),
-                        contextWindow = 200000,
-                        maxTokens = 16384
+                        reasoning = matchedPreset?.reasoning ?: (modelId.contains("o3") || modelId.contains("r1") || modelId.contains("opus")),
+                        contextWindow = matchedPreset?.contextWindow ?: 200000,
+                        maxTokens = matchedPreset?.maxTokens ?: 16384
                     )
                 ),
                 authHeader = preset.authHeader
@@ -344,6 +348,9 @@ class ModelSetupActivity : AppCompatActivity() {
 
     private data class ModelPreset(
         val id: String,
-        val displayName: String
+        val displayName: String,
+        val reasoning: Boolean = false,
+        val contextWindow: Int = 200000,
+        val maxTokens: Int = 16384
     )
 }
