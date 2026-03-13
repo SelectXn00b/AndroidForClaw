@@ -1,5 +1,13 @@
 package com.xiaomo.androidforclaw.config
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/channels/feishu/(all)
+ *
+ * AndroidForClaw adaptation: bridge Feishu config into app channel model.
+ */
+
+
 import com.xiaomo.feishu.FeishuConfig
 
 /**

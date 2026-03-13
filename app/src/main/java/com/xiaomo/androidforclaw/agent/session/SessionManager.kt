@@ -1,5 +1,13 @@
 package com.xiaomo.androidforclaw.agent.session
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/agents/(all)
+ *
+ * AndroidForClaw adaptation: persist and restore agent sessions on Android.
+ */
+
+
 import android.util.Log
 import com.xiaomo.androidforclaw.agent.memory.ContextCompressor
 import com.xiaomo.androidforclaw.agent.memory.TokenEstimator

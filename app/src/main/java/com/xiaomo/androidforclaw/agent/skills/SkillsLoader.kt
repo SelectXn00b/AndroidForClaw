@@ -1,5 +1,13 @@
 package com.xiaomo.androidforclaw.agent.skills
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/skills/(all)
+ *
+ * AndroidForClaw adaptation: bundled/managed/workspace skill discovery and cache.
+ */
+
+
 import android.content.Context
 import android.os.FileObserver
 import android.os.Handler

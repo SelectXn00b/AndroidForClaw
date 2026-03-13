@@ -1,5 +1,13 @@
 package com.xiaomo.androidforclaw.accessibility
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/gateway/(all)
+ *
+ * AndroidForClaw adaptation: observer permission and projection flow.
+ */
+
+
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri

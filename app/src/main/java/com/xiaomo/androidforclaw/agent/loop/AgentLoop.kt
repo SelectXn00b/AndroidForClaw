@@ -1,5 +1,13 @@
 package com.xiaomo.androidforclaw.agent.loop
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/agents/(all)
+ *
+ * AndroidForClaw adaptation: iterative agent loop, tool calling, progress updates.
+ */
+
+
 import android.util.Log
 import com.xiaomo.androidforclaw.agent.context.ContextErrors
 import com.xiaomo.androidforclaw.agent.context.ContextManager

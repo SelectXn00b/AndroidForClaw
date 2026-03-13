@@ -1,6 +1,15 @@
 package com.xiaomo.androidforclaw.config
 
 /**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/agents/(all)
+ * - ../openclaw/docs/providers/openai.md
+ *
+ * AndroidForClaw adaptation: provider catalog and model defaults.
+ */
+
+
+/**
  * OpenClaw Provider Registry
  *
  * 所有 Provider 定义严格对齐 OpenClaw 源码：

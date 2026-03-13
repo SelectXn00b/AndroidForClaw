@@ -1,5 +1,13 @@
 package com.xiaomo.androidforclaw.config
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/config/(all)
+ *
+ * AndroidForClaw adaptation: built-in/provider key resolution for local Android runtime.
+ */
+
+
 import android.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec

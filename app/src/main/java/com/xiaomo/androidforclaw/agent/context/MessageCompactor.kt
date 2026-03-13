@@ -1,5 +1,13 @@
 package com.xiaomo.androidforclaw.agent.context
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/agents/(all)
+ *
+ * AndroidForClaw adaptation: compact prior conversation context.
+ */
+
+
 import android.util.Log
 import com.xiaomo.androidforclaw.providers.LegacyMessage
 import com.xiaomo.androidforclaw.providers.UnifiedLLMProvider

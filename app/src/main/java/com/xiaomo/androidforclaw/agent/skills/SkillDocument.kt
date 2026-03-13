@@ -1,6 +1,14 @@
 package com.xiaomo.androidforclaw.agent.skills
 
 /**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/skills/(all)
+ *
+ * AndroidForClaw adaptation: loaded skill document model.
+ */
+
+
+/**
  * Skill Document Data Model
  * Corresponds to AgentSkills.io format
  *

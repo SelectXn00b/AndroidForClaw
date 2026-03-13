@@ -1,5 +1,13 @@
 package com.xiaomo.androidforclaw.core
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/channels/(all)
+ *
+ * AndroidForClaw adaptation: bridge inbound external messages into app agent flow.
+ */
+
+
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent

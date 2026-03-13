@@ -1,5 +1,13 @@
 package com.xiaomo.androidforclaw.agent.context
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/agents/(all)
+ *
+ * AndroidForClaw adaptation: bound tool result size within context limits.
+ */
+
+
 import android.util.Log
 import com.xiaomo.androidforclaw.providers.llm.Message
 

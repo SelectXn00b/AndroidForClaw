@@ -1,5 +1,13 @@
 package com.xiaomo.androidforclaw.agent.session
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/agents/(all)
+ *
+ * AndroidForClaw adaptation: sanitize history before prompt submission.
+ */
+
+
 import android.util.Log
 import com.xiaomo.androidforclaw.providers.llm.Message
 import com.xiaomo.androidforclaw.providers.llm.ToolCall

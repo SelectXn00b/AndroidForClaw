@@ -1,6 +1,14 @@
 package com.xiaomo.androidforclaw.config
 
 /**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/agents/(all), ../openclaw/types/(all).d.ts
+ *
+ * AndroidForClaw adaptation: provider/model config structures.
+ */
+
+
+/**
  * Model Configuration Data Classes
  * 解析由 ConfigLoader 的 JSONObject 处理，不依赖 Gson 注解。
  */

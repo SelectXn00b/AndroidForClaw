@@ -1,6 +1,14 @@
 package com.xiaomo.feishu
 
 /**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/channels/feishu/(all)
+ *
+ * AndroidForClaw adaptation: Feishu channel runtime.
+ */
+
+
+/**
  * 飞书配置
  * 对齐 OpenClaw feishu plugin 配置结构
  */

@@ -1,6 +1,15 @@
 package com.xiaomo.androidforclaw.config
 
 /**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/config/(all)
+ * - ../openclaw/types/(all).d.ts
+ *
+ * AndroidForClaw adaptation: Kotlin config model aligned to OpenClaw schema.
+ */
+
+
+/**
  * OpenClaw Config — 对齐 OpenClaw types.openclaw.d.ts
  *
  * 用户只写想覆盖的字段，其余全用默认值。

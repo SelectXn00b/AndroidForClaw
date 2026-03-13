@@ -1,5 +1,14 @@
 package com.xiaomo.androidforclaw.core
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/gateway/(all)
+ * - ../openclaw/src/channels/(all)
+ *
+ * AndroidForClaw adaptation: application bootstrap, channel startup, global lifecycle.
+ */
+
+
 import android.app.Activity
 import android.app.Application
 import android.content.Context

@@ -1,5 +1,13 @@
 package com.xiaomo.androidforclaw.agent.context
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/agents/(all)
+ *
+ * AndroidForClaw adaptation: manage context growth and recovery.
+ */
+
+
 import android.util.Log
 import com.xiaomo.androidforclaw.providers.UnifiedLLMProvider
 import com.xiaomo.androidforclaw.providers.LegacyMessage

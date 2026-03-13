@@ -1,9 +1,19 @@
 package com.xiaomo.androidforclaw.agent.tools
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/agents/tools/(all)
+ * - ../openclaw/src/gateway/(all)
+ *
+ * AndroidForClaw adaptation: register app, android, config, and extension tools.
+ */
+
+
 import android.content.Context
 import android.util.Log
 import com.xiaomo.androidforclaw.data.model.TaskDataManager
 import com.xiaomo.androidforclaw.providers.ToolDefinition
+import com.xiaomo.androidforclaw.gateway.methods.ConfigMethods
 import java.io.File
 
 /**
@@ -57,6 +67,11 @@ class ToolRegistry(
 
         // === Network tools ===
         register(WebFetchTool())
+
+        // === Config tools ===
+        val configMethods = ConfigMethods(context)
+        register(ConfigGetTool(configMethods))
+        register(ConfigSetTool(configMethods))
 
         // === JavaScript execution tools ===
         register(JavaScriptTool(context))

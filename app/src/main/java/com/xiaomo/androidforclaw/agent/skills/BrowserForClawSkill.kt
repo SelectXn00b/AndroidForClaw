@@ -1,5 +1,13 @@
 package com.xiaomo.androidforclaw.agent.skills
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/skills/(all)
+ *
+ * AndroidForClaw adaptation: browser-related packaged skill integration.
+ */
+
+
 import android.content.Context
 import com.xiaomo.androidforclaw.agent.tools.Skill
 import com.xiaomo.androidforclaw.agent.tools.SkillResult

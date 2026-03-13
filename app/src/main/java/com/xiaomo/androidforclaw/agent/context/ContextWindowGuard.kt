@@ -1,5 +1,13 @@
 package com.xiaomo.androidforclaw.agent.context
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/agents/(all)
+ *
+ * AndroidForClaw adaptation: context budget guard.
+ */
+
+
 import android.util.Log
 import com.xiaomo.androidforclaw.config.ConfigLoader
 import com.xiaomo.androidforclaw.config.ModelDefinition

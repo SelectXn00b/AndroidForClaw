@@ -1,5 +1,14 @@
 package com.xiaomo.androidforclaw.agent.context
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/agents/(all)
+ * - ../openclaw/src/config/(all)
+ *
+ * AndroidForClaw adaptation: build system prompt, tools section, skills context.
+ */
+
+
 import android.content.Context
 import android.util.Log
 import com.xiaomo.androidforclaw.agent.skills.RequirementsCheckResult

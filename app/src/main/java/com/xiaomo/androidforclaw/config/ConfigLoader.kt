@@ -1,5 +1,14 @@
 package com.xiaomo.androidforclaw.config
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/config/(all)
+ * - ../openclaw/docs/gateway/configuration-reference.md
+ *
+ * AndroidForClaw adaptation: load/save/observe openclaw.json on Android storage.
+ */
+
+
 import android.content.Context
 import android.os.FileObserver
 import android.util.Log
