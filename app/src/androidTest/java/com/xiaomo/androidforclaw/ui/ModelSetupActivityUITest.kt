@@ -337,11 +337,22 @@ class ModelSetupActivityUITest {
 
 
     @Test
-    fun test20_skipButton_finishesActivity() {
+    fun test20_skipButton_usesDefaultConfiguration() {
         val s = launchActivity()
         onView(withId(R.id.btn_skip)).perform(click())
         Thread.sleep(1000)
         assertEquals(Lifecycle.State.DESTROYED, s.state)
+
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val configLoader = ConfigLoader(context)
+        val config = configLoader.loadOpenClawConfig()
+        val defaultModel = config.resolveDefaultModel()
+        val openrouter = config.resolveProviders()["openrouter"]
+
+        assert(defaultModel.startsWith("openrouter/")) {
+            "Expected skip to use default openrouter model, got: $defaultModel"
+        }
+        assert(openrouter != null) { "Expected skip to persist default openrouter provider" }
     }
 
     // ==================== 8. 自定义 Provider 特殊 UI ====================

@@ -224,14 +224,21 @@ class ModelSetupActivity : AppCompatActivity() {
 
     private fun setupButtons() {
         binding.btnSkip.setOnClickListener {
-            Log.i(TAG, "用户跳过模型配置引导")
-            markSetupSeen()
-            finish()
+            Log.i(TAG, "用户跳过模型配置引导，使用默认配置")
+            saveDefaultAndFinish()
         }
 
         binding.btnStart.setOnClickListener {
             saveAndFinish()
         }
+    }
+
+    private fun saveDefaultAndFinish() {
+        selectedProvider = "openrouter"
+        advancedExpanded = false
+        applyProviderPreset("openrouter")
+        binding.etSetupApiKey.setText("")
+        saveAndFinish()
     }
 
     private fun saveAndFinish() {
