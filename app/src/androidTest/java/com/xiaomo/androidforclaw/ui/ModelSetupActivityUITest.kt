@@ -87,9 +87,10 @@ class ModelSetupActivityUITest {
     }
 
     @Test
-    fun test05_modelDropdownDisplayed() {
+    fun test05_modelDropdownHiddenInDefaultQuickSetup() {
         launchActivity()
-        onView(withId(R.id.act_model)).check(matches(isDisplayed()))
+        onView(withId(R.id.til_model))
+            .check(matches(withEffectiveVisibility(Visibility.GONE)))
     }
 
     @Test
@@ -112,10 +113,10 @@ class ModelSetupActivityUITest {
     // ==================== 2. 默认模式 ====================
 
     @Test
-    fun test08_defaultModelIsHunterAlpha() {
+    fun test08_defaultQuickSetupDoesNotAskForModel() {
         launchActivity()
-        onView(withId(R.id.act_model))
-            .check(matches(withText(containsString("Hunter Alpha"))))
+        onView(withId(R.id.til_model))
+            .check(matches(withEffectiveVisibility(Visibility.GONE)))
     }
 
     @Test
@@ -180,9 +181,8 @@ class ModelSetupActivityUITest {
         onView(withId(R.id.et_setup_api_key))
             .check(matches(withHint("Anthropic API Key")))
 
-        // Model updates
-        onView(withId(R.id.act_model))
-            .check(matches(withText(containsString("Claude Sonnet 4"))))
+        onView(withId(R.id.til_model))
+            .check(matches(withEffectiveVisibility(Visibility.GONE)))
     }
 
     @Test
@@ -194,8 +194,8 @@ class ModelSetupActivityUITest {
         onView(withId(R.id.et_setup_api_key))
             .check(matches(withHint("OpenAI API Key")))
 
-        onView(withId(R.id.act_model))
-            .check(matches(withText(containsString("GPT-4.1"))))
+        onView(withId(R.id.til_model))
+            .check(matches(withEffectiveVisibility(Visibility.GONE)))
     }
 
     @Test
@@ -221,7 +221,8 @@ class ModelSetupActivityUITest {
         // Expand again → should be back to OpenRouter
         onView(withId(R.id.tv_advanced)).perform(scrollTo(), click())
         onView(withId(R.id.chip_openrouter)).check(matches(isChecked()))
-        onView(withId(R.id.act_model)).check(matches(withText(containsString("Hunter Alpha"))))
+        onView(withId(R.id.til_model))
+            .check(matches(withEffectiveVisibility(Visibility.GONE)))
     }
 
     // ==================== 5. 不填 Key 直接开始（内置 Key）====================
@@ -395,66 +396,25 @@ class ModelSetupActivityUITest {
         assertEquals(Lifecycle.State.DESTROYED, s.state)
     }
 
-    // ==================== 9. 模型选择下拉 ====================
+    // ==================== 9. 模型输入（仅自定义 Provider） ====================
 
     @Test
-    fun test24_modelDropdownOpens() {
+    fun test24_customProvider_modelInputBecomesVisible() {
         launchActivity()
-        // Click the dropdown end icon to open
-        onView(withId(R.id.act_model)).perform(click())
-        Thread.sleep(500)
-
-        // Verify popup is showing via activity
-        scenario!!.onActivity { activity ->
-            val actv = activity.findViewById<AutoCompleteTextView>(R.id.act_model)
-            assert(actv.isPopupShowing) { "Dropdown popup should be showing" }
-        }
+        onView(withId(R.id.tv_advanced)).perform(scrollTo(), click())
+        onView(withId(R.id.chip_custom)).perform(scrollTo(), click())
+        onView(withId(R.id.til_model)).check(matches(isDisplayed()))
     }
 
     @Test
-    fun test25_selectDifferentModel() {
+    fun test25_customProvider_modelInputIsEditable() {
         launchActivity()
-        onView(withId(R.id.act_model)).perform(click())
-        Thread.sleep(500)
-
-        // Select a different item via activity
-        scenario!!.onActivity { activity ->
-            val actv = activity.findViewById<AutoCompleteTextView>(R.id.act_model)
-            // Find and click "Qwen3 Coder"
-            val adapter = actv.adapter
-            for (i in 0 until adapter.count) {
-                val item = adapter.getItem(i) as String
-                if (item.contains("Qwen3 Coder")) {
-                    actv.setText(item, false)
-                    actv.dismissDropDown()
-                    break
-                }
-            }
-        }
-
-        Thread.sleep(300)
+        onView(withId(R.id.tv_advanced)).perform(scrollTo(), click())
+        onView(withId(R.id.chip_custom)).perform(scrollTo(), click())
         onView(withId(R.id.act_model))
-            .check(matches(withText(containsString("Qwen3 Coder"))))
-    }
-
-    @Test
-    fun test26_modelDropdownHasAllPresets() {
-        launchActivity()
-
-        // Verify via activity that all presets are in the adapter
-        scenario!!.onActivity { activity ->
-            val actv = activity.findViewById<AutoCompleteTextView>(R.id.act_model)
-            val adapter = actv.adapter
-            val items = mutableListOf<String>()
-            for (i in 0 until adapter.count) {
-                items.add(adapter.getItem(i) as String)
-            }
-
-            assert(items.any { it.contains("Hunter Alpha") }) { "Should have Hunter Alpha" }
-            assert(items.any { it.contains("免费") }) { "Should have free models" }
-            assert(items.any { it.contains("Claude Sonnet") }) { "Should have Claude Sonnet" }
-            assert(items.size >= 8) { "Should have at least 8 models, got ${items.size}" }
-        }
+            .perform(clearText(), typeText("my-custom-model"), closeSoftKeyboard())
+        onView(withId(R.id.act_model))
+            .check(matches(withText("my-custom-model")))
     }
 
     // ==================== 10. Provider hint 验证 ====================

@@ -119,16 +119,10 @@ class ModelSetupActivity : AppCompatActivity() {
     }
 
     /**
-     * Default mode: just show API Key input + model selector for OpenRouter.
+     * Default mode: quick setup only asks for API key.
      */
     private fun setupDefaultMode() {
-        // Populate model dropdown with OpenRouter presets
-        val preset = PROVIDERS["openrouter"]!!
-        val modelNames = preset.models.map { it.displayName }
-        val adapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, modelNames)
-        binding.actModel.setAdapter(adapter)
-        binding.actModel.setText(modelNames[0], false)
-        binding.actModel.inputType = android.text.InputType.TYPE_NULL
+        binding.tilModel.visibility = View.GONE
 
         // "打开 openrouter.ai/keys" link
         binding.tvOpenOpenrouter.setOnClickListener {
@@ -208,7 +202,7 @@ class ModelSetupActivity : AppCompatActivity() {
             tvProviderHint.text = preset.hint
             tvProviderHint.visibility = if (advancedExpanded) View.VISIBLE else View.GONE
 
-            // Model dropdown
+            // Model selection: hidden for built-in providers, only shown for custom provider
             val modelNames = preset.models.map { it.displayName }
             val adapter = ArrayAdapter(this@ModelSetupActivity, android.R.layout.simple_dropdown_item_1line, modelNames)
             actModel.setAdapter(adapter)
@@ -217,9 +211,11 @@ class ModelSetupActivity : AppCompatActivity() {
             }
 
             if (providerKey == "custom") {
+                tilModel.visibility = View.VISIBLE
                 actModel.inputType = android.text.InputType.TYPE_CLASS_TEXT
                 actModel.threshold = 100
             } else {
+                tilModel.visibility = View.GONE
                 actModel.inputType = android.text.InputType.TYPE_NULL
                 actModel.threshold = 1
             }
@@ -272,14 +268,19 @@ class ModelSetupActivity : AppCompatActivity() {
         val matchedPreset = if (selectedProvider == "custom") {
             null
         } else {
-            preset.models.find { it.displayName == selectedModelDisplay }
-                ?: preset.models.firstOrNull()
+            preset.models.firstOrNull()
         }
         val modelId = if (selectedProvider == "custom") {
             selectedModelDisplay ?: ""
         } else {
             matchedPreset?.id ?: ""
         }
+
+        if (selectedProvider == "custom" && modelId.isBlank()) {
+            binding.tilModel.error = "请输入模型 ID"
+            return
+        }
+        binding.tilModel.error = null
 
         try {
             val config = configLoader.loadOpenClawConfig()
