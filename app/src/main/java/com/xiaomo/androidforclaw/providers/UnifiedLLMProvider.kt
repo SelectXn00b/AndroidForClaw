@@ -38,16 +38,29 @@ class UnifiedLLMProvider(private val context: Context) {
 
     companion object {
         private const val TAG = "UnifiedLLMProvider"
-        private const val DEFAULT_TIMEOUT_SECONDS = 120L
+        private const val DEFAULT_TIMEOUT_MS = 120_000L
         private const val DEFAULT_TEMPERATURE = 0.7
     }
 
     private val configLoader = ConfigLoader(context)
-    private val httpClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(DEFAULT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        .readTimeout(DEFAULT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        .writeTimeout(DEFAULT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        .build()
+    private val httpClient: OkHttpClient by lazy {
+        val timeoutMs = try {
+            configLoader.loadOpenClawConfig().agent.timeout
+                .takeIf { it > 0 } ?: DEFAULT_TIMEOUT_MS
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to load timeout from config, using default", e)
+            DEFAULT_TIMEOUT_MS
+        }
+
+        Log.i(TAG, "🕒 LLM HTTP timeout = ${timeoutMs}ms")
+
+        OkHttpClient.Builder()
+            .connectTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+            .readTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+            .writeTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+            .callTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+            .build()
+    }
 
     /**
      * 转换旧的 ToolDefinition 到新格式

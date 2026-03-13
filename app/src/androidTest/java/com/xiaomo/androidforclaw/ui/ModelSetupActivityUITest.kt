@@ -309,6 +309,33 @@ class ModelSetupActivityUITest {
 
 
     @Test
+    fun test19d_resolveProviders_fallsBackToLegacyProvidersWhenModelsProvidersEmpty() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val legacyProvider = com.xiaomo.androidforclaw.config.ProviderConfig(
+            baseUrl = "https://openrouter.ai/api/v1",
+            apiKey = "test-key",
+            api = "openai-completions",
+            models = listOf(
+                com.xiaomo.androidforclaw.config.ModelDefinition(
+                    id = "openrouter/hunter-alpha",
+                    name = "Hunter Alpha"
+                )
+            )
+        )
+
+        val config = com.xiaomo.androidforclaw.config.OpenClawConfig(
+            models = com.xiaomo.androidforclaw.config.ModelsConfig(providers = emptyMap()),
+            providers = mapOf("openrouter" to legacyProvider)
+        )
+
+        val resolved = config.resolveProviders()
+        assert(resolved.containsKey("openrouter")) {
+            "Expected resolveProviders() to fall back to top-level providers when models.providers is empty"
+        }
+    }
+
+
+    @Test
     fun test20_skipButton_finishesActivity() {
         val s = launchActivity()
         onView(withId(R.id.btn_skip)).perform(click())

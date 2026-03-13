@@ -29,9 +29,10 @@ data class OpenClawConfig(
     // ======= Legacy =======
     val providers: Map<String, ProviderConfig> = emptyMap()
 ) {
-    /** 解析 providers：优先 models.providers，fallback 到顶层 providers */
+    /** 解析 providers：优先 models.providers；若为空则 fallback 到顶层 providers */
     fun resolveProviders(): Map<String, ProviderConfig> {
-        return models?.providers ?: providers
+        val modelProviders = models?.providers
+        return if (!modelProviders.isNullOrEmpty()) modelProviders else providers
     }
 
     /** 解析默认模型 */
