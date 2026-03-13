@@ -1,5 +1,14 @@
 package com.xiaomo.androidforclaw.providers
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/agents/pi-embedded-runner/(all)
+ * - ../openclaw/src/agents/model-(all)
+ *
+ * AndroidForClaw adaptation: unified provider dispatch for Android.
+ */
+
+
 import android.content.Context
 import android.util.Log
 import com.xiaomo.androidforclaw.config.ConfigLoader

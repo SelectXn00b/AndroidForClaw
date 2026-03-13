@@ -1,5 +1,13 @@
 package com.xiaomo.androidforclaw.providers
 
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/agents/pi-embedded-runner/(all)
+ *
+ * AndroidForClaw adaptation: provider auth/header/body request shaping.
+ */
+
+
 import com.xiaomo.androidforclaw.config.ModelApi
 import com.xiaomo.androidforclaw.config.ModelDefinition
 import com.xiaomo.androidforclaw.config.ProviderConfig
