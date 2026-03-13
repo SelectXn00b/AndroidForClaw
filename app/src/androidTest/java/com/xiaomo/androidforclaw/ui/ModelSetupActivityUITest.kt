@@ -12,6 +12,7 @@ import androidx.test.espresso.matcher.ViewMatchers.*
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import com.draco.ladb.R
+import com.xiaomo.androidforclaw.config.ConfigLoader
 import com.xiaomo.androidforclaw.ui.activity.ModelSetupActivity
 import org.hamcrest.Matchers.*
 import org.junit.After
@@ -249,6 +250,63 @@ class ModelSetupActivityUITest {
     }
 
     // ==================== 7. 跳过按钮 ====================
+
+    @Test
+    fun test19b_startWithoutKey_persistsOpenRouterProviderConfig() {
+        val s = launchActivity(manual = true)
+        onView(withId(R.id.btn_start)).perform(click())
+        Thread.sleep(1000)
+        assertEquals(Lifecycle.State.DESTROYED, s.state)
+
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val configLoader = ConfigLoader(context)
+        val config = configLoader.loadOpenClawConfig()
+
+        val defaultModel = config.resolveDefaultModel()
+        assert(defaultModel.startsWith("openrouter/")) {
+            "Expected default model to use openrouter, got: $defaultModel"
+        }
+
+        val openrouter = config.resolveProviders()["openrouter"]
+        assert(openrouter != null) { "Expected openrouter provider to be persisted in config" }
+        assert(openrouter!!.baseUrl.contains("openrouter.ai")) {
+            "Expected OpenRouter baseUrl, got: ${openrouter.baseUrl}"
+        }
+        assert(openrouter.api == "openai-completions") {
+            "Expected openai-completions api, got: ${openrouter.api}"
+        }
+        assert(openrouter.models.any { it.id == defaultModel }) {
+            "Expected openrouter provider to contain default model: $defaultModel"
+        }
+    }
+
+    @Test
+    fun test19c_startWithoutKey_defaultModelCanResolveToProvider() {
+        val s = launchActivity(manual = true)
+        onView(withId(R.id.btn_start)).perform(click())
+        Thread.sleep(1000)
+        assertEquals(Lifecycle.State.DESTROYED, s.state)
+
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val configLoader = ConfigLoader(context)
+        val defaultModel = configLoader.loadOpenClawConfig().resolveDefaultModel()
+        val providerName = defaultModel.substringBefore('/')
+        val modelId = defaultModel.substringAfter('/', "")
+
+        val provider = configLoader.getProviderConfig(providerName)
+        assert(provider != null) {
+            "Expected provider '$providerName' to exist for default model '$defaultModel'"
+        }
+        assert(provider!!.models.any { it.id == defaultModel || it.id == modelId }) {
+            "Expected provider '$providerName' to contain model '$defaultModel' or '$modelId'"
+        }
+
+        val resolvedProvider = configLoader.findProviderByModelId(defaultModel)
+        assert(resolvedProvider == providerName) {
+            "Expected config loader to resolve provider '$providerName' for '$defaultModel', got '$resolvedProvider'"
+        }
+    }
+
 
     @Test
     fun test20_skipButton_finishesActivity() {
