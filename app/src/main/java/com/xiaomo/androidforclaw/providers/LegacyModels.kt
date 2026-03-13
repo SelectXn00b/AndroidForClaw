@@ -81,7 +81,8 @@ data class PropertySchema(
     val type: String,  // "string", "number", "boolean", "array", "object"
     val description: String,
     val enum: List<String>? = null,
-    val items: PropertySchema? = null  // for array type
+    val items: PropertySchema? = null,  // for array type
+    val properties: Map<String, PropertySchema>? = null  // for object type
 )
 
 // ============= Response Models =============

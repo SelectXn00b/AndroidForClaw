@@ -480,7 +480,6 @@ object MainEntryNew {
                     title = "迭代 ${update.number}",
                     content = "正在思考..."
                 )
-                emitProgressToUi("iteration", "迭代 ${update.number}", "正在思考...")
             }
 
             is ProgressUpdate.Thinking -> {

@@ -82,7 +82,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             MainEntryNew.uiProgressFlow.collect { event ->
                 val rendered = when (event.type) {
-                    "thinking", "iteration" -> "正在思考..."
+                    "iteration" -> ""
+                    "thinking" -> "正在思考..."
                     "tool_call" -> "${event.title}\n${event.content}"
                     "tool_result" -> "${event.title}\n${event.content}"
                     "block_reply" -> event.content

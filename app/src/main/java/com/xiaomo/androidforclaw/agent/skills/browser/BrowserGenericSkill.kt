@@ -116,7 +116,7 @@ object BrowserSkillFactory {
         name = "browser_set_cookies",
         description = "Set cookies in the browser. Provide 'cookies' (list of cookie strings in format \"name=value; path=/; domain=.example.com\"). Example: {\"cookies\": [\"session_id=abc123; path=/\"]}",
         parametersDef = mapOf(
-            "cookies" to PropertySchema("array", "List of cookie strings")
+            "cookies" to PropertySchema("array", "List of cookie strings", items = PropertySchema("string", "Cookie string"))
         ),
         requiredParams = listOf("cookies")
     )
@@ -138,7 +138,7 @@ object BrowserSkillFactory {
         description = "Select options from a dropdown in the browser. Provide 'selector' (CSS selector for select element) and 'values' (list of values to select, supports multi-select). Example: {\"selector\": \"select[name='country']\", \"values\": [\"CN\"]}",
         parametersDef = mapOf(
             "selector" to PropertySchema("string", "CSS selector for select element"),
-            "values" to PropertySchema("array", "List of values to select")
+            "values" to PropertySchema("array", "List of values to select", items = PropertySchema("string", "Select value"))
         ),
         requiredParams = listOf("selector", "values")
     )

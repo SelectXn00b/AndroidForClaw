@@ -62,13 +62,21 @@ class FeishuToolAdapter(
         return com.xiaomo.androidforclaw.providers.ParametersSchema(
             type = feishuSchema.type,
             properties = feishuSchema.properties.mapValues { (_, prop) ->
-                com.xiaomo.androidforclaw.providers.PropertySchema(
-                    type = prop.type,
-                    description = prop.description,
-                    enum = prop.enum
-                )
+                convertPropertySchema(prop)
             },
             required = feishuSchema.required
+        )
+    }
+
+    private fun convertPropertySchema(
+        prop: com.xiaomo.feishu.tools.PropertySchema
+    ): com.xiaomo.androidforclaw.providers.PropertySchema {
+        return com.xiaomo.androidforclaw.providers.PropertySchema(
+            type = prop.type,
+            description = prop.description,
+            enum = prop.enum,
+            items = prop.items?.let { convertPropertySchema(it) },
+            properties = prop.properties?.mapValues { (_, child) -> convertPropertySchema(child) }
         )
     }
 }

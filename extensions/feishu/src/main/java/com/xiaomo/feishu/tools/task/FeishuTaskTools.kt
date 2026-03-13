@@ -82,7 +82,7 @@ class TaskCreateTool(config: FeishuConfig, client: FeishuClient) : FeishuToolBas
                     "summary" to PropertySchema("string", "任务标题"),
                     "description" to PropertySchema("string", "任务描述（可选）"),
                     "due_date" to PropertySchema("string", "截止时间戳（可选）"),
-                    "collaborators" to PropertySchema("array", "协作者ID列表（可选）")
+                    "collaborators" to PropertySchema("array", "协作者ID列表（可选）", items = PropertySchema("string", "协作者ID"))
                 ),
                 required = listOf("summary")
             )
