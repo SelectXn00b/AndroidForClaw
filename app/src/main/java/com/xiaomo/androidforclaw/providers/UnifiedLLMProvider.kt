@@ -83,7 +83,8 @@ class UnifiedLLMProvider(private val context: Context) {
             type = old.type,
             description = old.description,
             enum = old.enum,
-            items = old.items?.let { convertPropertySchema(it) }
+            items = old.items?.let { convertPropertySchema(it) },
+            properties = old.properties?.mapValues { (_, child) -> convertPropertySchema(child) }
         )
     }
 

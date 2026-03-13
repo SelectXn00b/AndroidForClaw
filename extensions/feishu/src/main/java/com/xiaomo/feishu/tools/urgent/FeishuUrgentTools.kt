@@ -76,7 +76,7 @@ class UrgentSendTool(config: FeishuConfig, client: FeishuClient) : FeishuToolBas
             parameters = ParametersSchema(
                 properties = mapOf(
                     "message_id" to PropertySchema("string", "要加急的消息ID"),
-                    "user_ids" to PropertySchema("array", "要提醒的用户ID列表")
+                    "user_ids" to PropertySchema("array", "要提醒的用户ID列表", items = PropertySchema("string", "用户ID"))
                 ),
                 required = listOf("message_id", "user_ids")
             )
@@ -131,7 +131,7 @@ class UrgentAppTool(config: FeishuConfig, client: FeishuClient) : FeishuToolBase
             parameters = ParametersSchema(
                 properties = mapOf(
                     "message_id" to PropertySchema("string", "要加急的消息ID"),
-                    "user_ids" to PropertySchema("array", "要提醒的用户ID列表"),
+                    "user_ids" to PropertySchema("array", "要提醒的用户ID列表", items = PropertySchema("string", "用户ID")),
                     "urgent_type" to PropertySchema(
                         "string",
                         "加急类型（app/sms/phone，默认app）",

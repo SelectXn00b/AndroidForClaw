@@ -86,7 +86,7 @@ class BitableCreateTool(config: FeishuConfig, client: FeishuClient) : FeishuTool
                 properties = mapOf(
                     "app_token" to PropertySchema("string", "多维表格appToken"),
                     "table_id" to PropertySchema("string", "数据表ID"),
-                    "fields" to PropertySchema("object", "字段值对象，如 {\"字段1\": \"值1\", \"字段2\": \"值2\"}")
+                    "fields" to PropertySchema("object", "字段值对象，如 {\"字段1\": \"值1\", \"字段2\": \"值2\"}", properties = emptyMap())
                 ),
                 required = listOf("app_token", "table_id", "fields")
             )
@@ -190,7 +190,7 @@ class BitableUpdateTool(config: FeishuConfig, client: FeishuClient) : FeishuTool
                     "app_token" to PropertySchema("string", "多维表格appToken"),
                     "table_id" to PropertySchema("string", "数据表ID"),
                     "record_id" to PropertySchema("string", "记录ID"),
-                    "fields" to PropertySchema("object", "要更新的字段值对象")
+                    "fields" to PropertySchema("object", "要更新的字段值对象", properties = emptyMap())
                 ),
                 required = listOf("app_token", "table_id", "record_id", "fields")
             )

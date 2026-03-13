@@ -468,7 +468,8 @@ object ApiAdapter {
         val funcJson = JSONObject()
         funcJson.put("name", tool.function.name)
         funcJson.put("description", tool.function.description)  // JSONObject.put handles escaping
-        funcJson.put("parameters", buildParametersJson(tool.function.parameters))
+        val parametersJson = buildParametersJson(tool.function.parameters)
+        funcJson.put("parameters", parametersJson)
 
         json.put("function", funcJson)
         return json
