@@ -57,13 +57,10 @@ fun FeishuChannelScreen(onBack: () -> Unit, context: android.content.Context = a
     var enabled by remember { mutableStateOf(savedConfig.enabled) }
     var appId by remember { mutableStateOf(savedConfig.appId) }
     var appSecret by remember { mutableStateOf(savedConfig.appSecret) }
-    var connectionMode by remember { mutableStateOf(savedConfig.connectionMode) }
     var dmPolicy by remember { mutableStateOf(savedConfig.dmPolicy) }
     var groupPolicy by remember { mutableStateOf(savedConfig.groupPolicy) }
     var requireMention by remember { mutableStateOf(savedConfig.requireMention) }
     var groupAllowFrom by remember { mutableStateOf(savedConfig.groupAllowFrom.joinToString("\n")) }
-    var historyLimit by remember { mutableStateOf(savedConfig.historyLimit.toString()) }
-    var dmHistoryLimit by remember { mutableStateOf(savedConfig.dmHistoryLimit.toString()) }
 
     var showSaveSuccess by remember { mutableStateOf(false) }
 
@@ -88,13 +85,13 @@ fun FeishuChannelScreen(onBack: () -> Unit, context: android.content.Context = a
                                     enabled = enabled,
                                     appId = appId,
                                     appSecret = appSecret,
-                                    connectionMode = connectionMode,
+                                    connectionMode = currentConfig.channels.feishu.connectionMode,
                                     dmPolicy = dmPolicy,
                                     groupPolicy = groupPolicy,
                                     requireMention = requireMention,
                                     groupAllowFrom = groupAllowFrom.split("\n").filter { it.isNotBlank() },
-                                    historyLimit = historyLimit.toIntOrNull() ?: 20,
-                                    dmHistoryLimit = dmHistoryLimit.toIntOrNull() ?: 100
+                                    historyLimit = currentConfig.channels.feishu.historyLimit,
+                                    dmHistoryLimit = currentConfig.channels.feishu.dmHistoryLimit
                                 )
 
                                 // 更新完整配置
@@ -189,30 +186,6 @@ fun FeishuChannelScreen(onBack: () -> Unit, context: android.content.Context = a
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
             )
-
-            // 连接模式
-            Text(
-                text = "连接模式",
-                style = MaterialTheme.typography.titleMedium
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = connectionMode == "websocket",
-                    onClick = { connectionMode = "websocket" },
-                    label = { Text("WebSocket") },
-                    modifier = Modifier.weight(1f)
-                )
-                FilterChip(
-                    selected = connectionMode == "webhook",
-                    onClick = { connectionMode = "webhook" },
-                    label = { Text("Webhook") },
-                    modifier = Modifier.weight(1f)
-                )
-            }
 
             // DM 策略
             Text(
@@ -317,35 +290,9 @@ fun FeishuChannelScreen(onBack: () -> Unit, context: android.content.Context = a
                 }
             }
 
-            // 历史记录限制
-            Text(
-                text = "历史记录",
-                style = MaterialTheme.typography.titleMedium
-            )
-
-            OutlinedTextField(
-                value = historyLimit,
-                onValueChange = { historyLimit = it },
-                label = { Text("群聊历史记录条数") },
-                placeholder = { Text("20") },
-                modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                singleLine = true
-            )
-
-            OutlinedTextField(
-                value = dmHistoryLimit,
-                onValueChange = { dmHistoryLimit = it },
-                label = { Text("私聊历史记录条数") },
-                placeholder = { Text("100") },
-                modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                singleLine = true
-            )
-
             // 配置文件路径提示
             Text(
-                text = "配置保存在:\n/sdcard/.androidforclaw/openclaw.json (gateway.feishu)",
+                text = "配置保存在:\n/sdcard/.androidforclaw/openclaw.json (channels.feishu)",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(vertical = 8.dp)

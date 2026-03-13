@@ -54,10 +54,8 @@ class FeishuChannelFlowUITest {
         openFeishuPage()
 
         assertNotNull(device.findObject(By.text("基础配置")))
-        assertNotNull(device.findObject(By.text("连接模式")))
         assertNotNull(device.findObject(By.text("私聊策略 (DM Policy)")))
         assertNotNull(device.findObject(By.text("群聊策略 (Group Policy)")))
-        assertNotNull(device.findObject(By.text("历史记录")))
         assertNotNull(device.findObject(By.text("保存")))
     }
 
