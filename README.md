@@ -75,17 +75,15 @@ AI：→ skills_search("") → 展示可用技能列表
 
 | APK | 说明 | 必装？ |
 |-----|------|--------|
-| **AndroidForClaw** | 主应用 (Agent + Gateway + UI) | ✅ 必装 |
-| **S4Claw** | 无障碍服务 (截图 + UI 树) | ✅ 必装 |
+| **AndroidForClaw** | 主应用 (含无障碍服务、Agent、Gateway) | ✅ 必装 |
 | **BrowserForClaw** | AI 浏览器 (网页自动化) | 可选 |
-| **[Termux](https://f-droid.org/packages/com.termux/)** | 终端 (执行代码) | 可选 |
+| **[Termux](https://f-droid.org/packages/com.termux/)** | 终端 (执行 Python/Node.js) | 可选 |
 
-### 4 步上手
+### 3 步上手
 
-1. **安装** — AndroidForClaw + S4Claw
-2. **配置** — 打开 App，输入 API Key（或跳过用内置免费 Key）
-3. **授权** — 打开 S4Claw，开启无障碍服务 + 录屏权限
-4. **开聊** — 回到 App 直接对话，或通过飞书/Discord 发消息
+1. **安装** — 下载安装 AndroidForClaw
+2. **配置** — 打开 App，输入 API Key（或跳过用内置免费 Key），开启无障碍 + 录屏权限
+3. **开聊** — 直接对话，或通过飞书/Discord 发消息
 
 > 💡 推荐注册 [OpenRouter](https://openrouter.ai/keys) 获取免费 API Key
 
