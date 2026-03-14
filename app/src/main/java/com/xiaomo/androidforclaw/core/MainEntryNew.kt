@@ -30,6 +30,7 @@ import com.xiaomo.androidforclaw.service.PhoneAccessibilityService
 import com.xiaomo.androidforclaw.util.LayoutExceptionLogger
 import com.xiaomo.androidforclaw.util.MMKVKeys
 import com.xiaomo.androidforclaw.util.WakeLockManager
+import com.xiaomo.androidforclaw.util.ReasoningTagFilter
 import com.xiaomo.androidforclaw.ui.float.SessionFloatWindow
 import com.draco.ladb.BuildConfig
 import kotlinx.coroutines.CoroutineScope
@@ -275,18 +276,19 @@ object MainEntryNew {
                     reasoningEnabled = true  // Reasoning enabled by default
                 )
 
+                val cleanFinalContent = ReasoningTagFilter.stripReasoningTags(result.finalContent)
                 Log.d(TAG, "========== AgentLoop Complete ==========")
                 Log.d(TAG, "Iterations: ${result.iterations}")
-                Log.d(TAG, "Final result: ${result.finalContent}")
+                Log.d(TAG, "Final result: ${cleanFinalContent}")
 
                 // 5. Broadcast AI response (skip if already sent via block reply)
-                if (result.finalContent.isNotEmpty()) {
-                    if (lastBlockReplyText?.trim() == result.finalContent.trim()) {
+                if (cleanFinalContent.isNotEmpty()) {
+                    if (lastBlockReplyText?.trim() == cleanFinalContent.trim()) {
                         Log.d(TAG, "✅ Final content matches last block reply, skipping broadcast")
                     } else {
                         Log.d(TAG, "📤 [Broadcast] Broadcasting AI response...")
                         com.xiaomo.androidforclaw.gateway.GatewayServer.broadcastChatMessage(
-                            effectiveSessionId, "assistant", result.finalContent
+                            effectiveSessionId, "assistant", cleanFinalContent
                         )
                     }
                 }
@@ -295,7 +297,10 @@ object MainEntryNew {
                 // 6. Save messages to session (convert back to legacy format)
                 Log.d(TAG, "💾 [Session] Saving messages to session...")
                 result.messages.forEach { message ->
-                    session.addMessage(message.toLegacyMessage())
+                    val sanitizedMessage = if (message.role == "assistant") {
+                        message.copy(content = ReasoningTagFilter.stripReasoningTags(message.content))
+                    } else message
+                    session.addMessage(sanitizedMessage.toLegacyMessage())
                 }
                 sessionManager.save(session)
                 Log.d(TAG, "✅ [Session] Session saved, total messages: ${session.messageCount()}")

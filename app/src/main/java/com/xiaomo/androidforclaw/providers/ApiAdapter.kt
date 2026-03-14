@@ -266,8 +266,16 @@ object ApiAdapter {
         json.put("model", model.id)
         json.put("temperature", temperature)
 
-        // maxTokens field name (based on compatibility config)
-        val maxTokensField = model.compat?.maxTokensField ?: "max_tokens"
+        // maxTokens field name (based on compatibility config + safe defaults)
+        val modelIdLower = model.id.lowercase()
+        val defaultMaxTokensField = when {
+            modelIdLower.startsWith("gpt-5") -> "max_completion_tokens"
+            modelIdLower.startsWith("o1") -> "max_completion_tokens"
+            modelIdLower.startsWith("o3") -> "max_completion_tokens"
+            modelIdLower.startsWith("gpt-4.1") -> "max_completion_tokens"
+            else -> "max_tokens"
+        }
+        val maxTokensField = model.compat?.maxTokensField ?: defaultMaxTokensField
         json.put(maxTokensField, maxTokens ?: model.maxTokens)
 
         // Convert message format

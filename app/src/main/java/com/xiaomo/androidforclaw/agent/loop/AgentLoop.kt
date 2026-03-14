@@ -1,5 +1,7 @@
 package com.xiaomo.androidforclaw.agent.loop
 
+import com.xiaomo.androidforclaw.util.ReasoningTagFilter
+
 /**
  * OpenClaw Source Reference:
  * - ../openclaw/src/agents/(all)
@@ -607,7 +609,8 @@ class AgentLoop(
                 }
 
                 // 4.4 No tool calls, meaning LLM provided final answer
-                finalContent = response.content
+                finalContent = response.content?.let { ReasoningTagFilter.stripReasoningTags(it) }
+                    ?: response.content
                 messages.add(assistantMessage(content = finalContent))
 
                 writeLog("Final content received (finish_reason: ${response.finishReason})")
