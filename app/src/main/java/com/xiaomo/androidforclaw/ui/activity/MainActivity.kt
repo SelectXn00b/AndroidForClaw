@@ -76,6 +76,25 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updateStatusCards()
+        silentUpdateCheck()
+    }
+
+    /**
+     * Silent update check on every app resume (cold + warm start).
+     * Only shows dialog if update is available, no toast on "already latest".
+     */
+    private fun silentUpdateCheck() {
+        lifecycleScope.launch {
+            try {
+                val updater = AppUpdater(this@MainActivity)
+                val info = updater.checkForUpdate()
+                if (info.hasUpdate) {
+                    showUpdateDialog(updater, info)
+                }
+            } catch (_: Exception) {
+                // Silent — don't bother user on network errors
+            }
+        }
     }
 
     private fun setupViews() {
