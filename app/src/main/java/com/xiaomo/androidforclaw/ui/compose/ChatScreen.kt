@@ -92,7 +92,8 @@ fun ChatScreen(
     sessions: List<SessionManager.Session> = emptyList(),
     currentSession: SessionManager.Session? = null,
     onSessionChange: (String) -> Unit = {},
-    onNewSession: () -> Unit = {}
+    onNewSession: () -> Unit = {},
+    onCheckUpdate: (() -> Unit)? = null
 ) {
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -119,6 +120,7 @@ fun ChatScreen(
                 currentSession = currentSession,
                 onSessionChange = onSessionChange,
                 onNewSession = onNewSession,
+                onCheckUpdate = onCheckUpdate,
                 modifier = Modifier.fillMaxWidth()
             )
         }
@@ -670,6 +672,7 @@ fun SessionControlBar(
     currentSession: SessionManager.Session?,
     onSessionChange: (String) -> Unit,
     onNewSession: () -> Unit,
+    onCheckUpdate: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -760,7 +763,25 @@ fun SessionControlBar(
                 }
             }
 
-            Spacer(modifier = Modifier.width(8.dp))
+            // Check update button
+            if (onCheckUpdate != null) {
+                Spacer(modifier = Modifier.width(4.dp))
+                Surface(
+                    modifier = Modifier.size(36.dp),
+                    shape = CircleShape,
+                    color = Color(0xFFEEEEEE),
+                    onClick = onCheckUpdate
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "↑",
+                            style = TextStyle(fontSize = 18.sp, color = Color(0xFF666666)),
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.width(4.dp))
 
             Surface(
                 modifier = Modifier.size(40.dp),

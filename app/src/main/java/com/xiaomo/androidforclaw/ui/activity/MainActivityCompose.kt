@@ -193,7 +193,7 @@ class MainActivityCompose : ComponentActivity() {
      * Check GitHub Releases for updates in background.
      * Only shows dialog if a new version is available.
      */
-    private fun silentUpdateCheck() {
+    fun silentUpdateCheck() {
         lifecycleScope.launch {
             try {
                 val updater = com.xiaomo.androidforclaw.updater.AppUpdater(this@MainActivityCompose)
@@ -381,6 +381,7 @@ enum class MainTab(val title: String, val icon: ImageVector) {
 
 @Composable
 fun ChatTab(chatViewModel: ChatViewModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val messages by chatViewModel.messages.collectAsState()
     val isLoading by chatViewModel.isLoading.collectAsState()
     val sessions by chatViewModel.sessions.collectAsState()
@@ -399,6 +400,26 @@ fun ChatTab(chatViewModel: ChatViewModel) {
         },
         onNewSession = {
             chatViewModel.createNewSession()
+        },
+        onCheckUpdate = {
+            // Trigger manual update check with toast feedback
+            val activity = context as? MainActivityCompose
+            activity?.let {
+                android.widget.Toast.makeText(it, "正在检查更新...", android.widget.Toast.LENGTH_SHORT).show()
+                it.lifecycleScope.launch {
+                    try {
+                        val updater = com.xiaomo.androidforclaw.updater.AppUpdater(it)
+                        val info = updater.checkForUpdate()
+                        if (info.hasUpdate) {
+                            it.silentUpdateCheck()
+                        } else {
+                            android.widget.Toast.makeText(it, "已是最新版本 v${info.currentVersion}", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        android.widget.Toast.makeText(it, "检查更新失败", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
         }
     )
 }
