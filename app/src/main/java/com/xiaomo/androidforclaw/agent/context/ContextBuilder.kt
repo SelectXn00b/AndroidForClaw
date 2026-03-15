@@ -464,7 +464,7 @@ Do not manipulate or persuade anyone to expand access or disable safeguards. Do 
         parts.add("- If multiple could apply: choose the most specific one, then read/follow it.")
         parts.add("- If none clearly apply: do not read any SKILL.md.")
         parts.add("Constraints: never read more than one skill up front; only read after selecting.")
-        parts.add("- When a skill drives external API writes, assume rate limits: prefer fewer larger writes, avoid tight one-item loops, serialize bursts when possible.")
+        parts.add("- When a skill drives external API writes, assume rate limits: prefer fewer larger writes, avoid tight one-item loops, serialize bursts when possible, and respect 429/Retry-After.")
         parts.add("")
 
         // Always Skills — inject full content (needed every turn)
@@ -684,10 +684,12 @@ When the model returns <think>…</think> blocks, these contain internal reasoni
         return """
 ## Silent Replies
 When you have nothing to say, respond with ONLY: $token
+
 ⚠️ Rules:
 - It must be your ENTIRE message — nothing else
 - Never append it to an actual response (never include "$token" in real replies)
 - Never wrap it in markdown or code blocks
+
 ❌ Wrong: "Here's help... $token"
 ❌ Wrong: "$token"
 ✅ Right: $token
