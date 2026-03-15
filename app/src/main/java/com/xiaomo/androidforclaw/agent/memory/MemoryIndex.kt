@@ -37,6 +37,28 @@ class MemoryIndex(
 
     private val dbHelper = MemoryDbHelper(context)
     private val mutex = Mutex()
+    var ftsAvailable = true
+        private set
+
+    init {
+        // Trigger DB creation and check FTS5 availability
+        try {
+            val db = dbHelper.writableDatabase
+            // If DB already existed, probe FTS5 availability
+            if (dbHelper.ftsCreated) {
+                try {
+                    db.rawQuery("SELECT * FROM chunks_fts LIMIT 0", null).close()
+                } catch (e: Exception) {
+                    ftsAvailable = false
+                    Log.w(TAG, "FTS5 table not available", e)
+                }
+            } else {
+                ftsAvailable = false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize DB", e)
+        }
+    }
 
     data class SearchResult(
         val path: String,
@@ -72,8 +94,10 @@ class MemoryIndex(
                 }
 
                 // Delete old chunks for this file
+                if (ftsAvailable) {
+                    db.execSQL("DELETE FROM chunks_fts WHERE rowid IN (SELECT rowid FROM chunks WHERE path = ?)", arrayOf(path))
+                }
                 db.delete("chunks", "path = ?", arrayOf(path))
-                db.execSQL("DELETE FROM chunks_fts WHERE rowid IN (SELECT rowid FROM chunks WHERE path = ?)", arrayOf(path))
 
                 // Chunk the file
                 val chunks = ChunkUtils.chunkMarkdown(content)
@@ -109,10 +133,12 @@ class MemoryIndex(
                     }
 
                     // Update FTS index
-                    db.execSQL(
-                        "INSERT INTO chunks_fts(rowid, text) SELECT rowid, text FROM chunks WHERE path = ?",
-                        arrayOf(path)
-                    )
+                    if (ftsAvailable) {
+                        db.execSQL(
+                            "INSERT INTO chunks_fts(rowid, text) SELECT rowid, text FROM chunks WHERE path = ?",
+                            arrayOf(path)
+                        )
+                    }
 
                     // Upsert file record
                     db.execSQL(
@@ -137,7 +163,9 @@ class MemoryIndex(
     suspend fun removeFile(path: String) = mutex.withLock {
         withContext(Dispatchers.IO) {
             val db = dbHelper.writableDatabase
-            db.execSQL("DELETE FROM chunks_fts WHERE rowid IN (SELECT rowid FROM chunks WHERE path = ?)", arrayOf(path))
+            if (ftsAvailable) {
+                db.execSQL("DELETE FROM chunks_fts WHERE rowid IN (SELECT rowid FROM chunks WHERE path = ?)", arrayOf(path))
+            }
             db.delete("chunks", "path = ?", arrayOf(path))
             db.delete("files", "path = ?", arrayOf(path))
         }
@@ -181,8 +209,38 @@ class MemoryIndex(
         if (keywords.isEmpty()) return@withContext emptyList()
 
         val db = dbHelper.readableDatabase
-        val ftsQuery = keywords.joinToString(" OR ")
         val results = mutableListOf<SearchResult>()
+
+        if (!ftsAvailable) {
+            // LIKE fallback
+            val likeConditions = keywords.joinToString(" OR ") { "text LIKE ?" }
+            val likeArgs = keywords.map { "%$it%" }.toTypedArray() + arrayOf(limit.toString())
+            try {
+                val cursor = db.rawQuery(
+                    """SELECT path, source, start_line, end_line, text
+                       FROM chunks WHERE $likeConditions LIMIT ?""",
+                    likeArgs
+                )
+                while (cursor.moveToNext()) {
+                    val text = cursor.getString(4)
+                    val matchCount = keywords.count { text.contains(it, ignoreCase = true) }
+                    results.add(SearchResult(
+                        path = cursor.getString(0),
+                        source = cursor.getString(1),
+                        startLine = cursor.getInt(2),
+                        endLine = cursor.getInt(3),
+                        text = text,
+                        score = matchCount.toFloat() / keywords.size
+                    ))
+                }
+                cursor.close()
+            } catch (e: Exception) {
+                Log.e(TAG, "LIKE keyword search failed", e)
+            }
+            return@withContext results.sortedByDescending { it.score }
+        }
+
+        val ftsQuery = keywords.joinToString(" OR ")
 
         try {
             val cursor = db.rawQuery(
@@ -351,6 +409,9 @@ class MemoryIndex(
     private class MemoryDbHelper(context: Context) : SQLiteOpenHelper(
         context, DB_NAME, null, DB_VERSION
     ) {
+        var ftsCreated = true
+            private set
+
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("""
                 CREATE TABLE IF NOT EXISTS files (
@@ -376,7 +437,12 @@ class MemoryIndex(
             """)
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path)")
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(hash)")
-            db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, content='')")
+            try {
+                db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, content='')")
+            } catch (e: Exception) {
+                Log.w(TAG, "FTS5 not available on this device, falling back to LIKE search", e)
+                ftsCreated = false
+            }
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
