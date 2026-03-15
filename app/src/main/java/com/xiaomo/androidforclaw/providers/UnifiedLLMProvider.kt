@@ -224,6 +224,17 @@ class UnifiedLLMProvider(private val context: Context) {
             val truncated = if (responseBody.length > 2000) responseBody.substring(0, 2000) + "..." else responseBody
             Log.d(TAG, "📥 Raw response: $truncated")
 
+            // Guard: detect non-JSON responses (HTML pages, login redirects, etc.)
+            val trimmed = responseBody.trimStart()
+            if (trimmed.startsWith("<") || trimmed.startsWith("<!")) {
+                Log.e(TAG, "❌ API returned HTML instead of JSON — check baseUrl and API key")
+                throw LLMException(
+                    "API returned an HTML page instead of JSON. " +
+                    "This usually means the baseUrl is wrong or the API key is invalid. " +
+                    "URL: $apiUrl"
+                )
+            }
+
             // Parse response
             val api = model.api ?: provider.api
             val parsed = ApiAdapter.parseResponse(api, responseBody)
