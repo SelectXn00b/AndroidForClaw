@@ -85,16 +85,25 @@ class ConfigActivity : AppCompatActivity() {
      * Restart the app — kill process and relaunch from launcher
      */
     private fun restartApp() {
+        // Schedule app restart via AlarmManager, then kill process
         val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
             addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-        }
-        if (intent != null) {
-            startActivity(intent)
-        }
-        // Kill the process after a short delay to let the new activity start
-        android.os.Handler(mainLooper).postDelayed({
-            android.os.Process.killProcess(android.os.Process.myPid())
-        }, 300)
+        } ?: return
+
+        val pendingIntent = android.app.PendingIntent.getActivity(
+            this, 0, intent,
+            android.app.PendingIntent.FLAG_ONE_SHOT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+        val alarmManager = getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager
+        alarmManager.setExact(
+            android.app.AlarmManager.RTC,
+            System.currentTimeMillis() + 500,  // 500ms 后唤起
+            pendingIntent
+        )
+
+        // Kill current process
+        finishAffinity()
+        android.os.Process.killProcess(android.os.Process.myPid())
     }
 
     private fun requestStoragePermission() {

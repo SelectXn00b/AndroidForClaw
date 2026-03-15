@@ -954,11 +954,19 @@ fun RestartAppCard() {
                 .setPositiveButton("重启") { _, _ ->
                     val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
                         addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                    }
-                    if (intent != null) context.startActivity(intent)
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        android.os.Process.killProcess(android.os.Process.myPid())
-                    }, 300)
+                    } ?: return@setPositiveButton
+                    val pendingIntent = android.app.PendingIntent.getActivity(
+                        context, 0, intent,
+                        android.app.PendingIntent.FLAG_ONE_SHOT or android.app.PendingIntent.FLAG_IMMUTABLE
+                    )
+                    val alarmManager = context.getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager
+                    alarmManager.setExact(
+                        android.app.AlarmManager.RTC,
+                        System.currentTimeMillis() + 500,
+                        pendingIntent
+                    )
+                    (context as? android.app.Activity)?.finishAffinity()
+                    android.os.Process.killProcess(android.os.Process.myPid())
                 }
                 .setNegativeButton("取消", null)
                 .show()
