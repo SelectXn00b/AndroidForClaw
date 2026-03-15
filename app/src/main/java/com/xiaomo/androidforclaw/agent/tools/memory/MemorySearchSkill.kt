@@ -52,9 +52,13 @@ class MemorySearchSkill(
                             type = "string",
                             description = "Search query (keywords or phrases)"
                         ),
-                        "max_results" to PropertySchema(
-                            type = "integer",
+                        "maxResults" to PropertySchema(
+                            type = "number",
                             description = "Maximum number of results to return (default: 6)"
+                        ),
+                        "minScore" to PropertySchema(
+                            type = "number",
+                            description = "Minimum match score threshold (optional)"
                         )
                     ),
                     required = listOf("query")
@@ -67,7 +71,8 @@ class MemorySearchSkill(
         val query = args["query"] as? String
             ?: return SkillResult.error("Missing required parameter: query")
 
-        val maxResults = (args["max_results"] as? Number)?.toInt() ?: DEFAULT_MAX_RESULTS
+        val maxResults = (args["maxResults"] as? Number)?.toInt() ?: DEFAULT_MAX_RESULTS
+        // minScore accepted but not yet used for keyword search (future: vector search threshold)
 
         return try {
             val results = searchMemoryFiles(query, maxResults)

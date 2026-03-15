@@ -43,12 +43,12 @@ class MemoryGetSkill(
                             type = "string",
                             description = "Path to the memory file, relative to workspace. Examples: 'MEMORY.md', 'memory/2024-03-07.md', 'memory/projects.md'"
                         ),
-                        "start_line" to PropertySchema(
-                            type = "integer",
-                            description = "Starting line number (1-indexed, optional)"
+                        "from" to PropertySchema(
+                            type = "number",
+                            description = "Line number to start reading from (1-indexed, optional)"
                         ),
-                        "line_count" to PropertySchema(
-                            type = "integer",
+                        "lines" to PropertySchema(
+                            type = "number",
                             description = "Number of lines to read (optional, default: all)"
                         )
                     ),
@@ -62,8 +62,8 @@ class MemoryGetSkill(
         val path = args["path"] as? String
             ?: return SkillResult.error("Missing required parameter: path")
 
-        val startLine = (args["start_line"] as? Number)?.toInt()
-        val lineCount = (args["line_count"] as? Number)?.toInt()
+        val startLine = (args["from"] as? Number)?.toInt()
+        val lineCount = (args["lines"] as? Number)?.toInt()
 
         return try {
             // Validate path security (prevent directory traversal attacks)
