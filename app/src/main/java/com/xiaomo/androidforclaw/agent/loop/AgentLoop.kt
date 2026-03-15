@@ -859,13 +859,42 @@ class AgentLoop(
      * Aggressive trim when still over budget after pruning + guard.
      * Drops oldest non-system, non-last-user messages until under budget.
      */
+    /**
+     * Aggressive trim: aligned with OpenClaw pruneHistoryForContextShare.
+     * Drop oldest 50% of non-system messages repeatedly until under budget.
+     * maxHistoryShare = 0.5 (history can use at most 50% of context window)
+     */
     private fun aggressiveTrimMessages(messages: MutableList<Message>, budgetChars: Int) {
-        // Keep: system prompt (first), last user message, last assistant message
-        while (ToolResultContextGuard.estimateContextChars(messages) > budgetChars && messages.size > 3) {
-            // Find first non-system message to remove
-            val removeIdx = messages.indexOfFirst { it.role != "system" }
-            if (removeIdx < 0 || removeIdx >= messages.size - 2) break  // Don't remove last 2 messages
-            messages.removeAt(removeIdx)
+        val maxHistoryBudget = (budgetChars * 0.5).toInt() // OpenClaw: maxHistoryShare = 0.5
+
+        // Separate system messages from conversation
+        val systemMessages = messages.filter { it.role == "system" }
+        val conversationMessages = messages.filter { it.role != "system" }.toMutableList()
+
+        var iterations = 0
+        while (ToolResultContextGuard.estimateContextChars(messages) > maxHistoryBudget && conversationMessages.size > 2 && iterations < 10) {
+            // Drop oldest half of conversation (aligned with OpenClaw splitMessagesByTokenShare)
+            val dropCount = (conversationMessages.size / 2).coerceAtLeast(1)
+            val toDrop = dropCount.coerceAtMost(conversationMessages.size - 2) // Keep at least last 2
+
+            writeLog("🗑️ Pruning history: dropping $toDrop of ${conversationMessages.size} messages (iteration ${iterations + 1})")
+
+            repeat(toDrop) {
+                if (conversationMessages.size > 2) {
+                    conversationMessages.removeAt(0)
+                }
+            }
+
+            // Rebuild messages list
+            messages.clear()
+            messages.addAll(systemMessages)
+            messages.addAll(conversationMessages)
+
+            iterations++
+        }
+
+        if (iterations > 0) {
+            writeLog("✅ History pruned: ${messages.size} messages remaining after $iterations iterations")
         }
     }
 

@@ -254,14 +254,16 @@ object MainEntryNew {
             openClawConfig?.channels?.feishu?.dmHistoryLimit
         } catch (_: Exception) { null }
 
-        // Android default: 10 turns if no config (practical limit for mobile context window)
-        // OpenClaw desktop can handle unlimited because models have 200k+ context
-        // Android models may have smaller context or slower processing
-        val effectiveLimit = dmHistoryLimit ?: 10
-
-        val allMessages = session.getRecentMessages(effectiveLimit * 4).map { it.toNewMessage() }
-        val contextHistory = com.xiaomo.androidforclaw.agent.session.HistorySanitizer
-            .limitHistoryTurns(allMessages.toMutableList(), effectiveLimit)
+        // Aligned with OpenClaw: if dmHistoryLimit not configured, send all history
+        // AgentLoop's context pruning (pruneHistoryForContextShare-aligned) handles oversized context
+        val allMessages = if (dmHistoryLimit != null && dmHistoryLimit > 0) {
+            val raw = session.getRecentMessages(dmHistoryLimit * 4).map { it.toNewMessage() }
+            com.xiaomo.androidforclaw.agent.session.HistorySanitizer
+                .limitHistoryTurns(raw.toMutableList(), dmHistoryLimit)
+        } else {
+            session.getRecentMessages(session.messages.size).map { it.toNewMessage() }
+        }
+        val contextHistory = allMessages
         Log.d(TAG, "📥 [History] total=${session.messages.size} raw=${allMessages.size} → context=${contextHistory.size} (dmHistoryLimit=${dmHistoryLimit ?: "unlimited"})")
         Log.d(TAG, "📥 [Session] Loaded context: ${contextHistory.size} messages")
 
