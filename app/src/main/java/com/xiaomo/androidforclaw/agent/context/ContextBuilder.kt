@@ -184,10 +184,15 @@ class ContextBuilder(
             }
         }
 
-        // 9. Current Date & Time - Always included
+        // 9. Model Aliases - FULL mode
+        if (promptMode == PromptMode.FULL) {
+            parts.add(buildModelAliasesSection())
+        }
+
+        // 10. Current Date & Time - Always included
         parts.add(buildTimeSection())
 
-        // 10. Workspace - Always included
+        // 11. Workspace - Always included
         parts.add(buildWorkspaceSection())
 
         // 11. Documentation - Skip (no documentation in Android environment)
@@ -586,7 +591,20 @@ This is a single-user Android device. All requests come from the device owner.
     }
 
     /**
-     * 9. Current Date & Time Section
+     * 9. Model Aliases Section (aligned with OpenClaw)
+     */
+    private fun buildModelAliasesSection(): String {
+        return """
+## Model Aliases
+Prefer aliases when specifying model overrides; full provider/model is also accepted.
+- ClaudeOpus46: mify/ppio/pa/claude-opus-4-61
+- Codex: mify/azure_openai/gpt-5-codex
+- Gemini3: mify/vertex_ai/gemini-3-pro-preview
+        """.trimIndent()
+    }
+
+    /**
+     * 10. Current Date & Time Section
      */
     private fun buildTimeSection(): String {
         // Aligned with OpenClaw: "## Current Date & Time" + "Time zone: xxx"
