@@ -153,7 +153,15 @@ class TermuxBridgeTool(private val context: Context) : Tool {
     }
 
     private fun isRunCommandPermissionDeclared(): Boolean {
-        return context.packageManager.checkPermission(RUN_COMMAND_PERMISSION, context.packageName) == PackageManager.PERMISSION_GRANTED
+        // Custom permissions from other apps (like Termux) are granted at install time
+        // if declared in our manifest. checkPermission may not work reliably for these.
+        // Instead, check if our app's manifest declares the permission.
+        return try {
+            val pkgInfo = context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS)
+            pkgInfo.requestedPermissions?.contains(RUN_COMMAND_PERMISSION) == true
+        } catch (e: Exception) {
+            false
+        }
     }
 
     private fun isRunCommandServiceAvailable(): Boolean {
