@@ -1050,38 +1050,41 @@ class MyApplication : Application(), Application.ActivityLifecycleCallbacks {
                         }
                     }
 
-                    // Check group messages (must @ bot)
+                    // Check group messages (aligned with OpenClaw: obey config.requireMention)
                     if (event.chatType == "group") {
-                        // Always require @ bot for group messages (ignore requireMention in config)
-                        val requireMention = true
-                        Log.d(TAG, "   requireMention: $requireMention (群消息强制要求 @)")
+                        val requireMention = feishuConfig.requireMention
+                        Log.d(TAG, "   requireMention: $requireMention (按配置处理)")
 
-                        // Check @_all (aligned with OpenClaw: treat as @ all bots)
-                        if (event.content.contains("@_all")) {
-                            Log.d(TAG, "✅ 消息包含 @_all")
-                        } else if (event.mentions.isEmpty()) {
-                            // No @mention at all
-                            Log.w(TAG, "❌ 群消息需要 @机器人，但没有任何 @mention，忽略此消息")
-                            Log.w(TAG, "   消息内容: ${event.content}")
-                            return
-                        } else {
-                            // Has @mention, check if bot is @mentioned
-                            val botOpenId = feishuChannel?.getBotOpenId()
-                            if (botOpenId == null) {
-                                // Cannot get bot open_id, reject message for safety
-                                Log.w(TAG, "❌ 无法获取 bot open_id，无法验证 @mention，忽略此消息")
-                                Log.w(TAG, "   提示: 检查飞书配置或网络连接，确保能获取机器人信息")
-                                return
-                            } else if (botOpenId !in event.mentions) {
-                                // Has bot open_id, but message doesn't @ bot
-                                Log.w(TAG, "❌ 群消息 @了其他人但没有 @机器人(${botOpenId})，忽略此消息")
+                        if (requireMention) {
+                            // Check @_all (aligned with OpenClaw: treat as @ all bots)
+                            if (event.content.contains("@_all")) {
+                                Log.d(TAG, "✅ 消息包含 @_all")
+                            } else if (event.mentions.isEmpty()) {
+                                // No @mention at all
+                                Log.w(TAG, "❌ 群消息需要 @机器人，但没有任何 @mention，忽略此消息")
                                 Log.w(TAG, "   消息内容: ${event.content}")
-                                Log.w(TAG, "   Bot Open ID: $botOpenId")
-                                Log.w(TAG, "   Mentions: ${event.mentions}")
                                 return
                             } else {
-                                Log.d(TAG, "✅ 群消息包含机器人的 @mention")
+                                // Has @mention, check if bot is @mentioned
+                                val botOpenId = feishuChannel?.getBotOpenId()
+                                if (botOpenId == null) {
+                                    // Cannot get bot open_id, reject message for safety
+                                    Log.w(TAG, "❌ 无法获取 bot open_id，无法验证 @mention，忽略此消息")
+                                    Log.w(TAG, "   提示: 检查飞书配置或网络连接，确保能获取机器人信息")
+                                    return
+                                } else if (botOpenId !in event.mentions) {
+                                    // Has bot open_id, but message doesn't @ bot
+                                    Log.w(TAG, "❌ 群消息 @了其他人但没有 @机器人(${botOpenId})，忽略此消息")
+                                    Log.w(TAG, "   消息内容: ${event.content}")
+                                    Log.w(TAG, "   Bot Open ID: $botOpenId")
+                                    Log.w(TAG, "   Mentions: ${event.mentions}")
+                                    return
+                                } else {
+                                    Log.d(TAG, "✅ 群消息包含机器人的 @mention")
+                                }
                             }
+                        } else {
+                            Log.d(TAG, "✅ 群消息无需 @机器人（requireMention=false）")
                         }
                     }
                 } catch (e: Exception) {
