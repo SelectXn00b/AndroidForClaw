@@ -123,12 +123,12 @@ class DeviceTool(private val context: Context) : Tool {
         val format = (args["format"] as? String) ?: "compact"
 
         val proxy = AccessibilityProxy
-        if (!proxy.isServiceReady()) {
-            return ToolResult.error("无障碍服务未开启。请到 设置 → 无障碍 → AndroidForClaw 开启无障碍权限，才能获取屏幕元素。")
-        }
 
         val viewNodes = try {
             proxy.dumpViewTree(useCache = false)
+        } catch (e: IllegalStateException) {
+            Log.e(TAG, "Accessibility service not available", e)
+            return ToolResult.error("无障碍服务未开启。请到 设置 → 无障碍 → AndroidForClaw 开启无障碍权限，才能获取屏幕元素。")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to dump view tree", e)
             return ToolResult.error("获取 UI 树失败: ${e.message}。请检查无障碍服务是否正常运行。")

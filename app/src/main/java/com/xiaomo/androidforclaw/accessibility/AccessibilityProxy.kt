@@ -34,9 +34,10 @@ object AccessibilityProxy {
     private val cacheValidityMs = 500L
 
     suspend fun dumpViewTree(useCache: Boolean = true): List<ViewNode> = withContext(Dispatchers.IO) {
+        ensureConnectedWithRetry()
         val svc = service
         if (svc == null) {
-            Log.w(TAG, "Service not available for dumpViewTree")
+            Log.w(TAG, "Service not available for dumpViewTree after retry")
             _isConnected.postValue(false)
             return@withContext emptyList()
         }
@@ -61,12 +62,12 @@ object AccessibilityProxy {
 
     suspend fun tap(x: Int, y: Int): Boolean = withContext(Dispatchers.IO) {
         ensureConnectedWithRetry(requireReady = true)
-        service?.performClickAtSync(x, y, isLongClick = false) ?: false
+        service?.performClickAt(x.toFloat(), y.toFloat(), isLongClick = false) ?: false
     }
 
     suspend fun longPress(x: Int, y: Int): Boolean = withContext(Dispatchers.IO) {
         ensureConnectedWithRetry(requireReady = true)
-        service?.performClickAtSync(x, y, isLongClick = true) ?: false
+        service?.performClickAt(x.toFloat(), y.toFloat(), isLongClick = true) ?: false
     }
 
     suspend fun swipe(

@@ -232,7 +232,7 @@ class PhoneAccessibilityService : AccessibilityService() {
             }
         }, null)
 
-        return withTimeoutOrNull(500) {
+        return withTimeoutOrNull(duration + 500) {
             result.await()
         } ?: false
     }
