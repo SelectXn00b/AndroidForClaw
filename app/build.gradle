@@ -242,10 +242,7 @@ dependencies {
     debugImplementation "androidx.compose.ui:ui-tooling:$compose_version"
     debugImplementation "androidx.compose.ui:ui-test-manifest:$compose_version"
 
-    // ========== QuickJS JavaScript 执行器 Module ==========
-    implementation project(':quickjs-executor')
-
-    // ========== LangChain4j 依赖（独立 module）==========
+        // ========== LangChain4j 依赖（独立 module）==========
     // 注释掉：新架构不再使用 LangChain4j，使用 LegacyProvider 替代
     // api project(':langchain4j-android')
 

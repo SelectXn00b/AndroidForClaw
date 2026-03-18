@@ -1,6 +1,5 @@
 rootProject.name = "AndroidForClaw"
 include ':app'
-include ':quickjs-executor'
 include ':extensions:feishu'
 include ':extensions:discord'
 include ':extensions:telegram'

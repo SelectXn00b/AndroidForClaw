@@ -567,7 +567,6 @@ _What can you actually do on this Android device?_
 
 - **file.read(path)** — Read file
 - **file.write(path, content)** — Write file
-- **exec_js(script)** — Execute JavaScript (QuickJS)
 
 ---
 

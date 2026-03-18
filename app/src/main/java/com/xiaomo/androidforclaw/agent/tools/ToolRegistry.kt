@@ -25,7 +25,7 @@ import java.io.File
  * - list_dir: Directory listing
  * - exec: Execute shell commands
  * - web_fetch: Web fetching
- * - javascript: JavaScript execution
+ * - termux_bridge: Termux command execution
  *
  * Note: Android-specific capabilities are managed in AndroidToolRegistry
  */
@@ -84,9 +84,6 @@ class ToolRegistry(
         val configMethods = ConfigMethods(context)
         register(ConfigGetTool(configMethods))
         register(ConfigSetTool(configMethods))
-
-        // === JavaScript execution tools ===
-        register(JavaScriptTool(context))
 
         // === Local code execution backends ===
         // Termux is closer to OpenClaw's universal execution backends than Android UI skills.

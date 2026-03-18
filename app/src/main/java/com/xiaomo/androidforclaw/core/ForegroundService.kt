@@ -20,7 +20,7 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.draco.ladb.R
-// import com.xiaomo.androidforclaw.ui.activity.QuickJSTestActivity
+
 
 /**
  * Foreground Service - For process keep-alive
