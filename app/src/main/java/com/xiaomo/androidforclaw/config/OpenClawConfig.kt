@@ -199,7 +199,7 @@ data class ModelSelectionConfig(
 // ============ agent（Android 扩展，非 OpenClaw 标准）============
 
 data class AgentConfig(
-    val maxIterations: Int = 20,
+    val maxIterations: Int = 40,
     val defaultModel: String = "openrouter/hunter-alpha",
     val timeout: Long = 300000,
     val retryOnError: Boolean = true,

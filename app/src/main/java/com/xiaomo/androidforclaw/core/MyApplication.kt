@@ -1739,7 +1739,7 @@ class MyApplication : Application(), Application.ActivityLifecycleCallbacks {
                 toolRegistry = toolRegistry,
                 androidToolRegistry = androidToolRegistry,
                 contextManager = contextManager,
-                maxIterations = 20,
+                maxIterations = 40,
                 modelRef = null
             )
 

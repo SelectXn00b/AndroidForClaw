@@ -302,7 +302,7 @@ class ConfigLoader(private val context: Context) {
 
     private fun parseAgentConfig(json: JSONObject): AgentConfig {
         return AgentConfig(
-            maxIterations = json.optInt("maxIterations", 20),
+            maxIterations = json.optInt("maxIterations", 40),
             defaultModel = json.optString("defaultModel", "anthropic/claude-opus-4.6"),
             timeout = json.optLong("timeout", 300000),
             retryOnError = json.optBoolean("retryOnError", true),
