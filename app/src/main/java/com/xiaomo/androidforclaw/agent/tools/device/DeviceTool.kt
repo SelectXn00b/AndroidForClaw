@@ -270,10 +270,10 @@ class DeviceTool(private val context: Context) : Tool {
                 Log.d(TAG, "input text exitCode: $exitCode")
             }
             if (!typed) {
-                return ToolResult.error("Type failed: ClawIME could not commit text (keyboard not active)")
+                return ToolResult.error("Type failed: could not commit text. Make sure ClawIME (built-in input method) is activated, or an input method keyboard is open.")
             }
             val refLabel = (args["ref"] as? String)?.let { refManager.getRefNode(it)?.text }
-            return ToolResult.success("Typed '$text'${refLabel?.let { " into '$it'" } ?: ""}")
+            return ToolResult.success("Typed '${text.take(100)}'${refLabel?.let { " into '$it'" } ?: ""}")
         } catch (e: Exception) {
             return ToolResult.error("Type failed: ${e.message}")
         }

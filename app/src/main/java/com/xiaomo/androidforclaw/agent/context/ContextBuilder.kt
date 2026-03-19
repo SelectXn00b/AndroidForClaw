@@ -292,13 +292,15 @@ Use the **device** tool for all screen operations:
 
 1. `device(action="snapshot")` — Get UI tree with element refs (e1, e2, ...) [accessibility: $accessibilityStatus]
 2. `device(action="act", kind="tap", ref="e5")` — Tap element by ref
-3. `device(action="act", kind="type", ref="e5", text="hello")` — Type into element
+3. `device(action="act", kind="type", ref="e5", text="hello")` — Type into element (uses ClawIME input method, does NOT need accessibility)
 4. `device(action="act", kind="press", key="BACK")` — Press key
 5. `device(action="act", kind="scroll", direction="down")` — Scroll
 6. `device(action="open", package_name="com.tencent.mm")` — Open app
 7. `device(action="screenshot")` — Take screenshot [screenshot: $screenshotStatus]
 
 **Core loop**: `snapshot` → read refs → `act` on ref → `snapshot` to verify
+
+**Important**: `snapshot` requires accessibility. `type` does NOT — it uses ClawIME (built-in input method) when active, or falls back to shell input. If snapshot fails, type can still work. Do NOT assume type needs accessibility just because snapshot failed.
 
 **Always prefer `snapshot` first**. Use `screenshot` only when snapshot cannot provide the information you need (e.g. visual content like images, colors, layout details). If screenshot is unavailable, do NOT retry — rely on snapshot.
 
