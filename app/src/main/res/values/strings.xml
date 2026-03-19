@@ -85,7 +85,7 @@
     <string name="pref_key_verified" translatable="false">verified</string>
 
     <!-- 键盘相关 -->
-    <string name="keyboard_on">ADB Keyboard {ON}</string>
+    <string name="keyboard_on">ClawIME {ON}</string>
     <string name="switch_to_normal_keyboard">Switch to normal keyboard</string>
 
     <!-- Agent相关 -->

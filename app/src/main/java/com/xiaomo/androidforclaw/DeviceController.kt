@@ -68,14 +68,14 @@ object DeviceController {
     }
 
     // 判断当前启用的输入法是否是 ADB Keyboard
-    fun isAdbKeyboardActive(context: Context): Boolean {
+    fun isClawKeyboardActive(context: Context): Boolean {
         val currentInputMethod = Settings.Secure.getString(
             context.contentResolver,
             Settings.Secure.DEFAULT_INPUT_METHOD
         )
         // 3. 检查ADB输入法是否在启用列表中
         val adbInputMethodName =
-            "${context.packageName}/com.xiaomo.androidforclaw.service.AdbIME" // ADB输入法的名称，根据实际情况修改
+            "${context.packageName}/com.xiaomo.androidforclaw.service.ClawIME" // ADB输入法的名称，根据实际情况修改
         return currentInputMethod == adbInputMethodName || currentInputMethod.contains("adbkeyboard")
     }
 
@@ -89,9 +89,9 @@ object DeviceController {
     // 综合判断：是否 ADB 键盘 + 焦点在输入框
     fun isAdbKeyboardVisible(service: AccessibilityService, context: Context): Boolean {
         val focusedNode = findFocusedEditText(service)
-        val isAdbIme = isAdbKeyboardActive(context)
+        val isClawIme = isClawKeyboardActive(context)
         Log.d("ADB键盘判断", "是否焦点在EditText: ${focusedNode != null}")
-        return focusedNode != null && isAdbIme
+        return focusedNode != null && isClawIme
     }
 
 

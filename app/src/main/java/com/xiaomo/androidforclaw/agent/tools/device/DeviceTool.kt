@@ -248,11 +248,11 @@ class DeviceTool(private val context: Context) : Tool {
         // Type text via ADB IME or input text
         try {
             // Try ADB IME first
-            val adbIme = com.xiaomo.androidforclaw.service.AdbIMEManager
+            val clawIme = com.xiaomo.androidforclaw.service.ClawIMEManager
             val typed: Boolean
-            if (adbIme.isAdbImeEnabled(context) && adbIme.isConnected()) {
-                typed = adbIme.inputText(text)
-                Log.d(TAG, "AdbIME.inputText('$text'): $typed")
+            if (clawIme.isClawImeEnabled(context) && clawIme.isConnected()) {
+                typed = clawIme.inputText(text)
+                Log.d(TAG, "ClawIME.inputText('$text'): $typed")
             } else {
                 // Fallback to input text (limited to ASCII)
                 val escaped = text.replace("'", "'\\''")

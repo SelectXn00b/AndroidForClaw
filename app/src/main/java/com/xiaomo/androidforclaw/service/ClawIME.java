@@ -24,7 +24,7 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import com.draco.ladb.R;
 
-public class AdbIME extends InputMethodService {
+public class ClawIME extends InputMethodService {
     private String IME_MESSAGE = "ADB_INPUT_TEXT";
     private String IME_CHARS = "ADB_INPUT_CHARS";
     private String IME_KEYCODE = "ADB_INPUT_CODE";
@@ -37,10 +37,10 @@ public class AdbIME extends InputMethodService {
 
     @Override
     public View onCreateInputView() {
-        View mInputView = getLayoutInflater().inflate(R.layout.adb_keyboard, null);
+        View mInputView = getLayoutInflater().inflate(R.layout.claw_keyboard, null);
 
-        // Register this instance to AdbIMEManager
-        AdbIMEManager.INSTANCE.registerInstance(this);
+        // Register this instance to ClawIMEManager
+        ClawIMEManager.INSTANCE.registerInstance(this);
 
         if (mReceiver == null) {
             IntentFilter filter = new IntentFilter(IME_MESSAGE);
@@ -71,8 +71,8 @@ public class AdbIME extends InputMethodService {
     }
 
     public void onDestroy() {
-        // Unregister from AdbIMEManager
-        AdbIMEManager.INSTANCE.unregisterInstance();
+        // Unregister from ClawIMEManager
+        ClawIMEManager.INSTANCE.unregisterInstance();
 
         if (mReceiver != null)
             unregisterReceiver(mReceiver);
@@ -94,7 +94,7 @@ public class AdbIME extends InputMethodService {
     class AdbReceiver extends BroadcastReceiver {
         @Override
         public void onReceive(Context context, Intent intent) {
-            Log.d("AdbIME", "onReceive: " + intent.getAction());
+            Log.d("ClawIME", "onReceive: " + intent.getAction());
             if (intent.getAction().equals(IME_MESSAGE)) {
                 // normal message
                 String msg = intent.getStringExtra("msg");
@@ -105,7 +105,7 @@ public class AdbIME extends InputMethodService {
                 }
                 // meta codes
                 String metaCodes = intent.getStringExtra("mcode"); // Get message.
-                Log.d("AdbIME", "onReceive: metaCodes = " + metaCodes);
+                Log.d("ClawIME", "onReceive: metaCodes = " + metaCodes);
                 if (metaCodes != null) {
                     String[] mcodes = metaCodes.split(","); // Get mcodes in string.
                     if (mcodes != null) {
@@ -215,24 +215,24 @@ public class AdbIME extends InputMethodService {
 
             // 新增：处理发送消息的广播
             if (intent.getAction().equals(IME_SEND_MESSAGE)) {
-                Log.d("AdbIME", "onReceive: IME_SEND_MESSAGE");
+                Log.d("ClawIME", "onReceive: IME_SEND_MESSAGE");
                 InputConnection ic = getCurrentInputConnection();
                 if (ic != null) {
                     // 先尝试 IME_ACTION_SEND
                     boolean sent = ic.performEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_SEND);
-                    Log.d("AdbIME", "performEditorAction IME_ACTION_SEND: " + sent);
+                    Log.d("ClawIME", "performEditorAction IME_ACTION_SEND: " + sent);
 
                     // 如果失败，再尝试其他常见的发送动作
                     if (!sent) {
                         sent = ic.performEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_GO);
-                        Log.d("AdbIME", "performEditorAction IME_ACTION_GO: " + sent);
+                        Log.d("ClawIME", "performEditorAction IME_ACTION_GO: " + sent);
                     }
 
                     // 如果还是失败，尝试发送回车键
                     if (!sent) {
                         ic.sendKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER));
                         ic.sendKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER));
-                        Log.d("AdbIME", "sendKeyEvent KEYCODE_ENTER as fallback");
+                        Log.d("ClawIME", "sendKeyEvent KEYCODE_ENTER as fallback");
                     }
                 }
             }

@@ -14,34 +14,34 @@ import com.xiaomo.androidforclaw.providers.FunctionDefinition
 import com.xiaomo.androidforclaw.providers.ParametersSchema
 import com.xiaomo.androidforclaw.providers.PropertySchema
 import com.xiaomo.androidforclaw.providers.ToolDefinition
-import com.xiaomo.androidforclaw.service.AdbIMEManager
+import com.xiaomo.androidforclaw.service.ClawIMEManager
 
 /**
- * AdbIME 输入法工具
- * 通过内置 AdbIME 输入法发送文本
+ * ClawIME 输入法工具
+ * 通过内置 ClawIME 输入法发送文本
  *
  * 工作原理:
  * 1. 用户先用 tap() 点击输入框，让其获得焦点
- * 2. 如果 AdbIME 已启用，键盘会自动弹出
- * 3. 调用此工具通过 AdbIMEManager 直接调用 AdbIME 的方法
- * 4. AdbIME 将文本输入到焦点输入框
+ * 2. 如果 ClawIME 已启用，键盘会自动弹出
+ * 3. 调用此工具通过 ClawIMEManager 直接调用 ClawIME 的方法
+ * 4. ClawIME 将文本输入到焦点输入框
  */
-class AdbImeInputSkill(private val context: Context) : Skill {
+class ClawImeInputSkill(private val context: Context) : Skill {
     companion object {
-        private const val TAG = "AdbImeInputSkill"
+        private const val TAG = "ClawImeInputSkill"
     }
 
-    override val name = "adb_ime_input"
+    override val name = "claw_ime_input"
     override val description: String
         get() {
-            val isEnabled = AdbIMEManager.isAdbImeEnabled(context)
-            val isConnected = AdbIMEManager.isConnected()
+            val isEnabled = ClawIMEManager.isClawImeEnabled(context)
+            val isConnected = ClawIMEManager.isConnected()
             val statusNote = when {
-                !isEnabled -> " ⚠️ **不可用** - AdbIME 输入法未启用"
-                !isConnected -> " ⚠️ **不可用** - AdbIME 未连接 (键盘未弹出)"
-                else -> " ✅ AdbIME 已就绪"
+                !isEnabled -> " ⚠️ **不可用** - ClawIME 输入法未启用"
+                !isConnected -> " ⚠️ **不可用** - ClawIME 未连接 (键盘未弹出)"
+                else -> " ✅ ClawIME 已就绪"
             }
-            return "Input text via AdbIME (supports all characters including Chinese)$statusNote"
+            return "Input text via ClawIME (supports all characters including Chinese)$statusNote"
         }
 
     override fun getToolDefinition(): ToolDefinition {
@@ -74,21 +74,21 @@ class AdbImeInputSkill(private val context: Context) : Skill {
             return SkillResult.error("Missing required parameter: text")
         }
 
-        // 检查 AdbIME 是否启用
-        if (!AdbIMEManager.isAdbImeEnabled(context)) {
-            return SkillResult.error("AdbIME 输入法未启用。请先切换到 AdbIME 输入法")
+        // 检查 ClawIME 是否启用
+        if (!ClawIMEManager.isClawImeEnabled(context)) {
+            return SkillResult.error("ClawIME 输入法未启用。请先切换到 ClawIME 输入法")
         }
 
-        // 检查 AdbIME 是否已连接
-        if (!AdbIMEManager.isConnected()) {
-            return SkillResult.error("AdbIME 未连接。请确保已点击输入框并弹出键盘")
+        // 检查 ClawIME 是否已连接
+        if (!ClawIMEManager.isConnected()) {
+            return SkillResult.error("ClawIME 未连接。请确保已点击输入框并弹出键盘")
         }
 
         return try {
             when (action) {
                 "clear" -> {
                     // 清空输入框
-                    val success = AdbIMEManager.clearText()
+                    val success = ClawIMEManager.clearText()
                     if (success) {
                         kotlinx.coroutines.delay(100)
                         SkillResult.success("已清空输入框")
@@ -98,13 +98,13 @@ class AdbImeInputSkill(private val context: Context) : Skill {
                 }
                 "send" -> {
                     // 输入文本并发送
-                    val inputSuccess = AdbIMEManager.inputText(text!!)
+                    val inputSuccess = ClawIMEManager.inputText(text!!)
                     if (!inputSuccess) {
                         return SkillResult.error("输入文本失败")
                     }
                     kotlinx.coroutines.delay(200)
 
-                    val sendSuccess = AdbIMEManager.sendMessage()
+                    val sendSuccess = ClawIMEManager.sendMessage()
                     if (!sendSuccess) {
                         return SkillResult.error("发送消息失败")
                     }
@@ -121,7 +121,7 @@ class AdbImeInputSkill(private val context: Context) : Skill {
                 }
                 else -> {
                     // 仅输入文本
-                    val success = AdbIMEManager.inputText(text!!)
+                    val success = ClawIMEManager.inputText(text!!)
                     if (!success) {
                         return SkillResult.error("输入文本失败")
                     }
@@ -140,7 +140,7 @@ class AdbImeInputSkill(private val context: Context) : Skill {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "AdbIME input failed", e)
+            Log.e(TAG, "ClawIME input failed", e)
             SkillResult.error("输入失败: ${e.message}")
         }
     }

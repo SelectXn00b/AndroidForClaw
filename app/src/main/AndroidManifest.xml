@@ -221,7 +221,7 @@
 
         <!-- 观察能力(UI Tree + Screenshot)已移至独立模块 extensions/observer --> <!-- ADB输入法服务 - 系统级权限 -->
         <service
-            android:name="com.xiaomo.androidforclaw.service.AdbIME"
+            android:name="com.xiaomo.androidforclaw.service.ClawIME"
             android:exported="true"
             android:permission="android.permission.BIND_INPUT_METHOD">
             <intent-filter>

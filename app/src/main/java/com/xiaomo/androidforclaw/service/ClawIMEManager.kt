@@ -14,48 +14,48 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.ExtractedTextRequest
 
 /**
- * AdbIME 管理器
- * 提供对 AdbIME 的直接调用接口,避免使用广播
+ * ClawIME 管理器
+ * 提供对 ClawIME 的直接调用接口,避免使用广播
  *
  * 工作原理:
- * - AdbIME 是同进程的 InputMethodService
- * - 通过单例模式让 AdbIME 注册自己的实例
- * - 其他组件通过此 Manager 直接调用 AdbIME 的方法
+ * - ClawIME 是同进程的 InputMethodService
+ * - 通过单例模式让 ClawIME 注册自己的实例
+ * - 其他组件通过此 Manager 直接调用 ClawIME 的方法
  */
-object AdbIMEManager {
-    private const val TAG = "AdbIMEManager"
+object ClawIMEManager {
+    private const val TAG = "ClawIMEManager"
 
-    // AdbIME 实例引用
-    private var adbImeInstance: AdbIME? = null
+    // ClawIME 实例引用
+    private var clawImeInstance: ClawIME? = null
 
     /**
-     * 注册 AdbIME 实例 (由 AdbIME.onCreateInputView 调用)
+     * 注册 ClawIME 实例 (由 ClawIME.onCreateInputView 调用)
      */
-    fun registerInstance(instance: AdbIME) {
-        adbImeInstance = instance
-        Log.d(TAG, "✓ AdbIME instance registered")
+    fun registerInstance(instance: ClawIME) {
+        clawImeInstance = instance
+        Log.d(TAG, "✓ ClawIME instance registered")
     }
 
     /**
-     * 注销 AdbIME 实例 (由 AdbIME.onDestroy 调用)
+     * 注销 ClawIME 实例 (由 ClawIME.onDestroy 调用)
      */
     fun unregisterInstance() {
-        adbImeInstance = null
-        Log.d(TAG, "✓ AdbIME instance unregistered")
+        clawImeInstance = null
+        Log.d(TAG, "✓ ClawIME instance unregistered")
     }
 
     /**
-     * 检查 AdbIME 是否为当前启用的输入法
+     * 检查 ClawIME 是否为当前启用的输入法
      */
-    fun isAdbImeEnabled(context: Context): Boolean {
+    fun isClawImeEnabled(context: Context): Boolean {
         return try {
             val currentIme = Settings.Secure.getString(
                 context.contentResolver,
                 Settings.Secure.DEFAULT_INPUT_METHOD
             )
-            val adbImeName = "${context.packageName}/com.xiaomo.androidforclaw.service.AdbIME"
-            val isEnabled = currentIme == adbImeName
-            Log.d(TAG, "Current IME: $currentIme, AdbIME enabled: $isEnabled")
+            val clawImeName = "${context.packageName}/com.xiaomo.androidforclaw.service.ClawIME"
+            val isEnabled = currentIme == clawImeName
+            Log.d(TAG, "Current IME: $currentIme, ClawIME enabled: $isEnabled")
             isEnabled
         } catch (e: Exception) {
             Log.e(TAG, "Failed to check IME status", e)
@@ -64,10 +64,10 @@ object AdbIMEManager {
     }
 
     /**
-     * 检查 AdbIME 是否已连接 (实例存在且有输入连接)
+     * 检查 ClawIME 是否已连接 (实例存在且有输入连接)
      */
     fun isConnected(): Boolean {
-        val connected = adbImeInstance?.currentInputConnection != null
+        val connected = clawImeInstance?.currentInputConnection != null
         Log.d(TAG, "isConnected: $connected")
         return connected
     }
@@ -76,9 +76,9 @@ object AdbIMEManager {
      * 输入文本
      */
     fun inputText(text: String): Boolean {
-        val ime = adbImeInstance
+        val ime = clawImeInstance
         if (ime == null) {
-            Log.e(TAG, "AdbIME instance not available")
+            Log.e(TAG, "ClawIME instance not available")
             return false
         }
 
@@ -102,9 +102,9 @@ object AdbIMEManager {
      * 清空输入框
      */
     fun clearText(): Boolean {
-        val ime = adbImeInstance
+        val ime = clawImeInstance
         if (ime == null) {
-            Log.e(TAG, "AdbIME instance not available")
+            Log.e(TAG, "ClawIME instance not available")
             return false
         }
 
@@ -134,9 +134,9 @@ object AdbIMEManager {
      * 发送消息 (执行编辑器动作或回车)
      */
     fun sendMessage(): Boolean {
-        val ime = adbImeInstance
+        val ime = clawImeInstance
         if (ime == null) {
-            Log.e(TAG, "AdbIME instance not available")
+            Log.e(TAG, "ClawIME instance not available")
             return false
         }
 
@@ -176,9 +176,9 @@ object AdbIMEManager {
      * 发送按键事件
      */
     fun sendKey(keyCode: Int): Boolean {
-        val ime = adbImeInstance
+        val ime = clawImeInstance
         if (ime == null) {
-            Log.e(TAG, "AdbIME instance not available")
+            Log.e(TAG, "ClawIME instance not available")
             return false
         }
 
