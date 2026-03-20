@@ -241,6 +241,20 @@ class ModelConfigActivity : AppCompatActivity() {
             }
         } catch (_: Exception) {}
 
+        // Load saved config for this provider (if exists)
+        var savedBaseUrl: String? = null
+        var savedApi: String? = null
+        var savedModels: List<com.xiaomo.androidforclaw.config.ModelDefinition>? = null
+        try {
+            val config = configLoader.loadOpenClawConfig()
+            val existingProvider = config.resolveProviders()[provider.id]
+            if (existingProvider != null) {
+                savedBaseUrl = existingProvider.baseUrl
+                savedApi = existingProvider.api
+                savedModels = existingProvider.models
+            }
+        } catch (_: Exception) {}
+
         // Tutorial
         if (provider.tutorialSteps.isNotEmpty()) {
             binding.cardTutorial.visibility = View.VISIBLE
@@ -261,9 +275,29 @@ class ModelConfigActivity : AppCompatActivity() {
             binding.cardTutorial.visibility = View.GONE
         }
 
-        // Preset models
+        // Preset models + saved models from config
         discoveredModels.clear()
-        buildModelRadioGroup(provider.presetModels)
+        val allModels = provider.presetModels.toMutableList()
+        if (savedModels != null) {
+            val presetIds = allModels.map { it.id }.toSet()
+            for (m in savedModels) {
+                if (m.id !in presetIds) {
+                    allModels.add(PresetModel(
+                        id = m.id,
+                        name = m.id,
+                        reasoning = m.reasoning,
+                        free = false
+                    ))
+                    discoveredModels.add(PresetModel(
+                        id = m.id,
+                        name = m.id,
+                        reasoning = m.reasoning,
+                        free = false
+                    ))
+                }
+            }
+        }
+        buildModelRadioGroup(allModels)
 
         // Discovery button
         if (provider.supportsDiscovery) {
@@ -276,10 +310,10 @@ class ModelConfigActivity : AppCompatActivity() {
         // Manual add button
         binding.btnAddModel.setOnClickListener { showAddModelDialog() }
 
-        // Advanced section
-        advancedExpanded = false
-        binding.layoutAdvanced.visibility = View.GONE
-        binding.ivAdvancedArrow.rotation = 0f
+        // Advanced section — auto-expand if user customized baseUrl
+        advancedExpanded = savedBaseUrl != null && savedBaseUrl != provider.baseUrl
+        binding.layoutAdvanced.visibility = if (advancedExpanded) View.VISIBLE else View.GONE
+        binding.ivAdvancedArrow.rotation = if (advancedExpanded) 180f else 0f
 
         binding.cardAdvancedToggle.setOnClickListener {
             advancedExpanded = !advancedExpanded
@@ -291,14 +325,15 @@ class ModelConfigActivity : AppCompatActivity() {
                 .start()
         }
 
-        // Base URL (pre-filled)
-        binding.etBaseUrl.setText(provider.baseUrl)
+        // Base URL: prefer saved config over preset
+        binding.etBaseUrl.setText(savedBaseUrl ?: provider.baseUrl)
 
-        // API type dropdown
+        // API type dropdown: prefer saved config over preset
         val apiTypeLabels = ProviderRegistry.CUSTOM_API_TYPES.map { it.second }
         val apiTypeAdapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, apiTypeLabels)
         binding.dropdownApiType.setAdapter(apiTypeAdapter)
-        val currentApiIndex = ProviderRegistry.CUSTOM_API_TYPES.indexOfFirst { it.first == provider.api }
+        val effectiveApi = savedApi ?: provider.api
+        val currentApiIndex = ProviderRegistry.CUSTOM_API_TYPES.indexOfFirst { it.first == effectiveApi }
         if (currentApiIndex >= 0) {
             binding.dropdownApiType.setText(apiTypeLabels[currentApiIndex], false)
         }
