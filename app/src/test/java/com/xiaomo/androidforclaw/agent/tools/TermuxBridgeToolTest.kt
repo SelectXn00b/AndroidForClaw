@@ -23,9 +23,9 @@ class TermuxBridgeToolTest {
 
     private fun termuxInstalled(installed: Boolean = true) {
         if (installed) {
-            every { pm.getPackageInfo("com.termux", any<Int>()) } returns PackageInfo()
+            every { pm.getPackageInfo("com.termux", ofType(Int::class)) } returns PackageInfo()
         } else {
-            every { pm.getPackageInfo("com.termux", any<Int>()) } throws PackageManager.NameNotFoundException()
+            every { pm.getPackageInfo("com.termux", ofType(Int::class)) } throws PackageManager.NameNotFoundException()
         }
     }
 
