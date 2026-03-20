@@ -954,9 +954,19 @@ class MyApplication : Application(), Application.ActivityLifecycleCallbacks {
                 Log.d(TAG, "✅ Final reply already sent via block reply, skipping")
             } else {
                 // Strip leaked model control tokens before sending to user (OpenClaw 2026.3.11)
-                val sanitizedResponse = com.xiaomo.androidforclaw.agent.session.HistorySanitizer
+                var sanitizedResponse = com.xiaomo.androidforclaw.agent.session.HistorySanitizer
                     .stripControlTokensFromText(response)
-                sendFeishuReply(event, sanitizedResponse)
+                // Strip trailing NO_REPLY / HEARTBEAT_OK from mixed content
+                // Aligned with OpenClaw stripSilentToken(): (?:^|\s+|\*+)NO_REPLY\s*$
+                sanitizedResponse = sanitizedResponse
+                    .replace(Regex("(?:^|\\s+|\\*+)NO_REPLY\\s*$"), "")
+                    .replace(Regex("(?:^|\\s+|\\*+)HEARTBEAT_OK\\s*$"), "")
+                    .trim()
+                if (sanitizedResponse.isNotBlank()) {
+                    sendFeishuReply(event, sanitizedResponse)
+                } else {
+                    Log.d(TAG, "🔕 Response became empty after stripping silent tokens, skipping reply")
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "处理飞书消息失败", e)
@@ -989,23 +999,27 @@ class MyApplication : Application(), Application.ActivityLifecycleCallbacks {
         response: String,
         queuedMessage: MessageQueueManager.QueuedMessage
     ): Boolean {
-        // 1. Check if response is a silent reply (aligned with OpenClaw SILENT_REPLY_TOKEN = "NO_REPLY")
+        // 1. Check if response is a silent reply
+        // Aligned with OpenClaw isSilentReplyText(): exact match only (^\s*NO_REPLY\s*$)
         val trimmed = response.trim()
-        if (trimmed.equals(ContextBuilder.SILENT_REPLY_TOKEN, ignoreCase = true) ||
-            trimmed.startsWith(ContextBuilder.SILENT_REPLY_TOKEN, ignoreCase = true) ||
-            trimmed.endsWith(ContextBuilder.SILENT_REPLY_TOKEN, ignoreCase = true) ||
-            trimmed.contains("[noReply]", ignoreCase = true)) {
-            Log.d(TAG, "Silent reply detected, skipping: ${trimmed.take(50)}")
+        if (trimmed.equals(ContextBuilder.SILENT_REPLY_TOKEN, ignoreCase = false)) {
+            Log.d(TAG, "Silent reply detected (exact match): NO_REPLY")
             return true
         }
 
-        // 2. Check if response is empty
+        // 2. Check HEARTBEAT_OK (exact match only, aligned with OpenClaw HEARTBEAT_TOKEN)
+        if (trimmed.equals("HEARTBEAT_OK", ignoreCase = false)) {
+            Log.d(TAG, "Heartbeat ack detected, skipping reply")
+            return true
+        }
+
+        // 3. Check if response is empty
         if (response.isBlank()) {
             Log.d(TAG, "Response is empty, skipping reply")
             return true
         }
 
-        // 3. Check batch message metadata
+        // 4. Check batch message metadata
         val isBatch = queuedMessage.metadata["isBatch"] as? Boolean ?: false
         if (isBatch) {
             val noReplyFlag = queuedMessage.metadata["noReply"] as? Boolean ?: false
