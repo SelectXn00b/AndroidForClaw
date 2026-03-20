@@ -791,7 +791,17 @@ class ConfigLoader(private val context: Context) {
             if (value != null) {
                 result = result.replace("\${$varName}", value)
             } else {
-                Log.w(TAG, "⚠️ 环境变量未找到: \${$varName}")
+                // Fallback: use built-in key for known providers on Android
+                val builtInValue = when (varName) {
+                    "OPENROUTER_API_KEY" -> BuiltInKeyProvider.getKey()
+                    else -> null
+                }
+                if (builtInValue != null) {
+                    result = result.replace("\${$varName}", builtInValue)
+                    Log.i(TAG, "🔑 使用内置 Key 替换: \${$varName}")
+                } else {
+                    Log.w(TAG, "⚠️ 环境变量未找到: \${$varName}")
+                }
             }
         }
         return result
