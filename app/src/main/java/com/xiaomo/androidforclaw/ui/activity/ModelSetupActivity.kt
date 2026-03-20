@@ -162,13 +162,13 @@ class ModelSetupActivity : AppCompatActivity() {
     private fun setupDefaultMode() {
         binding.tilModel.visibility = View.GONE
 
-        // 默认显示小米 MiMo 提示
-        applyProviderPreset("xiaomi")
+        // 默认显示 OpenRouter 提示
+        applyProviderPreset("openrouter")
 
-        // "打开 xiaomimimo.com" link
+        // "打开 openrouter.com" link
         binding.tvOpenOpenrouter.setOnClickListener {
             try {
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://platform.xiaomimimo.com/#/console/api-keys")))
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://openrouter.ai/keys")))
             } catch (e: Exception) {
                 Toast.makeText(this, "无法打开浏览器", Toast.LENGTH_SHORT).show()
             }
@@ -185,13 +185,13 @@ class ModelSetupActivity : AppCompatActivity() {
             binding.tvAdvanced.text = if (advancedExpanded) {
                 "⚙️ 收起高级选项"
             } else {
-                "⚙️ 使用其他服务商（Google / Anthropic / OpenAI / 自定义）"
+                "⚙️ 使用其他服务商（小米 MiMo / Google / Anthropic / OpenAI / 自定义）"
             }
 
-            // If collapsing, reset to MiMo
-            if (!advancedExpanded && selectedProvider != "xiaomi") {
-                selectedProvider = "xiaomi"
-                applyProviderPreset("xiaomi")
+            // If collapsing, reset to OpenRouter
+            if (!advancedExpanded && selectedProvider != "openrouter") {
+                selectedProvider = "openrouter"
+                applyProviderPreset("openrouter")
             }
         }
     }
@@ -199,12 +199,13 @@ class ModelSetupActivity : AppCompatActivity() {
     private fun setupProviderSelection() {
         binding.chipGroupProvider.setOnCheckedStateChangeListener { _, checkedIds ->
             val provider = when {
+                checkedIds.contains(R.id.chip_openrouter) -> "openrouter"
                 checkedIds.contains(R.id.chip_mimo) -> "xiaomi"
                 checkedIds.contains(R.id.chip_google) -> "google"
                 checkedIds.contains(R.id.chip_anthropic) -> "anthropic"
                 checkedIds.contains(R.id.chip_openai) -> "openai"
                 checkedIds.contains(R.id.chip_custom) -> "custom"
-                else -> "xiaomi"
+                else -> "openrouter"
             }
             selectedProvider = provider
             applyProviderPreset(provider)
@@ -279,9 +280,9 @@ class ModelSetupActivity : AppCompatActivity() {
     }
 
     private fun saveDefaultAndFinish() {
-        selectedProvider = "xiaomi"
+        selectedProvider = "openrouter"
         advancedExpanded = false
-        applyProviderPreset("xiaomi")
+        applyProviderPreset("openrouter")
         binding.etSetupApiKey.setText("")
         saveAndFinish()
     }
