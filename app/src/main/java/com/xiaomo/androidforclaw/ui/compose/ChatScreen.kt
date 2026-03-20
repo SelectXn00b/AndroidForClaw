@@ -27,6 +27,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -93,6 +94,7 @@ fun ChatScreen(
     currentSession: SessionManager.Session? = null,
     onSessionChange: (String) -> Unit = {},
     onNewSession: () -> Unit = {},
+    onDeleteSession: ((String) -> Unit)? = null,
     onCheckUpdate: (() -> Unit)? = null
 ) {
     var inputText by remember { mutableStateOf("") }
@@ -133,6 +135,7 @@ fun ChatScreen(
                 currentSession = currentSession,
                 onSessionChange = onSessionChange,
                 onNewSession = onNewSession,
+                onDeleteSession = onDeleteSession,
                 onCheckUpdate = onCheckUpdate,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -685,6 +688,7 @@ fun SessionControlBar(
     currentSession: SessionManager.Session?,
     onSessionChange: (String) -> Unit,
     onNewSession: () -> Unit,
+    onDeleteSession: ((String) -> Unit)? = null,
     onCheckUpdate: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -746,21 +750,41 @@ fun SessionControlBar(
                     sessions.forEach { session ->
                         DropdownMenuItem(
                             text = {
-                                Column {
-                                    Text(
-                                        text = session.title,
-                                        style = TextStyle(
-                                            fontSize = 14.sp,
-                                            fontWeight = if (session.id == currentSession?.id)
-                                                FontWeight.Bold else FontWeight.Normal
-                                        ),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = formatSessionTime(session.createdAt),
-                                        style = TextStyle(fontSize = 11.sp, color = Color(0xFF999999))
-                                    )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = session.title,
+                                            style = TextStyle(
+                                                fontSize = 14.sp,
+                                                fontWeight = if (session.id == currentSession?.id)
+                                                    FontWeight.Bold else FontWeight.Normal
+                                            ),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = formatSessionTime(session.createdAt),
+                                            style = TextStyle(fontSize = 11.sp, color = Color(0xFF999999))
+                                        )
+                                    }
+                                    if (onDeleteSession != null && sessions.size > 1) {
+                                        IconButton(
+                                            onClick = {
+                                                onDeleteSession(session.id)
+                                            },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = "删除会话",
+                                                tint = Color(0xFF999999),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             },
                             onClick = {

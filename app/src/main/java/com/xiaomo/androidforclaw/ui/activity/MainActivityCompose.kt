@@ -157,6 +157,14 @@ class MainActivityCompose : ComponentActivity() {
             startActivity(Intent(this, ModelSetupActivity::class.java))
         }
 
+        // Auto-prune old sessions (>30 days) on startup
+        lifecycleScope.launch {
+            try {
+                val sessionManager = com.xiaomo.androidforclaw.core.MainEntryNew.getSessionManager()
+                sessionManager?.pruneOldSessions()
+            } catch (_: Exception) {}
+        }
+
         setContent {
             // Save ViewModel reference for BroadcastReceiver use
             val viewModel: ChatViewModel = viewModel()
@@ -419,6 +427,9 @@ fun ChatTab(chatViewModel: ChatViewModel) {
         },
         onNewSession = {
             chatViewModel.createNewSession()
+        },
+        onDeleteSession = { sessionId ->
+            chatViewModel.deleteSession(sessionId)
         },
         onCheckUpdate = {
             // Trigger manual update check with toast feedback
