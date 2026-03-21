@@ -72,7 +72,12 @@ class DeviceTool(private val context: Context) : Tool {
                         ),
                         "coordinate" to PropertySchema(
                             type = "array",
-                            description = "Fallback [x, y] coordinate when ref not available",
+                            description = "Fallback [x, y] coordinate when ref not available. For swipe: end coordinate.",
+                            items = PropertySchema(type = "integer", description = "coordinate value")
+                        ),
+                        "start_coordinate" to PropertySchema(
+                            type = "array",
+                            description = "Start [x, y] coordinate for swipe gesture",
                             items = PropertySchema(type = "integer", description = "coordinate value")
                         ),
                         "direction" to PropertySchema(
