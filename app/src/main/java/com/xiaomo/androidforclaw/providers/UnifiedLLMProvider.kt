@@ -6,7 +6,7 @@ package com.xiaomo.androidforclaw.providers
  * - ../openclaw/src/agents/pi-embedded-runner/run/payloads.ts (request payload construction)
  * - ../openclaw/src/agents/pi-embedded-payloads.ts (provider-specific payload formatting)
  *
- * Note: pi-embedded-runner.ts is a barrel re-export; actual logic is in pi-embedded-runner/run/*.ts
+ * Note: pi-embedded-runner.ts is a barrel re-export; actual logic is in pi-embedded-runner/run/attempt.ts etc.
  *
  * AndroidForClaw adaptation: unified provider dispatch for Android (non-streaming batch calls).
  */
@@ -478,5 +478,5 @@ data class LLMUsage(
 )
 
 /**
- * LLM 异常
+ * LLM 异常 — 参见 LLMException.kt
  */
