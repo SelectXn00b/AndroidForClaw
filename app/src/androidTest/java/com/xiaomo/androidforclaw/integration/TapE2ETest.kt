@@ -29,34 +29,6 @@ class TapE2ETest {
     }
 
     @Test
-    fun test01_accessibilityEnabled() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val enabled = android.provider.Settings.Secure.getInt(
-            context.contentResolver,
-            android.provider.Settings.Secure.ACCESSIBILITY_ENABLED,
-            0
-        ) == 1
-        Log.i(TAG, "System accessibility enabled: $enabled")
-
-        val services = android.provider.Settings.Secure.getString(
-            context.contentResolver,
-            android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: ""
-        val ourServiceName = "com.xiaomo.androidforclaw/com.xiaomo.androidforclaw.accessibility.service.PhoneAccessibilityService"
-        val ourServiceEnabled = services.contains(ourServiceName)
-        Log.i(TAG, "Our service in enabled list: $ourServiceEnabled")
-        Log.i(TAG, "Enabled services: $services")
-
-        if (!enabled || !ourServiceEnabled) {
-            Log.w(TAG, "⚠️ 无障碍服务未完全启用！")
-            Log.w(TAG, "   需要在系统设置中开启无障碍服务")
-            Log.w(TAG, "   或执行：adb shell settings put secure accessibility_enabled 1")
-        }
-
-        Log.i(TAG, "=== test01 result: enabled=$enabled, serviceRegistered=$ourServiceEnabled ===")
-    }
-
-    @Test
     fun test02_tapSkillParamValidation() {
         kotlinx.coroutines.runBlocking {
             val skill = com.xiaomo.androidforclaw.agent.tools.TapSkill()
@@ -75,51 +47,4 @@ class TapE2ETest {
         }
     }
 
-    @Test
-    fun test03_mainAppServiceStatusFile() {
-        // 检查主 app 进程写的状态文件
-        val statusFile = java.io.File("/sdcard/.androidforclaw/termux_setup_status.json")
-        if (statusFile.exists()) {
-            Log.i(TAG, "Status file exists: ${statusFile.readText().take(200)}")
-        } else {
-            Log.i(TAG, "Status file not found (app may not have run getStatus yet)")
-        }
-
-        // 检查 serviceInstance 状态
-        val serviceAvailable = com.xiaomo.androidforclaw.accessibility.service.AccessibilityBinderService.serviceInstance != null
-        Log.i(TAG, "AccessibilityBinderService.serviceInstance available (from test process): $serviceAvailable")
-        Log.i(TAG, "Note: serviceInstance=null in test process is EXPECTED (same-process only)")
-        Log.i(TAG, "=== test03 result: serviceAvailable=$serviceAvailable ===")
-    }
-
-    @Test
-    fun test04_fullSummary() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val enabled = android.provider.Settings.Secure.getInt(
-            context.contentResolver,
-            android.provider.Settings.Secure.ACCESSIBILITY_ENABLED,
-            0
-        ) == 1
-        val services = android.provider.Settings.Secure.getString(
-            context.contentResolver,
-            android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: ""
-        val ourServiceEnabled = services.contains("PhoneAccessibilityService")
-
-        val summary = buildString {
-            appendLine("=== Tap E2E Summary ===")
-            appendLine("System accessibility ON: $enabled")
-            appendLine("Our service registered: $ourServiceEnabled")
-            appendLine("NOTE: Tap can only be verified from main app process")
-            appendLine("      (test process gets its own AccessibilityBinderService instance)")
-            appendLine("      Use ADB broadcast or in-app chat to verify tap works")
-            appendLine("=======================")
-        }
-        Log.i(TAG, summary)
-
-        // 至少确保系统设置正确
-        if (!enabled || !ourServiceEnabled) {
-            Log.e(TAG, "FAIL: Accessibility not properly configured on this device!")
-        }
-    }
 }

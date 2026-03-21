@@ -155,26 +155,4 @@ class TermuxAutoSetupE2ETest {
         }
     }
 
-    @Test
-    fun test06_fullChainSummary() {
-        val status = bridge.getStatus()
-        val summary = buildString {
-            appendLine("=== Termux Auto-Setup E2E Summary ===")
-            appendLine("Termux installed: ${status.termuxInstalled}")
-            appendLine("Termux:API installed: ${status.termuxApiInstalled}")
-            appendLine("RUN_COMMAND permission: ${status.runCommandPermissionDeclared}")
-            appendLine("RUN_COMMAND service: ${status.runCommandServiceAvailable}")
-            appendLine("SSH keypair: ${status.keypairPresent}")
-            appendLine("SSH reachable (8022): ${status.sshReachable}")
-            appendLine("SSH config: ${status.sshConfigPresent}")
-            appendLine("Current step: ${status.lastStep}")
-            appendLine("Message: ${status.message}")
-            appendLine("READY: ${status.ready}")
-            appendLine("=====================================")
-        }
-        Log.i(TAG, summary)
-
-        // 至少状态检测本身不应该崩
-        assertNotNull(status)
-    }
 }

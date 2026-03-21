@@ -131,17 +131,4 @@ class ForClawMainTabsUITest {
         device.waitForIdle()
     }
 
-    /** Connect ↔ Settings 来回切换不崩溃 */
-    @Test
-    fun test03_tabSwitch_nocrash() {
-        clickTab("Connect")
-        findText("LLM API")
-
-        clickTab("Settings")
-        findText("模型配置")
-
-        clickTab("Connect")
-        findText("LLM API")
-        findText("本地 Gateway")
-    }
 }

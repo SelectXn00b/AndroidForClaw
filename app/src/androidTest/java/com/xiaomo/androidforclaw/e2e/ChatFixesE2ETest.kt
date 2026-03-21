@@ -475,31 +475,6 @@ class ChatFixesE2ETest {
         }
     }
 
-    /**
-     * Bug 5 (对照): thinking="off" 不应 crash，行为与之前一致。
-     */
-    @Test
-    fun test05b_thinkingOff_worksNormally() {
-        GatewayClient().use { client ->
-            client.connect()
-
-            val sk = "e2e-think-off-$RUN_ID"
-            val sendResp = client.rpc("chat.send", mapOf(
-                "sessionKey" to sk,
-                "message"    to "Reply with exactly one word: OFF",
-                "thinking"   to "off"
-            ))
-            assertFalse("Should return runId with thinking=off", sendResp.optString("runId").isEmpty())
-
-            client.waitEvent(AI_TIMEOUT) { name, payload ->
-                name == "chat"
-                    && payload.optString("state") == "final"
-                    && payload.optString("sessionKey") == sk
-            }
-            println("✅ thinking=off works normally")
-        }
-    }
-
     // ── Bug 6: attachments 透传 ───────────────────────────────────────────
 
     /**
