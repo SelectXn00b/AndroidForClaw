@@ -16,8 +16,8 @@ import androidx.lifecycle.lifecycleScope
 import com.xiaomo.androidforclaw.core.MyApplication
 import com.xiaomo.androidforclaw.accessibility.AccessibilityProxy
 import com.xiaomo.androidforclaw.util.MMKVKeys
-import com.draco.ladb.R
-import com.draco.ladb.databinding.ActivityMainBinding
+import com.xiaomo.androidforclaw.R
+import com.xiaomo.androidforclaw.databinding.ActivityMainBinding
 import com.tencent.mmkv.MMKV
 import kotlinx.coroutines.launch
 import com.xiaomo.androidforclaw.agent.skills.SkillsLoader

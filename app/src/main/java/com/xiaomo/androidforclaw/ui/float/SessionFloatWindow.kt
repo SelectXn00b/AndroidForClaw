@@ -13,7 +13,7 @@ import android.widget.TextView
 import com.lzf.easyfloat.EasyFloat
 import com.lzf.easyfloat.enums.ShowPattern
 import com.lzf.easyfloat.enums.SidePattern
-import com.draco.ladb.R
+import com.xiaomo.androidforclaw.R
 import com.xiaomo.androidforclaw.util.MMKVKeys
 import com.tencent.mmkv.MMKV
 

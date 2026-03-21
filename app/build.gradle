@@ -1,6 +1,7 @@
 plugins {
     id 'com.android.application'
     id 'kotlin-android'
+    id 'org.jetbrains.kotlin.plugin.compose'
     id 'com.google.android.gms.oss-licenses-plugin'
     id 'kotlin-parcelize'
 }
@@ -33,12 +34,12 @@ android {
             enableV4Signing true
         }
     }
-    compileSdk 34
+    compileSdk 36
 
     defaultConfig {
         applicationId "com.xiaomo.androidforclaw"
-        minSdk 26
-        targetSdk 34
+        minSdk 31
+        targetSdk 36
         versionCode 11
         versionName "1.0.9"
 
@@ -73,7 +74,6 @@ android {
             buildConfigField 'Boolean', 'IS_SYSTEM_APP', 'true'
             buildConfigField 'String', 'BUILD_VARIANT', '"release"'
             buildConfigField 'Boolean', 'SKIP_PERMISSION_REQUEST', 'false'  // Release版本正常请求权限
-            
             // 使用release版本的AndroidManifest（具有systemuid）
             manifestPlaceholders = [
                 useSystemUid: "true",
@@ -92,7 +92,6 @@ android {
             buildConfigField 'Boolean', 'IS_SYSTEM_APP', 'false'
             buildConfigField 'String', 'BUILD_VARIANT', '"debug"'
             buildConfigField 'Boolean', 'SKIP_PERMISSION_REQUEST', 'true'  // Debug版本跳过权限请求页面
-
             // 使用debug版本的AndroidManifest（不使用systemuid）
             manifestPlaceholders = [
                 useSystemUid: "false",
@@ -110,7 +109,6 @@ android {
         jvmTarget = '17'
     }
 
-
     packagingOptions {
         jniLibs {
             useLegacyPackaging = true
@@ -127,7 +125,9 @@ android {
                 'META-INF/NOTICE.md',
                 'META-INF/ASL2.0',
                 'META-INF/*.kotlin_module',
-                'META-INF/versions/9/OSGI-INF/MANIFEST.MF'
+                'META-INF/versions/9/OSGI-INF/MANIFEST.MF',
+                // dnsjava InetAddress resolver (conflict with openclaw-android)
+                'META-INF/services/java.net.spi.InetAddressResolverProvider'
             ]
         }
     }
@@ -136,13 +136,10 @@ android {
         viewBinding true
         compose true
         aidl = true
+        buildConfig true
     }
 
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.4.6"  // 匹配 Kotlin 1.8.20
-    }
-
-    namespace 'com.draco.ladb'
+    namespace 'com.xiaomo.androidforclaw'
 
     // 配置 APK 输出路径到根目录的 releases/
     applicationVariants.all { variant ->
@@ -178,45 +175,51 @@ configurations.all {
     resolutionStrategy {
         // 强制所有模块使用完整版protobuf-java
         force 'com.google.protobuf:protobuf-java:3.25.5'
+        // Espresso 3.7.0-alpha02 需要 androidx.test:core:1.7.0-alpha02（修复了 API 36 InputManager 问题）
+        force 'androidx.test:core:1.7.0-alpha02'
+        force 'androidx.test:monitor:1.7.0-alpha02'
     }
+    // 排除旧版 kotlin-android-extensions-runtime (已被 parcelize-runtime 替代)
+    exclude group: 'org.jetbrains.kotlin', module: 'kotlin-android-extensions-runtime'
 }
 
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
-    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4'
-//    implementation "org.jetbrains.kotlinx:kotlinx-parcelize-runtime:$kotlin_version"
-    implementation 'androidx.core:core-ktx:1.10.1'
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'androidx.preference:preference-ktx:1.2.0'
-    implementation 'androidx.fragment:fragment-ktx:1.6.0'
-    implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.1'
-    implementation 'androidx.lifecycle:lifecycle-livedata-ktx:2.6.1'
-    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.6.1'
-    implementation 'com.squareup.okhttp3:okhttp:4.9.1'
-    implementation 'com.squareup.okhttp3:logging-interceptor:4.9.1'
-    implementation 'com.squareup.okhttp3:okhttp-sse:4.9.1'
+    implementation 'androidx.localbroadcastmanager:localbroadcastmanager:1.1.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2'
+    implementation 'androidx.core:core-ktx:1.17.0'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.preference:preference-ktx:1.2.1'
+    implementation 'androidx.fragment:fragment-ktx:1.8.6'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.10.0'
+    implementation 'androidx.lifecycle:lifecycle-livedata-ktx:2.10.0'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.10.0'
+    implementation 'com.squareup.okhttp3:okhttp:5.3.2'
+    implementation 'com.squareup.okhttp3:logging-interceptor:5.3.2'
+    implementation 'com.squareup.okhttp3:okhttp-sse:5.3.2'
     implementation 'com.github.javiersantos:PiracyChecker:1.2.8'
-    implementation 'com.github.bumptech.glide:glide:4.12.0'
-    annotationProcessor 'com.github.bumptech.glide:compiler:4.12.0'
-    implementation 'com.google.android.material:material:1.9.0'
+    implementation 'com.github.bumptech.glide:glide:4.16.0'
+    implementation 'com.google.android.material:material:1.13.0'
     implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
-    implementation 'com.google.android.gms:play-services-oss-licenses:17.0.1'
-    implementation "com.squareup.retrofit2:retrofit:2.6.0"
-    implementation "com.squareup.retrofit2:converter-gson:2.4.0"
+    implementation 'com.google.android.gms:play-services-oss-licenses:17.1.0'
+    implementation "com.squareup.retrofit2:retrofit:2.11.0"
+    implementation "com.squareup.retrofit2:converter-gson:2.11.0"
     implementation 'com.jakewharton.retrofit:retrofit2-kotlin-coroutines-adapter:0.9.2'
     implementation 'org.nanohttpd:nanohttpd:2.3.1'
     implementation 'org.nanohttpd:nanohttpd-websocket:2.3.1'
-    implementation 'io.noties.markwon:core:4.6.2'
-    implementation 'com.squareup.retrofit2:converter-scalars:2.9.0'
-    implementation 'com.tencent:mmkv-static:1.3.1'
+    implementation('io.noties.markwon:core:4.6.2') {
+        exclude group: 'com.atlassian.commonmark', module: 'commonmark'
+    }
+    implementation 'com.squareup.retrofit2:converter-scalars:2.11.0'
+    implementation 'com.tencent:mmkv-static:1.3.9'
 
     // ========== WorkManager (定时任务) ==========
-    implementation 'androidx.work:work-runtime-ktx:2.8.1'
+    implementation 'androidx.work:work-runtime-ktx:2.10.1'
 
     // ========== SSH (Termux bridge) ==========
     implementation 'com.hierynomus:sshj:0.38.0'
-    implementation 'org.bouncycastle:bcprov-jdk18on:1.78.1'
-    implementation 'org.bouncycastle:bcpkix-jdk18on:1.78.1'
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.83'
+    implementation 'org.bouncycastle:bcpkix-jdk18on:1.83'
 
     // ========== EasyFloat 悬浮窗 ==========
     implementation 'com.github.princekin-f:EasyFloat:2.0.4'
@@ -233,39 +236,38 @@ dependencies {
     // ========== Self-Control Module ==========
     implementation project(':self-control')
 
-    // ========== Jetpack Compose 依赖 (匹配 Kotlin 1.8.20) ==========
-    def compose_version = "1.4.3"
-    implementation "androidx.compose.ui:ui:$compose_version"
-    implementation "androidx.compose.material3:material3:1.1.0"
-    implementation "androidx.compose.ui:ui-tooling-preview:$compose_version"
-    implementation "androidx.activity:activity-compose:1.7.2"
-    implementation "androidx.lifecycle:lifecycle-viewmodel-compose:2.6.1"
-    implementation "androidx.compose.material:material-icons-extended:$compose_version"
-    implementation "androidx.compose.foundation:foundation:$compose_version"
+    // ========== OpenClaw Android Module ==========
+    implementation project(':openclaw-android')
 
-    debugImplementation "androidx.compose.ui:ui-tooling:$compose_version"
-    debugImplementation "androidx.compose.ui:ui-test-manifest:$compose_version"
+    // ========== Jetpack Compose (BOM 统一版本管理) ==========
+    implementation platform('androidx.compose:compose-bom:2026.02.00')
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.compose.ui:ui-tooling-preview'
+    implementation 'androidx.activity:activity-compose:1.12.2'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0'
+    implementation 'androidx.compose.material:material-icons-extended'
+    implementation 'androidx.compose.foundation:foundation'
 
-        // ========== LangChain4j 依赖（独立 module）==========
-    // 注释掉：新架构不再使用 LangChain4j，使用 LegacyProvider 替代
-    // api project(':langchain4j-android')
+    debugImplementation 'androidx.compose.ui:ui-tooling'
+    debugImplementation 'androidx.compose.ui:ui-test-manifest'
 
     // ========================================
 
     // 基本：JUnit4（必需）
     testImplementation 'junit:junit:4.13.2'
     // Kotlin 测试断言（可选）
-    testImplementation "org.jetbrains.kotlin:kotlin-test:1.9.10"
+    testImplementation "org.jetbrains.kotlin:kotlin-test:$kotlin_version"
     // 协程测试（如果测试 suspend 函数）
-    testImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3"
+    testImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2"
     // MockWebServer（模拟 HTTP）
-    testImplementation 'com.squareup.okhttp3:mockwebserver:4.11.0'
+    testImplementation 'com.squareup.okhttp3:mockwebserver:5.3.2'
     // Retrofit/Gson（如果在 test 中构造 Retrofit）
-    testImplementation 'com.squareup.retrofit2:retrofit:2.9.0'
-    testImplementation 'com.squareup.retrofit2:converter-gson:2.9.0'
-    testImplementation 'com.google.code.gson:gson:2.10.1'
+    testImplementation 'com.squareup.retrofit2:retrofit:2.11.0'
+    testImplementation 'com.squareup.retrofit2:converter-gson:2.11.0'
+    testImplementation 'com.google.code.gson:gson:2.12.1'
     // MockK（mock 框架，可选）
-    testImplementation "io.mockk:mockk:1.13.5"
+    testImplementation "io.mockk:mockk:1.14.2"
 
     // Feishu Official SDK (needed for direct testing)
     // 注意:飞书SDK内部包含旧版protobuf,会导致测试环境冲突
@@ -277,37 +279,38 @@ dependencies {
     androidTestImplementation 'androidx.multidex:multidex:2.0.1'
 
     // ========== Android UI 测试依赖 ==========
-    // Espresso 核心
-    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
-    androidTestImplementation 'androidx.test.espresso:espresso-intents:3.5.1'
+    // Espresso 核心 - 3.7.0-alpha02 修复了 API 36 InputManager.getInstance() NoSuchMethodException
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.7.0-alpha02'
+    androidTestImplementation 'androidx.test.espresso:espresso-intents:3.7.0-alpha02'
     // 排除protobuf-lite以避免与飞书SDK的protobuf-java冲突
-    androidTestImplementation('androidx.test.espresso:espresso-contrib:3.5.1') {
+    androidTestImplementation('androidx.test.espresso:espresso-contrib:3.7.0-alpha02') {
         exclude group: 'com.google.protobuf', module: 'protobuf-lite'
     }
-    androidTestImplementation 'androidx.test.espresso:espresso-idling-resource:3.5.1'
+    androidTestImplementation 'androidx.test.espresso:espresso-idling-resource:3.7.0-alpha02'
 
     // AndroidX Test
-    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
-    androidTestImplementation 'androidx.test:runner:1.5.2'
-    androidTestImplementation 'androidx.test:rules:1.5.0'
-    androidTestImplementation 'androidx.test:core:1.5.0'
-    androidTestImplementation 'androidx.test:core-ktx:1.5.0'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'androidx.test:runner:1.7.0-alpha02'
+    androidTestImplementation 'androidx.test:rules:1.7.0-alpha02'
+    androidTestImplementation 'androidx.test:core:1.7.0-alpha02'
+    androidTestImplementation 'androidx.test:core-ktx:1.7.0-alpha02'
 
     // UI Automator (用于跨应用测试)
-    androidTestImplementation 'androidx.test.uiautomator:uiautomator:2.2.0'
+    androidTestImplementation 'androidx.test.uiautomator:uiautomator:2.3.0'
 
     // Compose UI 测试
-    androidTestImplementation "androidx.compose.ui:ui-test-junit4:$compose_version"
-    debugImplementation "androidx.compose.ui:ui-test-manifest:$compose_version"
+    androidTestImplementation platform('androidx.compose:compose-bom:2026.02.00')
+    androidTestImplementation 'androidx.compose.ui:ui-test-junit4'
+    debugImplementation 'androidx.compose.ui:ui-test-manifest'
 
     // MockK for Android
-    androidTestImplementation "io.mockk:mockk-android:1.13.5"
+    androidTestImplementation "io.mockk:mockk-android:1.14.2"
 
     // Kotlin 协程测试 (Android)
-    androidTestImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3"
+    androidTestImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2"
 
     // Fragment 测试
-    debugImplementation 'androidx.fragment:fragment-testing:1.6.0'
+    debugImplementation 'androidx.fragment:fragment-testing:1.8.6'
 }
 
 // 测试时排除飞书SDK以避免protobuf冲突

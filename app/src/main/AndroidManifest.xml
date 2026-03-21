@@ -219,6 +219,34 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- OpenClaw: Node foreground service (gateway connection keepalive) -->
+        <service
+            android:name="ai.openclaw.app.NodeForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- OpenClaw: Device notification listener (forwards notifications to gateway) -->
+        <service
+            android:name="ai.openclaw.app.node.DeviceNotificationListenerService"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- OpenClaw: FileProvider for camera/photo sharing with gateway -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <!-- 观察能力(UI Tree + Screenshot)已移至独立模块 extensions/observer --> <!-- ADB输入法服务 - 系统级权限 -->
         <service
             android:name="com.xiaomo.androidforclaw.service.ClawIME"
@@ -236,7 +264,7 @@
             android:name="com.xiaomo.androidforclaw.ui.activity.AITestActivity"
             android:screenOrientation="portrait" /> <!-- 文件提供者 - 系统级权限 -->
         <provider
-            android:name="androidx.core.content.FileProvider"
+            android:name="com.xiaomo.androidforclaw.ClawFileProvider"
             android:authorities="${applicationId}.provider"
             android:exported="false"
             android:grantUriPermissions="true">

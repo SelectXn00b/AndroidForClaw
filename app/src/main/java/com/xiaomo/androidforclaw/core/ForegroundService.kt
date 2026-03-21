@@ -17,7 +17,7 @@ import android.os.Build
 import android.os.IBinder
 import com.xiaomo.androidforclaw.logging.Log
 import androidx.core.app.NotificationCompat
-import com.draco.ladb.R
+import com.xiaomo.androidforclaw.R
 
 
 /**

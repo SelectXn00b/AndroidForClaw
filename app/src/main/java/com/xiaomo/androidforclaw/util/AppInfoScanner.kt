@@ -362,7 +362,8 @@ object AppInfoScanner {
             }
 
             // 如果应用没有任何 Activity，说明可能是服务类应用
-            if (packageInfo.activities == null || packageInfo.activities.isEmpty()) {
+            val activities = packageInfo.activities
+            if (activities == null || activities.isEmpty()) {
                 Log.d(TAG, "应用 $packageName 没有 Activity（可能是服务类应用）")
                 return null
             }

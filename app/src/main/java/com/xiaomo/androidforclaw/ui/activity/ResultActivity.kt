@@ -7,7 +7,7 @@ package com.xiaomo.androidforclaw.ui.activity
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
-import com.draco.ladb.databinding.ActivityChatHistoryBinding
+import com.xiaomo.androidforclaw.databinding.ActivityChatHistoryBinding
 import com.xiaomo.androidforclaw.ui.adapter.ResultRecyclerAdapter
 import com.xiaomo.androidforclaw.util.ResultUtil
 

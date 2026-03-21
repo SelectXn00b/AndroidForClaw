@@ -11,7 +11,7 @@ import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
-import com.draco.ladb.R
+import com.xiaomo.androidforclaw.R
 import com.xiaomo.androidforclaw.data.model.ResultBean
 
 class ResultRecyclerAdapter(val list: List<ResultBean>) :

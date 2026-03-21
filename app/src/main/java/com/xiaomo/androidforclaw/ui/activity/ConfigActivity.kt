@@ -19,8 +19,8 @@ import com.xiaomo.androidforclaw.updater.AppUpdater
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import com.xiaomo.androidforclaw.util.AppConstants
-import com.draco.ladb.R
-import com.draco.ladb.databinding.ActivityConfigBinding
+import com.xiaomo.androidforclaw.R
+import com.xiaomo.androidforclaw.databinding.ActivityConfigBinding
 import com.tencent.mmkv.MMKV
 
 /**

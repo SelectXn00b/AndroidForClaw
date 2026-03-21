@@ -25,7 +25,7 @@ import com.xiaomo.androidforclaw.data.model.StreamingStatus
 import com.xiaomo.androidforclaw.data.model.TestLogItem
 import com.xiaomo.androidforclaw.ext.setMarkdownText
 import com.bumptech.glide.Glide
-import com.draco.ladb.R
+import com.xiaomo.androidforclaw.R
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope

@@ -15,9 +15,9 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.draco.ladb.R
-import com.draco.ladb.databinding.ActivitySkillsBinding
-import com.draco.ladb.databinding.ItemSkillBinding
+import com.xiaomo.androidforclaw.R
+import com.xiaomo.androidforclaw.databinding.ActivitySkillsBinding
+import com.xiaomo.androidforclaw.databinding.ItemSkillBinding
 import com.xiaomo.androidforclaw.agent.skills.SkillsLoader
 import com.xiaomo.androidforclaw.agent.skills.SkillDocument
 import kotlinx.coroutines.CoroutineScope

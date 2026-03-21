@@ -1,10 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<network-security-config>
-    <!-- Allow cleartext traffic for local development and testing -->
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <!-- Allow cleartext globally for tailnet/gateway connections (OpenClaw gateway mode) -->
+    <base-config cleartextTrafficPermitted="true" tools:ignore="InsecureBaseConfiguration" />
+    <!-- Local development endpoints (AndroidForClaw) -->
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">localhost</domain>
         <domain includeSubdomains="true">127.0.0.1</domain>
         <domain includeSubdomains="true">10.0.2.2</domain>
-        <!-- Add other trusted domains here if needed -->
+    </domain-config>
+    <!-- OpenClaw gateway local domains -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">openclaw.local</domain>
+    </domain-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">ts.net</domain>
     </domain-config>
 </network-security-config>

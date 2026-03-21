@@ -148,7 +148,7 @@
 
         <!-- 文件提供者 -->
         <provider
-            android:name="androidx.core.content.FileProvider"
+            android:name="com.xiaomo.androidforclaw.ClawFileProvider"
             android:authorities="${applicationId}.provider"
             android:exported="false"
             android:grantUriPermissions="true">

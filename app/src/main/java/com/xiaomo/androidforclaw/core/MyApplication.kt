@@ -63,7 +63,7 @@ import com.xiaomo.androidforclaw.providers.UnifiedLLMProvider
 
 /**
  */
-class MyApplication : Application(), Application.ActivityLifecycleCallbacks {
+class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCallbacks {
 
     companion object {
         private const val TAG = "MyApplication"

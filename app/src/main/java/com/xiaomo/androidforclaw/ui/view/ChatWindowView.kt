@@ -19,7 +19,7 @@ import android.widget.Toast
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.xiaomo.androidforclaw.core.MainEntryNew
-import com.draco.ladb.R
+import com.xiaomo.androidforclaw.R
 import io.noties.markwon.Markwon
 
 /**

@@ -20,7 +20,7 @@ import android.view.inputmethod.ExtractedTextRequest;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
-import com.draco.ladb.R;
+import com.xiaomo.androidforclaw.R;
 
 public class ClawIME extends InputMethodService {
     private String IME_MESSAGE = "ADB_INPUT_TEXT";

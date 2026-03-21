@@ -16,8 +16,8 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import com.draco.ladb.R
-import com.draco.ladb.databinding.ActivityModelConfigBinding
+import com.xiaomo.androidforclaw.R
+import com.xiaomo.androidforclaw.databinding.ActivityModelConfigBinding
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout

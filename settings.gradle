@@ -1,5 +1,42 @@
+pluginManagement {
+    repositories {
+        maven { url 'https://maven.aliyun.com/repository/public/' }
+        maven { url 'https://maven.aliyun.com/repository/google/' }
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+    // Declare plugin versions used by openclaw-android module (Kotlin DSL)
+    resolutionStrategy {
+        eachPlugin {
+            if (requested.id.id == 'org.jetbrains.kotlin.plugin.compose') {
+                useVersion '2.2.21'
+            }
+            if (requested.id.id == 'org.jetbrains.kotlin.plugin.serialization') {
+                useVersion '2.2.21'
+            }
+            if (requested.id.id == 'org.jlleitschuh.gradle.ktlint') {
+                useVersion '14.0.1'
+            }
+        }
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+    repositories {
+        // Google/AndroidX 官方仓库优先，确保 alpha/beta 可以被找到
+        google()
+        maven { url 'https://maven.aliyun.com/repository/google/' }
+        mavenCentral()
+        maven { url 'https://maven.aliyun.com/repository/public/' }
+        maven { url 'https://jitpack.io' }
+    }
+}
+
 rootProject.name = "AndroidForClaw"
 include ':app'
+include ':openclaw-android'
 include ':extensions:feishu'
 include ':extensions:discord'
 include ':extensions:telegram'

@@ -29,7 +29,7 @@ import com.xiaomo.androidforclaw.util.MMKVKeys
 import com.xiaomo.androidforclaw.util.WakeLockManager
 import com.xiaomo.androidforclaw.util.ReasoningTagFilter
 import com.xiaomo.androidforclaw.ui.float.SessionFloatWindow
-import com.draco.ladb.BuildConfig
+import com.xiaomo.androidforclaw.BuildConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
