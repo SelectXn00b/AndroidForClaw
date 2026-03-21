@@ -163,13 +163,17 @@ object HistorySanitizer {
     /**
      * Full tool use/result pairing repair.
      * Aligned with OpenClaw repairToolUseResultPairing (session-transcript-repair.ts)
+     * Updated 2026-03-21: aligned with OpenClaw commit c3972982b5
+     *   - Aborted/errored assistant messages now retain real tool results for surviving calls
+     *   - Malformed tool calls (blank id) are filtered before pairing
      *
      * Handles:
      * - Displaced results: tool results that ended up after user turns → move back
      * - Duplicate results: same tool_call_id appears multiple times → keep first
      * - Orphan results: tool results with no matching tool call → drop
      * - Missing results: tool calls with no matching result → insert synthetic error
-     * - Aborted assistant messages: stopReason=error/aborted → skip tool result creation
+     * - Aborted assistant messages: retains real results, never synthesizes missing
+     * - Malformed tool calls: drops blocks with blank id
      * - Name validation: tool call name must match [A-Za-z0-9_-]+ and ≤64 chars
      */
     private fun repairToolUseResultPairingInPlace(messages: MutableList<Message>): RepairReport {
@@ -203,17 +207,9 @@ object HistorySanitizer {
 
             val assistant = msg
 
-            // Check if this assistant message is aborted/errored
-            // In AndroidForClaw, we check if content contains error markers
-            val isAborted = isAbortedAssistantMessage(assistant)
-            if (isAborted) {
-                out.add(msg)
-                i++
-                continue
-            }
-
             // Extract tool call IDs from this assistant message
-            val toolCalls = assistant.toolCalls ?: emptyList()
+            // Filter out malformed tool calls (blank id) — aligned with OpenClaw c3972982b5
+            val toolCalls = (assistant.toolCalls ?: emptyList()).filter { it.id.isNotBlank() }
             if (toolCalls.isEmpty()) {
                 out.add(msg)
                 i++
@@ -260,6 +256,25 @@ object HistorySanitizer {
                 // Non-tool, non-assistant message (e.g., user) → remainder
                 remainder.add(next)
                 j++
+            }
+
+            // Aborted/errored assistant turns: retain real tool results for surviving
+            // tool calls, but never synthesize missing results.
+            // Aligned with OpenClaw c3972982b5 (preserveErroredAssistantResults behavior)
+            val isAborted = isAbortedAssistantMessage(assistant)
+            if (isAborted) {
+                out.add(msg)
+                // Emit only real (existing) tool results for this aborted turn
+                for (toolCall in toolCalls) {
+                    val result = spanResultsById[toolCall.id] ?: continue
+                    seenToolResultIds.add(toolCall.id)
+                    out.add(result)
+                }
+                for (rem in remainder) {
+                    out.add(rem)
+                }
+                i = j
+                continue
             }
 
             // Emit the assistant message
@@ -313,8 +328,9 @@ object HistorySanitizer {
 
     /**
      * Check if an assistant message was aborted/errored.
-     * Aborted messages may have incomplete tool_use blocks (partialJson: true)
-     * and should not have synthetic tool_results created.
+     * Aborted messages may have incomplete tool_use blocks (partialJson: true).
+     * Aligned with OpenClaw c3972982b5: these messages still get processed for
+     * surviving tool results, but no synthetic results are created.
      */
     private fun isAbortedAssistantMessage(msg: Message): Boolean {
         // Check common error patterns in content
