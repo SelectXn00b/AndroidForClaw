@@ -6,10 +6,11 @@
                 "apiKey": "${OPENROUTER_API_KEY}",
                 "models": [
                     {
-                        "id": "openrouter/hunter-alpha",
-                        "name": "Hunter Alpha",
+                        "id": "xiaomi/mimo-v2-pro",
+                        "name": "MiMo V2 Pro",
+                        "reasoning": true,
                         "contextWindow": 1048576,
-                        "maxTokens": 65536
+                        "maxTokens": 32000
                     }
                 ]
             }
@@ -18,7 +19,7 @@
     "agents": {
         "defaults": {
             "model": {
-                "primary": "openrouter/hunter-alpha"
+                "primary": "openrouter/xiaomi/mimo-v2-pro"
             }
         }
     },

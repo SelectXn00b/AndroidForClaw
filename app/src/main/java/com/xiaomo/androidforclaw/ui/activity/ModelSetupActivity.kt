@@ -33,11 +33,23 @@ class ModelSetupActivity : AppCompatActivity() {
 
         fun isNeeded(context: android.content.Context): Boolean {
             val configFile = java.io.File("/sdcard/.androidforclaw/openclaw.json")
-            val needed = !configFile.exists() || configFile.length() == 0L
-            if (needed) {
+            if (!configFile.exists() || configFile.length() == 0L) {
                 Log.i(TAG, "openclaw.json missing or empty, model setup is needed")
+                return true
             }
-            return needed
+
+            // File exists but may only contain the default placeholder key — check for a real key
+            return try {
+                val content = configFile.readText()
+                val hasRealKey = content.contains(Regex("\"apiKey\"\\s*:\\s*\"(?!\\$\\{)[^\"]{8,}\""))
+                if (!hasRealKey) {
+                    Log.i(TAG, "openclaw.json has no real API key, model setup is needed")
+                }
+                !hasRealKey
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to read config for setup check, assuming needed", e)
+                true
+            }
         }
 
         // Provider presets

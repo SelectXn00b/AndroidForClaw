@@ -16,16 +16,42 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * 配置加载器 - 对齐 OpenClaw 的配置加载逻辑
+ * 配置加载器 - 对齐 OpenClaw 的配置加载逻辑（全局单例）
  *
  * 使用 org.json.JSONObject 解析，缺失字段自动用 data class 默认值。
  * 用户 config 只需写想覆盖的字段，其他全用默认值。
  */
-class ConfigLoader(private val context: Context) {
+class ConfigLoader private constructor() {
 
     companion object {
         private const val TAG = "ConfigLoader"
         private const val OPENCLAW_CONFIG_FILE = "openclaw.json"
+
+        @Volatile
+        private var INSTANCE: ConfigLoader? = null
+
+        @JvmStatic
+        fun getInstance(): ConfigLoader {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: ConfigLoader().also { INSTANCE = it }
+            }
+        }
+
+        /** Convenience: same as getInstance(), for call sites that used to pass Context. */
+        @JvmStatic
+        operator fun invoke(context: Context): ConfigLoader {
+            val instance = getInstance()
+            instance.initContext(context)
+            return instance
+        }
+    }
+
+    private lateinit var context: Context
+
+    fun initContext(ctx: Context) {
+        if (!::context.isInitialized) {
+            context = ctx.applicationContext
+        }
     }
 
     private val configDir: File get() = com.xiaomo.androidforclaw.workspace.StoragePaths.root
