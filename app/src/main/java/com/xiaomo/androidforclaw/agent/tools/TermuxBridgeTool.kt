@@ -124,16 +124,28 @@ class TermuxBridgeTool(private val context: Context) : Tool {
         val sshConfigPresent = File(SSH_CONFIG_FILE).exists()
         val keypairPresent = File(PRIVATE_KEY).exists() && File(PUBLIC_KEY).exists()
         // Test real SSH auth, not just TCP port
-        val sshAuthOk = if (sshReachable && hasCredentials()) testSSHAuth() else false
+        // Allow fallback: even without termux_ssh.json, try auth if keypair exists
+        val sshAuthOk = if (sshReachable && (hasCredentials() || keypairPresent)) testSSHAuth() else false
+
+        // Auto-generate termux_ssh.json if auth succeeded but config file is missing
+        val sshConfigPresent2 = if (sshAuthOk && !sshConfigPresent) {
+            try {
+                writeSSHConfig()
+                File(SSH_CONFIG_FILE).exists()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to auto-write SSH config: ${e.message}")
+                false
+            }
+        } else sshConfigPresent
 
         val (step, message) = when {
             !termuxApiInstalled -> TermuxSetupStep.TERMUX_API_NOT_INSTALLED to "Termux:API 未安装"
             !runCommandPermissionDeclared -> TermuxSetupStep.RUN_COMMAND_PERMISSION_DENIED to "App 未声明 RUN_COMMAND 权限"
             !runCommandServiceAvailable -> TermuxSetupStep.RUN_COMMAND_SERVICE_MISSING to "Termux RUN_COMMAND 服务不可用"
             !keypairPresent -> TermuxSetupStep.KEYPAIR_MISSING to "SSH 密钥对未生成"
-            !sshReachable && !sshConfigPresent -> TermuxSetupStep.SSHD_NOT_REACHABLE to "sshd 未启动，SSH 端口 8022 不可达"
+            !sshReachable && !sshConfigPresent2 -> TermuxSetupStep.SSHD_NOT_REACHABLE to "sshd 未启动，SSH 端口 8022 不可达"
             !sshReachable -> TermuxSetupStep.SSHD_NOT_REACHABLE to "SSH 端口 8022 不可达"
-            !sshConfigPresent -> TermuxSetupStep.SSH_CONFIG_MISSING to "termux_ssh.json 未生成"
+            !sshConfigPresent2 -> TermuxSetupStep.SSH_CONFIG_MISSING to "termux_ssh.json 未生成"
             !sshAuthOk -> TermuxSetupStep.SSH_AUTH_FAILED to "SSH 认证失败（密钥权限或 sshd 配置问题）"
             else -> TermuxSetupStep.READY to "Termux 已就绪"
         }
@@ -145,7 +157,7 @@ class TermuxBridgeTool(private val context: Context) : Tool {
             runCommandServiceAvailable = runCommandServiceAvailable,
             sshReachable = sshReachable,
             sshAuthOk = sshAuthOk,
-            sshConfigPresent = sshConfigPresent,
+            sshConfigPresent = sshConfigPresent2,
             keypairPresent = keypairPresent,
             lastStep = step,
             message = message
@@ -222,14 +234,26 @@ class TermuxBridgeTool(private val context: Context) : Tool {
      */
     private fun testSSHAuth(): Boolean {
         if (!isSSHReachable()) return false
-        if (!hasCredentials()) return false
+        // Allow auth test even without termux_ssh.json — use defaults
+        val keyFile = File(PRIVATE_KEY)
+        if (!hasCredentials() && !keyFile.exists()) return false
         return try {
             ensureBouncyCastle()
-            // Read SSH config
-            val configJson = org.json.JSONObject(java.io.File(SSH_CONFIG_FILE).readText())
-            val user = configJson.optString("user", "shell")
-            val keyPath = configJson.optString("key_file", PRIVATE_KEY)
-            val password = configJson.optString("password", "")
+            // Read SSH config if available, otherwise use defaults
+            val configFile = File(SSH_CONFIG_FILE)
+            val user: String
+            val keyPath: String
+            val password: String
+            if (configFile.exists()) {
+                val configJson = org.json.JSONObject(configFile.readText())
+                user = configJson.optString("user", "shell")
+                keyPath = configJson.optString("key_file", PRIVATE_KEY)
+                password = configJson.optString("password", "")
+            } else {
+                user = "shell"
+                keyPath = PRIVATE_KEY
+                password = ""
+            }
 
             val ssh = net.schmizz.sshj.SSHClient(net.schmizz.sshj.DefaultConfig())
             ssh.addHostKeyVerifier(net.schmizz.sshj.transport.verification.PromiscuousVerifier())
