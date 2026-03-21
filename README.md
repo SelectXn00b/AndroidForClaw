@@ -1,6 +1,6 @@
 # 📱 AndroidForClaw
 
-[![Release](https://img.shields.io/badge/Release-v1.0.2-blue.svg)](https://github.com/SelectXn00b/AndroidForClaw/releases/latest)
+[![Release](https://img.shields.io/badge/Release-v1.0.9-blue.svg)](https://github.com/SelectXn00b/AndroidForClaw/releases/latest)
 [![Android](https://img.shields.io/badge/Android-8.0%2B-green.svg)](https://www.android.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -77,15 +77,15 @@ AI：→ skills_search("") → 展示可用技能列表
 |-----|------|--------|
 | **AndroidForClaw** | 主应用 (含无障碍服务、Agent、Gateway) | ✅ 必装 |
 | **BrowserForClaw** | AI 浏览器 (网页自动化) | 可选 |
-| **[Termux](https://f-droid.org/packages/com.termux/)** | 终端 (执行 Python/Node.js) | 可选 |
+| **termux-app + termux-api** | 终端 (执行 Python/Node.js) | 可选 |
 
 ### 3 步上手
 
 1. **安装** — 下载安装 AndroidForClaw
-2. **配置** — 打开 App，输入 API Key（或跳过用内置免费 Key），开启无障碍 + 录屏权限
+2. **配置** — 打开 App，输入 API Key（或跳过使用内置 Key），开启无障碍 + 录屏权限
 3. **开聊** — 直接对话，或通过飞书/Discord 发消息
 
-> 💡 推荐注册 [OpenRouter](https://openrouter.ai/keys) 获取免费 API Key
+> 💡 首次打开自动弹出引导页，默认 OpenRouter + MiMo V2 Pro，支持一键跳过
 
 ### Termux 配置（可选）
 
@@ -112,7 +112,8 @@ AI：→ skills_search("") → 展示可用技能列表
 │  Context 管理 (4层防护) · Memory           │
 ├──────────────────────────────────────────┤
 │  Providers                                │
-│  OpenRouter · Azure · Anthropic · OpenAI  │
+│  OpenRouter · MiMo · Gemini · Anthropic · │
+│  OpenAI · 自定义                           │
 ├──────────────────────────────────────────┤
 │  Android Platform                         │
 │  Accessibility · Termux SSH · device tool │
@@ -128,7 +129,7 @@ AI：→ skills_search("") → 展示可用技能列表
 | **统一 exec** | 自动路由 Termux（SSH）或内置 Shell，对模型透明 |
 | **Context 管理** | 4 层防护对齐 OpenClaw：limitHistoryTurns + 工具结果裁剪 + budget guard |
 | **Skill 体系** | 20 个内置 Skill 可在设备上自由编辑，支持 ClawHub 在线安装 |
-| **多模型** | GPT-5 / Claude / Gemini / DeepSeek / 任何 OpenAI 兼容 API |
+| **多模型** | MiMo V2 Pro · DeepSeek R1 · Claude Sonnet 4 · Gemini 2.5 · GPT-4.1 |
 
 ---
 
@@ -186,11 +187,14 @@ AI：→ skills_search("") → 展示可用技能列表
 
 | Provider | 模型 | 说明 |
 |----------|------|------|
-| OpenRouter | hunter-alpha, GPT-5, Claude, Gemini... | 推荐，免费额度 |
-| Azure OpenAI | GPT-5.4, GPT-4.1 | 企业级 |
-| Anthropic | Claude Opus 4, Sonnet | 直连 |
-| OpenAI | GPT-5, o3 | 直连 |
-| 自定义 | 任何 OpenAI 兼容 API | Ollama, vLLM 等 |
+| **OpenRouter** | MiMo V2 Pro, Hunter Alpha, DeepSeek R1, Claude Sonnet 4, GPT-4.1 | 推荐，内置 Key |
+| **小米 MiMo** | MiMo V2 Pro, MiMo V2 Flash, MiMo V2 Omni | 直连小米 API |
+| **Google** | Gemini 2.5 Pro, Gemini 2.5 Flash | 直连 |
+| **Anthropic** | Claude Sonnet 4, Claude Opus 4 | 直连 |
+| **OpenAI** | GPT-4.1, GPT-4.1 Mini, o3 | 直连 |
+| **自定义** | 任何 OpenAI 兼容 API | Ollama, vLLM 等 |
+
+> **默认配置**：OpenRouter + MiMo V2 Pro（1M 上下文 + 推理），跳过引导页自动使用内置 Key。
 
 ---
 
@@ -203,8 +207,13 @@ AI：→ skills_search("") → 展示可用技能列表
       "openrouter": {
         "baseUrl": "https://openrouter.ai/api/v1",
         "apiKey": "sk-or-v1-你的key",
-        "models": [{"id": "openrouter/hunter-alpha", "reasoning": true}]
+        "models": [{"id": "xiaomi/mimo-v2-pro", "reasoning": true, "contextWindow": 1048576}]
       }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": { "primary": "openrouter/xiaomi/mimo-v2-pro" }
     }
   },
   "channels": {
@@ -224,7 +233,7 @@ git clone https://github.com/SelectXn00b/AndroidForClaw.git
 cd AndroidForClaw
 export JAVA_HOME=/path/to/jdk17
 ./gradlew assembleRelease
-adb install releases/AndroidForClaw-v1.0.2-release.apk
+adb install releases/AndroidForClaw-v1.0.9-release.apk
 ```
 
 ---
