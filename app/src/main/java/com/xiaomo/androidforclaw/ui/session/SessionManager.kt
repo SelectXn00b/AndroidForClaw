@@ -396,10 +396,21 @@ class SessionManager {
         if (_currentSession.value.id == sessionId) {
             val newCurrent = remainingSessions.first()
             _currentSession.value = newCurrent.copy(isActive = true)
+            mmkv.encode(PREF_LAST_SESSION_ID, newCurrent.id)
         }
 
         // 持久化已删除 ID，防止重启后重新加载
         addDeletedSessionId(sessionId)
+
+        // 同时清理后端 session 数据（JSONL 文件 + 索引），防止重启后幽灵复活
+        try {
+            val backendSessionManager = com.xiaomo.androidforclaw.core.MainEntryNew.getSessionManager()
+            backendSessionManager?.clear(sessionId)
+            android.util.Log.d("SessionManager", "🗑️ Backend session cleared: $sessionId")
+        } catch (e: Exception) {
+            android.util.Log.w("SessionManager", "Failed to clear backend session: $sessionId", e)
+        }
+
         android.util.Log.d("SessionManager", "🗑️ Session deleted and persisted: $sessionId")
     }
 
