@@ -23,7 +23,8 @@ import org.junit.runners.Suite
     PermissionUITest::class,
     ConfigActivityUITest::class,
     FloatingWindowUITest::class,
-    ComposeUITest::class,
+    ForClawMainTabsUITest::class,
+    ChatScreenUITest::class,
 
     // 集成测试
     AgentIntegrationTest::class

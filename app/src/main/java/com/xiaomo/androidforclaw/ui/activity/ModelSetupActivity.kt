@@ -12,8 +12,8 @@ import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import com.draco.ladb.R
-import com.draco.ladb.databinding.ActivityModelSetupBinding
+import com.xiaomo.androidforclaw.R
+import com.xiaomo.androidforclaw.databinding.ActivityModelSetupBinding
 import com.xiaomo.androidforclaw.config.ConfigLoader
 import com.xiaomo.androidforclaw.config.ModelDefinition
 import com.xiaomo.androidforclaw.config.ModelsConfig
@@ -32,27 +32,12 @@ class ModelSetupActivity : AppCompatActivity() {
         const val EXTRA_MANUAL = "manual"
 
         fun isNeeded(context: android.content.Context): Boolean {
-            try {
-                val configFile = java.io.File("/sdcard/.androidforclaw/openclaw.json")
-                if (!configFile.exists() || configFile.length() == 0L) {
-                    Log.i(TAG, "openclaw.json missing, model setup is needed")
-                    return true
-                }
-
-                val configLoader = ConfigLoader(context)
-                val config = configLoader.loadOpenClawConfig()
-                val providers = config.resolveProviders()
-                val hasRealKey = providers.values.any { provider ->
-                    val key = provider.apiKey
-                    !key.isNullOrBlank() &&
-                            !key.startsWith("\${") &&
-                            key != "未配置"
-                }
-                return !hasRealKey
-            } catch (e: Exception) {
-                Log.w(TAG, "Error checking setup need, assuming needed", e)
-                return true  // Config parse error → probably not configured properly → show setup
+            val configFile = java.io.File("/sdcard/.androidforclaw/openclaw.json")
+            val needed = !configFile.exists() || configFile.length() == 0L
+            if (needed) {
+                Log.i(TAG, "openclaw.json missing or empty, model setup is needed")
             }
+            return needed
         }
 
         // Provider presets

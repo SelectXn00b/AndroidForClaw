@@ -33,8 +33,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiaomo.androidforclaw.ui.compose.ChatScreen
+import com.xiaomo.androidforclaw.ui.compose.ForClawConnectTab
+import com.xiaomo.androidforclaw.ui.compose.ForClawSettingsTab
 import com.xiaomo.androidforclaw.ui.viewmodel.ChatViewModel
 import com.xiaomo.androidforclaw.util.ChatBroadcastReceiver
+import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.ui.RootScreen
+import ai.openclaw.app.ui.OpenClawTheme
 import com.xiaomo.androidforclaw.util.MediaProjectionHelper
 import com.xiaomo.androidforclaw.ui.float.SessionFloatWindow
 import com.tencent.mmkv.MMKV
@@ -141,7 +146,6 @@ class MainActivityCompose : ComponentActivity() {
     }
 
     private var chatBroadcastReceiver: ChatBroadcastReceiver? = null
-    private var chatViewModel: ChatViewModel? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -163,40 +167,31 @@ class MainActivityCompose : ComponentActivity() {
             } catch (_: Exception) {}
         }
 
-        setContent {
-            // Save ViewModel reference for BroadcastReceiver use
-            val viewModel: ChatViewModel = viewModel()
-            chatViewModel = viewModel
+        // AndroidForClaw uses ModelSetupActivity (LLM API key) instead of OpenClaw's gateway
+        // onboarding. Mark onboarding as completed so RootScreen always shows PostOnboardingTabs.
+        // Also pre-configure the loopback connection so the OpenClaw client connects to our
+        // local GatewayWebSocketServer on ws://127.0.0.1:8765 (no TLS, no auth).
+        getSharedPreferences("openclaw.node", MODE_PRIVATE).edit()
+            .putBoolean("onboarding.completed", true)
+            .putBoolean("gateway.manual.enabled", true)
+            .putString("gateway.manual.host", "127.0.0.1")
+            .putInt("gateway.manual.port", 8765)
+            .putBoolean("gateway.manual.tls", false)
+            .apply()
 
-            MaterialTheme {
-                MainScreen(
-                    chatViewModel = viewModel,
-                    onNavigateToPermissions = {
-                        startActivity(Intent(this, PermissionsActivity::class.java))
-                    },
-                    onNavigateToSkills = {
-                        startActivity(Intent(this, SkillsActivity::class.java))
-                    },
-                    onNavigateToConfig = {
-                        Log.d("MainActivityCompose", "Clicked model configuration")
-                        try {
-                            startActivity(Intent(this, ModelConfigActivity::class.java))
-                            Log.d("MainActivityCompose", "Successfully started ModelConfigActivity")
-                        } catch (e: Exception) {
-                            Log.e("MainActivityCompose", "Failed to start ConfigActivity", e)
-                        }
-                    },
-                    onNavigateToTermux = {
-                        try {
-                            startActivity(Intent(this, TermuxSetupActivity::class.java))
-                        } catch (e: Exception) {
-                            Log.e("MainActivityCompose", "Failed to start TermuxSetupActivity", e)
-                        }
-                    },
-                    onNavigateToTest = {
-                        // AgentTestActivity has been removed
-                        Toast.makeText(this, "Agent测试功能已废弃", Toast.LENGTH_SHORT).show()
-                    }
+        setContent {
+            val openClawViewModel: MainViewModel = viewModel()
+
+            // Trigger loopback connection once the Compose tree is ready.
+            LaunchedEffect(Unit) {
+                openClawViewModel.connectManual()
+            }
+
+            OpenClawTheme {
+                RootScreen(
+                    viewModel = openClawViewModel,
+                    connectTabSlot = { ForClawConnectTab() },
+                    settingsTabSlot = { ForClawSettingsTab() },
                 )
             }
         }
@@ -278,7 +273,7 @@ class MainActivityCompose : ComponentActivity() {
     private fun registerChatBroadcastReceiver() {
         chatBroadcastReceiver = ChatBroadcastReceiver { message ->
             Log.d(TAG, "📨 [BroadcastReceiver] Received message: $message")
-            chatViewModel?.sendMessage(message)
+            // Message routing handled by MyApplication.handleChatBroadcast
         }
 
         val filter = ChatBroadcastReceiver.createIntentFilter()
@@ -313,7 +308,7 @@ class MainActivityCompose : ComponentActivity() {
             // Android 11+ requires MANAGE_EXTERNAL_STORAGE permission
             if (!Environment.isExternalStorageManager()) {
                 // Debug version skips permission request page to avoid jumping to Settings causing Activity to go background affecting tests
-                if (com.draco.ladb.BuildConfig.SKIP_PERMISSION_REQUEST) {
+                if (com.xiaomo.androidforclaw.BuildConfig.SKIP_PERMISSION_REQUEST) {
                     Log.w(TAG, "⚠️ DEBUG mode: File management permission not granted, but skipping request page")
                     Log.w(TAG, "   Config file read/write may fail, please grant permission manually")
                     return
