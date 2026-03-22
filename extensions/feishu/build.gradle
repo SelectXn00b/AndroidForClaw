@@ -29,6 +29,10 @@ android {
         jvmTarget = '17'
     }
 
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+
     packagingOptions {
         resources {
             excludes += [

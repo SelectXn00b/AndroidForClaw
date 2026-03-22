@@ -1234,6 +1234,28 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
             try {
                 Log.i(TAG, "🤖 开始处理消息: ${event.content}")
 
+                // 📎 Download media attachment if present (aligned with OpenClaw resolveFeishuMediaList)
+                var userMessage = event.content
+                val eventMediaKeys = event.mediaKeys
+                if (eventMediaKeys != null) {
+                    try {
+                        val mediaDownload = com.xiaomo.feishu.messaging.FeishuMediaDownload(
+                            client = feishuChannel!!.getClient(),
+                            cacheDir = cacheDir
+                        )
+                        val downloadResult = mediaDownload.downloadMedia(event.messageId, eventMediaKeys)
+                        if (downloadResult.isSuccess) {
+                            val localPath = downloadResult.getOrNull()!!.file.absolutePath
+                            userMessage = "$userMessage\n[附件已下载: $localPath]"
+                            Log.i(TAG, "📎 媒体附件已下载: $localPath")
+                        } else {
+                            Log.w(TAG, "📎 媒体下载失败: ${downloadResult.exceptionOrNull()?.message}")
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "📎 媒体下载异常: ${e.message}")
+                    }
+                }
+
                 // 🆔 Generate session ID: use chatId_chatType as unique identifier
                 // This way different groups/private chats have independent session history
                 val sessionId = "${event.chatId}_${event.chatType}"
@@ -1326,20 +1348,79 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                     channelContext = channelCtx
                 )
 
-                // ✅ Block Reply: send intermediate replies as they happen
-                // Aligned with OpenClaw's blockReplyBreak="text_end" mechanism
+                // ✅ Streaming Card: real-time card updates during agent processing
+                // Aligned with OpenClaw reply-dispatcher.ts + streaming-card.ts
                 val blockRepliesSent = mutableListOf<String>()
+                val streamingCard = feishuChannel?.createStreamingCard()
+                var streamingCardMessageId: String? = null
+                var streamingFailed = false
+
                 val progressJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
                     agentLoop.progressFlow.collect { update ->
-                        if (update is ProgressUpdate.BlockReply) {
-                            val text = update.text.trim()
-                            if (text.isNotEmpty()) {
-                                Log.i(TAG, "📤 Block reply (intermediate): ${text.take(100)}...")
+                        when {
+                            // Start streaming card on first Thinking event
+                            update is ProgressUpdate.Thinking && streamingCard != null && !streamingFailed && streamingCard.cardId == null -> {
                                 try {
-                                    sendFeishuReply(event, text)
-                                    blockRepliesSent.add(text)
+                                    val startResult = streamingCard.start("Thinking...")
+                                    if (startResult.isSuccess) {
+                                        val cardId = startResult.getOrNull()!!
+                                        val sender = feishuChannel?.sender
+                                        if (sender != null) {
+                                            // Send card message with reply routing
+                                            val sendResult = if (event.chatType == "group" && event.rootId == null) {
+                                                sender.sendCardByIdReply(event.messageId, cardId)
+                                            } else {
+                                                sender.sendCardById(event.chatId, cardId)
+                                            }
+                                            streamingCardMessageId = sendResult.getOrNull()?.messageId
+                                            Log.i(TAG, "📺 Streaming card sent: $streamingCardMessageId")
+                                        }
+                                    } else {
+                                        Log.w(TAG, "Streaming card creation failed: ${startResult.exceptionOrNull()?.message}")
+                                        streamingFailed = true
+                                    }
                                 } catch (e: Exception) {
-                                    Log.w(TAG, "发送中间回复失败: ${e.message}")
+                                    Log.w(TAG, "Streaming card start failed: ${e.message}")
+                                    streamingFailed = true
+                                }
+                            }
+
+                            // Update streaming card with reasoning
+                            update is ProgressUpdate.Reasoning && streamingCard?.isActive() == true -> {
+                                try {
+                                    streamingCard.appendText("> ${update.content}\n\n---\n\n")
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Streaming reasoning update failed: ${e.message}")
+                                }
+                            }
+
+                            // Update streaming card with tool call info
+                            update is ProgressUpdate.ToolCall && streamingCard?.isActive() == true -> {
+                                try {
+                                    streamingCard.appendText("`Using: ${update.name}...`\n\n")
+                                } catch (e: Exception) { /* ignore */ }
+                            }
+
+                            // Update streaming card with block reply text
+                            update is ProgressUpdate.BlockReply -> {
+                                val text = update.text.trim()
+                                if (text.isNotEmpty()) {
+                                    if (streamingCard?.isActive() == true) {
+                                        try {
+                                            streamingCard.appendText(text)
+                                            blockRepliesSent.add(text)
+                                        } catch (e: Exception) {
+                                            Log.w(TAG, "Streaming block reply update failed: ${e.message}")
+                                        }
+                                    } else {
+                                        // Fallback: send as separate message (old behavior)
+                                        try {
+                                            sendFeishuReply(event, text)
+                                            blockRepliesSent.add(text)
+                                        } catch (e: Exception) {
+                                            Log.w(TAG, "发送中间回复失败: ${e.message}")
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1350,7 +1431,7 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                 val result = try {
                     agentLoop.run(
                         systemPrompt = systemPrompt,
-                        userMessage = event.content,
+                        userMessage = userMessage,
                         contextHistory = contextHistory.map { it.toNewMessage() },
                         reasoningEnabled = true
                     )
@@ -1372,14 +1453,22 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                 Log.i(TAG, "✅ Agent 处理完成")
                 Log.i(TAG, "   迭代次数: ${result.iterations}")
                 Log.i(TAG, "   使用工具: ${result.toolsUsed.joinToString(", ")}")
-                Log.i(TAG, "   中间回复: ${blockRepliesSent.size} 条")
 
-                // Return final result
-                // If block replies were sent and final content matches last block reply, skip it
+                // Close streaming card with final content
                 val finalContent = com.xiaomo.androidforclaw.util.ReplyTagFilter.strip(result.finalContent ?: "抱歉，我无法处理这个请求。")
-                if (blockRepliesSent.isNotEmpty() && blockRepliesSent.last().trim() == finalContent.trim()) {
+
+                if (streamingCard?.isActive() == true) {
+                    try {
+                        streamingCard.close(finalContent)
+                        Log.i(TAG, "📺 Streaming card closed with final content")
+                        "\u0000BLOCK_REPLY_ALREADY_SENT"  // Sentinel: final content is in the streaming card
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to close streaming card: ${e.message}")
+                        finalContent // Fall through to normal reply
+                    }
+                } else if (blockRepliesSent.isNotEmpty() && blockRepliesSent.last().trim() == finalContent.trim()) {
                     Log.i(TAG, "📤 Final content matches last block reply, marking as already sent")
-                    "\u0000BLOCK_REPLY_ALREADY_SENT"  // Sentinel value, caller will check
+                    "\u0000BLOCK_REPLY_ALREADY_SENT"
                 } else {
                     finalContent
                 }
@@ -1395,9 +1484,12 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
      * Send reply to Feishu
      *
      * Features:
+     * - Reply routing: group → quote reply, thread → thread reply, DM → direct send
+     * - Fallback: quote reply fails → direct send (message may have been withdrawn)
      * - Use FeishuSender to auto-detect Markdown and render with cards
      * - Detect screenshot paths and auto-upload send images
-     * - Support image + text combined reply
+     *
+     * Aligned with OpenClaw reply-dispatcher.ts
      */
     private suspend fun sendFeishuReply(event: com.xiaomo.feishu.FeishuEvent.Message, content: String) {
         try {
@@ -1406,16 +1498,13 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
             // Filter internal reasoning tags (<think>, <final>, etc.)
             val cleanContent = filterReasoningTags(content)
 
-            // Initialize FeishuSender
             val sender = feishuChannel?.sender
             if (sender == null) {
                 Log.e(TAG, "❌ FeishuSender 未初始化")
                 return
             }
 
-            // Detect if contains screenshot path (supports file path and Content URI)
-            // Format 1: 路径: /storage/.../screenshot_xxx.png
-            // Format 2: 路径: content://com.xiaomo.androidforclaw.accessibility.fileprovider/...
+            // Detect screenshot path
             val screenshotPathRegex = Regex("""路径:\s*((?:/storage/|/sdcard/|content://)[^\s\n]+\.png)""")
             val screenshotMatch = screenshotPathRegex.find(cleanContent)
 
@@ -1423,112 +1512,133 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                 val screenshotPath = screenshotMatch.groupValues[1]
                 Log.i(TAG, "📸 检测到截图路径: $screenshotPath")
 
-                // 1. Upload and send image
-                val imageFile = if (screenshotPath.startsWith("content://")) {
-                    // Content URI - needs to be converted to temp file via ContentResolver
-                    try {
-                        val uri = android.net.Uri.parse(screenshotPath)
-                        val inputStream = contentResolver.openInputStream(uri)
-                        val tempFile = java.io.File(cacheDir, "temp_screenshot_${System.currentTimeMillis()}.png")
-                        inputStream?.use { input ->
-                            tempFile.outputStream().use { output ->
-                                input.copyTo(output)
-                            }
-                        }
-                        tempFile
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to convert Content URI to file", e)
-                        null
-                    }
-                } else {
-                    java.io.File(screenshotPath)
-                }
-
+                // Upload and send image
+                val imageFile = resolveImageFile(screenshotPath)
                 if (imageFile != null && imageFile.exists()) {
                     try {
-                        Log.i(TAG, "📤 上传图片到飞书...")
-
                         val imageResult = feishuChannel?.uploadAndSendImage(
                             imageFile = imageFile,
                             receiveId = event.chatId,
                             receiveIdType = "chat_id"
                         )
-
                         if (imageResult?.isSuccess == true) {
-                            Log.i(TAG, "✅ 图片上传并发送成功: ${imageResult.getOrNull()}")
+                            Log.i(TAG, "✅ 图片发送成功")
                         } else {
                             Log.e(TAG, "❌ 图片上传失败: ${imageResult?.exceptionOrNull()?.message}")
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "上传截图失败", e)
                     }
-                } else {
-                    Log.w(TAG, "⚠️ 截图文件不存在: $screenshotPath")
                 }
 
-                // 2. Send text reply (remove screenshot path info, use Markdown rendering)
-                val textContent = cleanContent
-                    .replace(screenshotPathRegex, "")
-                    .trim()
-
+                // Send text reply (remove screenshot path info)
+                val textContent = cleanContent.replace(screenshotPathRegex, "").trim()
                 if (textContent.isNotEmpty()) {
-                    val result = sender.sendTextMessage(
-                        receiveId = event.chatId,
-                        text = textContent,
-                        receiveIdType = "chat_id",
-                        renderMode = com.xiaomo.feishu.messaging.RenderMode.AUTO
-                    )
-
-                    if (result.isSuccess) {
-                        val sendResult = result.getOrNull()
-                        Log.i(TAG, "✅ 文本回复发送成功: ${sendResult?.messageId}")
-                    } else {
-                        Log.e(TAG, "❌ 文本回复发送失败: ${result.exceptionOrNull()?.message}")
-                    }
+                    sendTextWithRouting(sender, event, textContent)
                 }
             } else {
-                // Auto: markdown content → card, plain text → text message
-                var result = sender.sendTextMessage(
-                    receiveId = event.chatId,
-                    text = cleanContent,
-                    receiveIdType = "chat_id",
-                    renderMode = com.xiaomo.feishu.messaging.RenderMode.AUTO
-                )
-
-                if (result.isSuccess) {
-                    val sendResult = result.getOrNull()
-                    Log.i(TAG, "✅ 回复发送成功: ${sendResult?.messageId}")
-                } else {
-                    val errorMsg = result.exceptionOrNull()?.message ?: "未知错误"
-                    Log.e(TAG, "❌ 回复发送失败 (Markdown): $errorMsg")
-
-                    // Fallback: 如果 Markdown 卡片失败(如表格过多),降级为纯文本
-                    if (errorMsg.contains("table number over limit") || errorMsg.contains("230099") || errorMsg.contains("HTTP 400")) {
-                        Log.w(TAG, "⚠️ 降级为纯文本模式重试...")
-                        result = sender.sendTextMessage(
-                            receiveId = event.chatId,
-                            text = "⚠️ 内容格式过于复杂,以下为纯文本版本:\n\n$cleanContent",
-                            receiveIdType = "chat_id",
-                            renderMode = com.xiaomo.feishu.messaging.RenderMode.TEXT  // 强制纯文本
-                        )
-
-                        if (result.isSuccess) {
-                            Log.i(TAG, "✅ 纯文本回复发送成功")
-                        } else {
-                            // 最终兜底:至少告诉用户失败了
-                            Log.e(TAG, "❌ 纯文本回复也失败,发送错误提示...")
-                            sender.sendTextMessage(
-                                receiveId = event.chatId,
-                                text = "❌ 回复发送失败: $errorMsg\n\n请检查飞书日志或稍后重试。",
-                                receiveIdType = "chat_id",
-                                renderMode = com.xiaomo.feishu.messaging.RenderMode.TEXT
-                            )
-                        }
-                    }
-                }
+                sendTextWithRouting(sender, event, cleanContent)
             }
         } catch (e: Exception) {
             Log.e(TAG, "发送飞书回复失败", e)
+        }
+    }
+
+    /**
+     * 发送文本回复（带路由策略）
+     * 对齐 OpenClaw reply-dispatcher: group → quote reply, thread → thread reply, DM → direct
+     */
+    private suspend fun sendTextWithRouting(
+        sender: com.xiaomo.feishu.messaging.FeishuSender,
+        event: com.xiaomo.feishu.FeishuEvent.Message,
+        text: String
+    ) {
+        val renderMode = com.xiaomo.feishu.messaging.RenderMode.AUTO
+
+        // Determine reply strategy
+        val useQuoteReply = event.chatType == "group" && event.rootId == null && event.threadId == null
+        val useThreadReply = event.rootId != null || event.threadId != null
+
+        var result: Result<com.xiaomo.feishu.messaging.SendResult>? = null
+
+        // Strategy 1: Thread reply (message is in a topic)
+        if (useThreadReply) {
+            val rootId = event.rootId ?: event.messageId
+            result = try {
+                sender.replyInThread(messageId = rootId, text = text)
+            } catch (e: Exception) {
+                Log.w(TAG, "Thread reply failed, falling back to direct: ${e.message}")
+                null
+            }
+        }
+
+        // Strategy 2: Quote reply (group message, not in topic)
+        if (result == null && useQuoteReply) {
+            result = try {
+                sender.sendTextReply(
+                    replyToMessageId = event.messageId,
+                    text = text,
+                    renderMode = renderMode
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Quote reply failed, falling back to direct: ${e.message}")
+                null
+            }
+            // Fallback: quote reply API error → direct send
+            if (result != null && result.isFailure) {
+                Log.w(TAG, "Quote reply returned error: ${result.exceptionOrNull()?.message}, falling back to direct")
+                result = null
+            }
+        }
+
+        // Strategy 3: Direct send (DM or fallback)
+        if (result == null || result.isFailure) {
+            result = sender.sendTextMessage(
+                receiveId = event.chatId,
+                text = text,
+                receiveIdType = "chat_id",
+                renderMode = renderMode
+            )
+        }
+
+        if (result.isSuccess) {
+            Log.i(TAG, "✅ 回复发送成功: ${result.getOrNull()?.messageId}")
+        } else {
+            val errorMsg = result.exceptionOrNull()?.message ?: "未知错误"
+            Log.e(TAG, "❌ 回复发送失败: $errorMsg")
+
+            // Fallback: card fails → plain text
+            if (errorMsg.contains("table number over limit") || errorMsg.contains("230099") || errorMsg.contains("HTTP 400")) {
+                Log.w(TAG, "⚠️ 降级为纯文本模式重试...")
+                sender.sendTextMessage(
+                    receiveId = event.chatId,
+                    text = text,
+                    receiveIdType = "chat_id",
+                    renderMode = com.xiaomo.feishu.messaging.RenderMode.TEXT
+                )
+            }
+        }
+    }
+
+    /**
+     * 解析图片文件路径（支持 Content URI 和文件路径）
+     */
+    private fun resolveImageFile(path: String): java.io.File? {
+        return if (path.startsWith("content://")) {
+            try {
+                val uri = android.net.Uri.parse(path)
+                val inputStream = contentResolver.openInputStream(uri)
+                val tempFile = java.io.File(cacheDir, "temp_screenshot_${System.currentTimeMillis()}.png")
+                inputStream?.use { input ->
+                    tempFile.outputStream().use { output -> input.copyTo(output) }
+                }
+                tempFile
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to resolve Content URI", e)
+                null
+            }
+        } else {
+            java.io.File(path)
         }
     }
 

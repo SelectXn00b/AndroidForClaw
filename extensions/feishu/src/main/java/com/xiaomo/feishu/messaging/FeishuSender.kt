@@ -121,6 +121,46 @@ class FeishuSender(
     }
 
     /**
+     * 通过 card_id 发送 Card Kit 卡片（用于 Streaming Card）
+     * 对齐 OpenClaw: client.im.message.create with card_id reference
+     */
+    suspend fun sendCardById(
+        receiveId: String,
+        cardId: String,
+        receiveIdType: String = "chat_id"
+    ): Result<SendResult> = withContext(Dispatchers.IO) {
+        try {
+            val content = gson.toJson(mapOf(
+                "type" to "card",
+                "data" to mapOf("card_id" to cardId)
+            ))
+            sendMessageInternal(receiveId, "interactive", content, receiveIdType)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send card by id", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * 通过 card_id 发送引用回复卡片（Streaming Card + Quote Reply）
+     */
+    suspend fun sendCardByIdReply(
+        replyToMessageId: String,
+        cardId: String
+    ): Result<SendResult> = withContext(Dispatchers.IO) {
+        try {
+            val content = gson.toJson(mapOf(
+                "type" to "card",
+                "data" to mapOf("card_id" to cardId)
+            ))
+            sendQuoteReply(replyToMessageId, "interactive", content)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send card by id reply", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
      * 编辑消息
      */
     suspend fun editMessage(
@@ -225,9 +265,10 @@ class FeishuSender(
     }
 
     /**
-     * 回复消息
+     * 话题内回复（Thread Reply）
+     * 对齐 OpenClaw replyInThread
      */
-    suspend fun replyMessage(
+    suspend fun replyInThread(
         messageId: String,
         text: String
     ): Result<SendResult> = withContext(Dispatchers.IO) {
@@ -250,12 +291,120 @@ class FeishuSender(
             val newMessageId = data?.get("message_id")?.asString
                 ?: return@withContext Result.failure(Exception("Missing message_id"))
 
-            Log.d(TAG, "Reply sent: $newMessageId")
+            Log.d(TAG, "Thread reply sent: $newMessageId")
             Result.success(SendResult(newMessageId, listOf(newMessageId)))
 
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to reply message", e)
+            Log.e(TAG, "Failed to reply in thread", e)
             Result.failure(e)
+        }
+    }
+
+    /**
+     * 引用回复（Quote Reply）
+     * 对齐 OpenClaw reply-dispatcher: POST /im/v1/messages/{message_id}/reply
+     */
+    suspend fun sendQuoteReply(
+        replyToMessageId: String,
+        msgType: String,
+        content: String
+    ): Result<SendResult> = withContext(Dispatchers.IO) {
+        try {
+            val body = mapOf(
+                "content" to content,
+                "msg_type" to msgType
+            )
+
+            val result = client.post(
+                "/open-apis/im/v1/messages/$replyToMessageId/reply",
+                body
+            )
+
+            if (result.isFailure) {
+                return@withContext Result.failure(result.exceptionOrNull()!!)
+            }
+
+            val data = result.getOrNull()?.getAsJsonObject("data")
+            val newMessageId = data?.get("message_id")?.asString
+                ?: return@withContext Result.failure(Exception("Missing message_id"))
+
+            Log.d(TAG, "Quote reply sent: $newMessageId (reply to $replyToMessageId)")
+            Result.success(SendResult(newMessageId, listOf(newMessageId)))
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send quote reply", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * 引用回复文本消息（高层便捷方法）
+     * 自动处理卡片检测、分块
+     */
+    suspend fun sendTextReply(
+        replyToMessageId: String,
+        text: String,
+        mentionTargets: List<MentionTarget> = emptyList(),
+        renderMode: RenderMode = RenderMode.AUTO
+    ): Result<SendResult> = withContext(Dispatchers.IO) {
+        try {
+            // 分块处理
+            val chunks = chunkText(text, config.textChunkLimit)
+            if (chunks.size > 1) {
+                // 第一块用引用回复，后续直接发
+                val firstResult = sendSingleTextReply(replyToMessageId, chunks[0], mentionTargets, renderMode)
+                if (firstResult.isFailure) return@withContext firstResult
+
+                val messageIds = mutableListOf(firstResult.getOrNull()!!.messageId)
+                // 后续 chunks 需要 receiveId，从 reply API 无法直接获取 chatId
+                // 所以后续 chunks 作为普通消息发送不太合适，这里简化为全部用第一条的方式
+                for (i in 1 until chunks.size) {
+                    kotlinx.coroutines.delay(200)
+                    val chunkResult = sendQuoteReply(
+                        replyToMessageId,
+                        if (shouldUseCard(chunks[i])) "interactive" else "text",
+                        if (shouldUseCard(chunks[i])) buildMarkdownCard(chunks[i], mentionTargets)
+                        else buildTextContent(chunks[i])
+                    )
+                    if (chunkResult.isSuccess) {
+                        messageIds.add(chunkResult.getOrNull()!!.messageId)
+                    }
+                }
+                return@withContext Result.success(SendResult(messageIds.first(), messageIds))
+            }
+
+            sendSingleTextReply(replyToMessageId, text, mentionTargets, renderMode)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send text reply", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * 发送单条引用回复
+     */
+    private suspend fun sendSingleTextReply(
+        replyToMessageId: String,
+        text: String,
+        mentionTargets: List<MentionTarget>,
+        renderMode: RenderMode
+    ): Result<SendResult> {
+        val useCard = when (renderMode) {
+            RenderMode.CARD -> true
+            RenderMode.TEXT -> false
+            RenderMode.AUTO -> shouldUseCard(text)
+        }
+
+        return if (useCard) {
+            val card = buildMarkdownCard(text, mentionTargets)
+            sendQuoteReply(replyToMessageId, "interactive", card)
+        } else {
+            val content = if (mentionTargets.isNotEmpty()) {
+                buildMentionedTextContent(text, mentionTargets)
+            } else {
+                buildTextContent(text)
+            }
+            sendQuoteReply(replyToMessageId, "text", content)
         }
     }
 

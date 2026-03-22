@@ -51,6 +51,18 @@ class FeishuChannel(private val config: FeishuConfig) {
     fun getToolRegistry(): com.xiaomo.feishu.tools.FeishuToolRegistry = feishuToolRegistry
 
     /**
+     * Get FeishuClient for direct API access (media download, streaming card, etc.)
+     */
+    fun getClient(): FeishuClient = client
+
+    /**
+     * Create a new streaming card session (Card Kit API)
+     * 对齐 OpenClaw FeishuStreamingSession
+     */
+    fun createStreamingCard(): com.xiaomo.feishu.messaging.FeishuStreamingCard =
+        com.xiaomo.feishu.messaging.FeishuStreamingCard(client)
+
+    /**
      * FeishuSender - 支持 Markdown 卡片渲染
      */
     val sender by lazy { com.xiaomo.feishu.messaging.FeishuSender(config, client) }
@@ -445,7 +457,13 @@ sealed class FeishuEvent {
         val chatType: String, // "p2p" or "group"
         val content: String,
         val msgType: String,
-        val mentions: List<String> = emptyList()
+        val mentions: List<String> = emptyList(),
+        // Thread/reply awareness (from Lark SDK message object)
+        val rootId: String? = null,
+        val parentId: String? = null,
+        val threadId: String? = null,
+        // Media keys for image/file/audio/video/sticker messages
+        val mediaKeys: com.xiaomo.feishu.messaging.MediaKeys? = null
     ) : FeishuEvent()
 
     data class Error(val error: Throwable) : FeishuEvent()

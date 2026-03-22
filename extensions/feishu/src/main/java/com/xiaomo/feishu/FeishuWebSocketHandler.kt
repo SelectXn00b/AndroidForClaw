@@ -117,18 +117,13 @@ class FeishuWebSocketHandler(
             val msgType = message.messageType ?: return
             val content = message.content ?: return
 
-            // 解析文本内容
-            val textContent = when (msgType) {
-                "text" -> {
-                    try {
-                        val contentJson = gson.fromJson(content, JsonObject::class.java)
-                        contentJson.get("text")?.asString ?: content
-                    } catch (e: Exception) {
-                        content
-                    }
-                }
-                else -> content
-            }
+            // 使用 ContentParser 解析所有消息类型（对齐 OpenClaw bot-content.ts）
+            val parseResult = com.xiaomo.feishu.messaging.FeishuContentParser.parseMessageContent(msgType, content)
+
+            // 提取 thread/reply 字段（对齐 OpenClaw reply-dispatcher）
+            val rootId = try { message.rootId } catch (e: Exception) { null }
+            val parentId = try { message.parentId } catch (e: Exception) { null }
+            val threadId = try { message.threadId } catch (e: Exception) { null }
 
             // 解析 mentions
             val mentions = message.mentions?.mapNotNull { mention ->
@@ -142,14 +137,19 @@ class FeishuWebSocketHandler(
                     senderId = senderId,
                     chatId = chatId,
                     chatType = chatType,
-                    content = textContent,
+                    content = parseResult.text,
                     msgType = msgType,
-                    mentions = mentions
+                    mentions = mentions,
+                    rootId = rootId,
+                    parentId = parentId,
+                    threadId = threadId,
+                    mediaKeys = parseResult.mediaKeys
                 )
             )
 
-            Log.d(TAG, "📨 收到消息: $messageId from $senderId")
-            Log.d(TAG, "   内容: $textContent")
+            Log.d(TAG, "📨 收到消息: $messageId from $senderId (type=$msgType)")
+            Log.d(TAG, "   内容: ${parseResult.text.take(200)}")
+            if (rootId != null) Log.d(TAG, "   rootId: $rootId, threadId: $threadId")
 
         } catch (e: Exception) {
             Log.e(TAG, "处理消息失败", e)

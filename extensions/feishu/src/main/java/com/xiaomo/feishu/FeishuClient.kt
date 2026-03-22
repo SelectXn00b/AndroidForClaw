@@ -34,6 +34,13 @@ class FeishuClient(private val config: FeishuConfig) {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    // Longer timeout for media downloads (aligned with OpenClaw: 120s)
+    private val mediaHttpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
+
     private val gson = Gson()
     private val baseUrl = config.getApiBaseUrl()
 
@@ -268,6 +275,41 @@ class FeishuClient(private val config: FeishuConfig) {
      * PATCH 请求
      */
     suspend fun patch(path: String, body: Any): Result<JsonObject> = apiRequest("PATCH", path, body)
+
+    /**
+     * 下载二进制数据（用于媒体文件下载）
+     * 对齐 OpenClaw downloadImageFeishu / downloadMessageResourceFeishu
+     */
+    suspend fun downloadRaw(path: String): Result<ByteArray> = withContext(Dispatchers.IO) {
+        try {
+            val url = "$baseUrl$path"
+            val token = getTenantAccessToken().getOrThrow()
+
+            val request = Request.Builder()
+                .url(url)
+                .get()
+                .addHeader("Authorization", "Bearer $token")
+                .build()
+
+            val response = mediaHttpClient.newCall(request).execute()
+
+            if (!response.isSuccessful) {
+                val errorBody = response.body?.string() ?: ""
+                Log.e(TAG, "Download failed: HTTP ${response.code} - $errorBody")
+                return@withContext Result.failure(Exception("HTTP ${response.code}"))
+            }
+
+            val bytes = response.body?.bytes()
+                ?: return@withContext Result.failure(Exception("Empty response body"))
+
+            Log.d(TAG, "Downloaded ${bytes.size} bytes from $path")
+            Result.success(bytes)
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Download failed: $path", e)
+            Result.failure(e)
+        }
+    }
 
     /**
      * 获取机器人信息 (对齐 OpenClaw probe.ts)
