@@ -680,6 +680,7 @@ private fun formatTimestamp(timestamp: Long): String {
 // Session Control Bar
 // ============================================================================
 
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun SessionControlBar(
     sessions: List<SessionManager.Session>,
@@ -690,7 +691,8 @@ fun SessionControlBar(
     onCheckUpdate: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    var showSheet by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf<String?>(null) }
 
     Surface(
         modifier = modifier,
@@ -704,98 +706,38 @@ fun SessionControlBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Box(modifier = Modifier.weight(1f)) {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { expanded = true },
-                    shape = RoundedCornerShape(8.dp),
-                    color = Color.White,
-                    border = androidx.compose.foundation.BorderStroke(
-                        width = 1.dp,
-                        color = Color(0xFFE0E0E0)
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { showSheet = true },
+                shape = RoundedCornerShape(8.dp),
+                color = Color.White,
+                border = androidx.compose.foundation.BorderStroke(
+                    width = 1.dp,
+                    color = Color(0xFFE0E0E0)
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = currentSession?.title ?: "新对话",
+                        style = TextStyle(
+                            fontSize = 14.sp,
+                            color = Color(0xFF333333),
+                            fontWeight = FontWeight.Medium
+                        ),
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = currentSession?.title ?: "新对话",
-                            style = TextStyle(
-                                fontSize = 14.sp,
-                                color = Color(0xFF333333),
-                                fontWeight = FontWeight.Medium
-                            ),
-                            modifier = Modifier.weight(1f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Icon(
-                            imageVector = Icons.Default.ArrowDropDown,
-                            contentDescription = "选择会话",
-                            tint = Color(0xFF666666),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-
-                DropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false },
-                    modifier = Modifier.widthIn(min = 200.dp, max = 300.dp)
-                ) {
-                    sessions.forEach { session ->
-                        DropdownMenuItem(
-                            text = {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = session.title,
-                                            style = TextStyle(
-                                                fontSize = 14.sp,
-                                                fontWeight = if (session.id == currentSession?.id)
-                                                    FontWeight.Bold else FontWeight.Normal
-                                            ),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = formatSessionTime(session.createdAt),
-                                            style = TextStyle(fontSize = 11.sp, color = Color(0xFF999999))
-                                        )
-                                    }
-                                    if (onDeleteSession != null && sessions.size > 1) {
-                                        IconButton(
-                                            onClick = {
-                                                onDeleteSession(session.id)
-                                                expanded = false
-                                            },
-                                            modifier = Modifier.size(28.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Delete,
-                                                contentDescription = "删除会话",
-                                                tint = Color(0xFF999999),
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                            },
-                            onClick = {
-                                onSessionChange(session.id)
-                                expanded = false
-                            },
-                            modifier = Modifier.background(
-                                if (session.id == currentSession?.id) Color(0xFFF0F0F0)
-                                else Color.Transparent
-                            )
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.Default.ArrowDropDown,
+                        contentDescription = "选择会话",
+                        tint = Color(0xFF666666),
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
             }
 
@@ -817,6 +759,183 @@ fun SessionControlBar(
                 }
             }
         }
+    }
+
+    // Session list bottom sheet
+    if (showSheet) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+        ModalBottomSheet(
+            onDismissRequest = { showSheet = false },
+            sheetState = sheetState,
+            containerColor = Color.White,
+            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 24.dp)
+            ) {
+                // Header
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "会话列表",
+                        style = TextStyle(
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF333333)
+                        )
+                    )
+                    Text(
+                        text = "${sessions.size} 个会话",
+                        style = TextStyle(fontSize = 13.sp, color = Color(0xFF999999))
+                    )
+                }
+
+                Text(
+                    text = "长按会话可删除 · 左滑也可删除",
+                    style = TextStyle(fontSize = 12.sp, color = Color(0xFFBBBBBB)),
+                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp)
+                )
+
+                HorizontalDivider(color = Color(0xFFF0F0F0))
+
+                // Session items
+                sessions.forEach { session ->
+                    val dismissState = rememberSwipeToDismissBoxState(
+                        confirmValueChange = { dismissValue ->
+                            if (dismissValue == SwipeToDismissBoxValue.EndToStart && onDeleteSession != null) {
+                                showDeleteConfirm = session.id
+                            }
+                            false // Don't auto-dismiss; let the confirm dialog handle it
+                        }
+                    )
+
+                    SwipeToDismissBox(
+                        state = dismissState,
+                        backgroundContent = {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color(0xFFFF5252))
+                                    .padding(horizontal = 20.dp),
+                                contentAlignment = Alignment.CenterEnd
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "删除",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        },
+                        enableDismissFromStartToEnd = false,
+                        enableDismissFromEndToStart = onDeleteSession != null
+                    ) {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .combinedClickable(
+                                    onClick = {
+                                        onSessionChange(session.id)
+                                        showSheet = false
+                                    },
+                                    onLongClick = {
+                                        if (onDeleteSession != null) {
+                                            showDeleteConfirm = session.id
+                                        }
+                                    }
+                                ),
+                            color = if (session.id == currentSession?.id) Color(0xFFF5F8FF) else Color.White
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Active indicator
+                                if (session.id == currentSession?.id) {
+                                    Box(
+                                        modifier = Modifier
+                                            .width(3.dp)
+                                            .height(32.dp)
+                                            .clip(RoundedCornerShape(2.dp))
+                                            .background(Color(0xFF005FFF))
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                }
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = session.title,
+                                        style = TextStyle(
+                                            fontSize = 15.sp,
+                                            fontWeight = if (session.id == currentSession?.id)
+                                                FontWeight.SemiBold else FontWeight.Normal,
+                                            color = Color(0xFF333333)
+                                        ),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = formatSessionTime(session.createdAt),
+                                        style = TextStyle(fontSize = 12.sp, color = Color(0xFF999999)),
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    )
+                                }
+
+                                // Message count badge
+                                if (session.messages.isNotEmpty()) {
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = Color(0xFFF0F0F0)
+                                    ) {
+                                        Text(
+                                            text = "${session.messages.size}",
+                                            style = TextStyle(fontSize = 11.sp, color = Color(0xFF999999)),
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Delete confirmation dialog
+    showDeleteConfirm?.let { sessionId ->
+        val sessionTitle = sessions.find { it.id == sessionId }?.title ?: "此会话"
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = null },
+            title = { Text("删除会话") },
+            text = { Text("确定要删除「$sessionTitle」吗？删除后不可恢复。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteSession?.invoke(sessionId)
+                        showDeleteConfirm = null
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFFF5252))
+                ) {
+                    Text("删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = null }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 }
 
