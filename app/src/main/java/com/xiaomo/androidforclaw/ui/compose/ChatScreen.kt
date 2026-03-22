@@ -798,115 +798,94 @@ fun SessionControlBar(
                     )
                 }
 
-                Text(
-                    text = "长按会话可删除 · 左滑也可删除",
-                    style = TextStyle(fontSize = 12.sp, color = Color(0xFFBBBBBB)),
-                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp)
-                )
-
                 HorizontalDivider(color = Color(0xFFF0F0F0))
 
                 // Session items
                 sessions.forEach { session ->
-                    val dismissState = rememberSwipeToDismissBoxState(
-                        confirmValueChange = { dismissValue ->
-                            if (dismissValue == SwipeToDismissBoxValue.EndToStart && onDeleteSession != null) {
-                                showDeleteConfirm = session.id
-                            }
-                            false // Don't auto-dismiss; let the confirm dialog handle it
-                        }
-                    )
-
-                    SwipeToDismissBox(
-                        state = dismissState,
-                        backgroundContent = {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(Color(0xFFFF5252))
-                                    .padding(horizontal = 20.dp),
-                                contentAlignment = Alignment.CenterEnd
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Delete,
-                                    contentDescription = "删除",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-                        },
-                        enableDismissFromStartToEnd = false,
-                        enableDismissFromEndToStart = onDeleteSession != null
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .combinedClickable(
+                                onClick = {
+                                    onSessionChange(session.id)
+                                    showSheet = false
+                                },
+                                onLongClick = {
+                                    if (onDeleteSession != null) {
+                                        showDeleteConfirm = session.id
+                                    }
+                                }
+                            ),
+                        color = if (session.id == currentSession?.id) Color(0xFFF5F8FF) else Color.White
                     ) {
-                        Surface(
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .combinedClickable(
-                                    onClick = {
-                                        onSessionChange(session.id)
-                                        showSheet = false
-                                    },
-                                    onLongClick = {
-                                        if (onDeleteSession != null) {
-                                            showDeleteConfirm = session.id
-                                        }
-                                    }
-                                ),
-                            color = if (session.id == currentSession?.id) Color(0xFFF5F8FF) else Color.White
+                                .padding(start = 20.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 20.dp, vertical = 14.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                // Active indicator
-                                if (session.id == currentSession?.id) {
-                                    Box(
-                                        modifier = Modifier
-                                            .width(3.dp)
-                                            .height(32.dp)
-                                            .clip(RoundedCornerShape(2.dp))
-                                            .background(Color(0xFF005FFF))
-                                    )
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                }
+                            // Active indicator
+                            if (session.id == currentSession?.id) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(3.dp)
+                                        .height(32.dp)
+                                        .clip(RoundedCornerShape(2.dp))
+                                        .background(Color(0xFF005FFF))
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                            }
 
-                                Column(modifier = Modifier.weight(1f)) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = session.title,
+                                    style = TextStyle(
+                                        fontSize = 15.sp,
+                                        fontWeight = if (session.id == currentSession?.id)
+                                            FontWeight.SemiBold else FontWeight.Normal,
+                                        color = Color(0xFF333333)
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = formatSessionTime(session.createdAt),
+                                    style = TextStyle(fontSize = 12.sp, color = Color(0xFF999999)),
+                                    modifier = Modifier.padding(top = 2.dp)
+                                )
+                            }
+
+                            // Message count badge
+                            if (session.messages.isNotEmpty()) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = Color(0xFFF0F0F0)
+                                ) {
                                     Text(
-                                        text = session.title,
-                                        style = TextStyle(
-                                            fontSize = 15.sp,
-                                            fontWeight = if (session.id == currentSession?.id)
-                                                FontWeight.SemiBold else FontWeight.Normal,
-                                            color = Color(0xFF333333)
-                                        ),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = formatSessionTime(session.createdAt),
-                                        style = TextStyle(fontSize = 12.sp, color = Color(0xFF999999)),
-                                        modifier = Modifier.padding(top = 2.dp)
+                                        text = "${session.messages.size}",
+                                        style = TextStyle(fontSize = 11.sp, color = Color(0xFF999999)),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                                     )
                                 }
+                            }
 
-                                // Message count badge
-                                if (session.messages.isNotEmpty()) {
-                                    Surface(
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = Color(0xFFF0F0F0)
-                                    ) {
-                                        Text(
-                                            text = "${session.messages.size}",
-                                            style = TextStyle(fontSize = 11.sp, color = Color(0xFF999999)),
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                                        )
-                                    }
+                            // Delete button
+                            if (onDeleteSession != null) {
+                                IconButton(
+                                    onClick = { showDeleteConfirm = session.id },
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "删除会话",
+                                        tint = Color(0xFFBBBBBB),
+                                        modifier = Modifier.size(20.dp)
+                                    )
                                 }
                             }
                         }
                     }
+                    HorizontalDivider(color = Color(0xFFF5F5F5))
                 }
             }
         }
