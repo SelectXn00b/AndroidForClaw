@@ -329,7 +329,9 @@ class MainActivityCompose : ComponentActivity() {
     private fun registerChatBroadcastReceiver() {
         chatBroadcastReceiver = ChatBroadcastReceiver { message ->
             Log.d(TAG, "📨 [BroadcastReceiver] Received message: $message")
-            // Message routing handled by MyApplication.handleChatBroadcast
+            // Send to agent via ViewModel
+            openClawViewModel.sendChat(message = message, thinking = "", attachments = emptyList())
+            Log.d(TAG, "✅ [BroadcastReceiver] Message sent to agent: $message")
         }
 
         val filter = ChatBroadcastReceiver.createIntentFilter()
