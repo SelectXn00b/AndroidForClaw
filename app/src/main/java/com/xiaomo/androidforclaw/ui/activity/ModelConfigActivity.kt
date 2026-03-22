@@ -58,6 +58,8 @@ class ModelConfigActivity : AppCompatActivity() {
 
     // Discovered models (from /v1/models API)
     private val discoveredModels = mutableListOf<PresetModel>()
+    // All models for current provider (preset + discovered), used for search filtering
+    private var allCurrentModels = listOf<PresetModel>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -313,6 +315,24 @@ class ModelConfigActivity : AppCompatActivity() {
         }
         buildModelRadioGroup(allModels)
 
+        // Model search filter
+        binding.etModelSearch.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                val query = s?.toString()?.trim()?.lowercase() ?: ""
+                if (query.isEmpty()) {
+                    renderFilteredModels(allCurrentModels)
+                } else {
+                    val filtered = allCurrentModels.filter { model ->
+                        model.id.lowercase().contains(query) ||
+                            model.name.lowercase().contains(query)
+                    }
+                    renderFilteredModels(filtered)
+                }
+            }
+        })
+
         // Discovery button
         if (provider.supportsDiscovery) {
             binding.btnDiscoverModels.visibility = View.VISIBLE
@@ -364,12 +384,31 @@ class ModelConfigActivity : AppCompatActivity() {
     }
 
     private fun buildModelRadioGroup(models: List<PresetModel>) {
+        // Save full list for search filtering
+        allCurrentModels = models.toList()
+        // Clear search field when model list refreshes
+        binding.etModelSearch.setText("")
+        renderFilteredModels(models)
+    }
+
+    private fun renderFilteredModels(models: List<PresetModel>) {
         binding.containerPresetModels.removeAllViews()
         val inflater = LayoutInflater.from(this)
 
-        // Auto-select first model
+        // Auto-select first model if nothing selected
         if (models.isNotEmpty() && selectedModelId == null) {
             selectedModelId = models.first().id
+        }
+
+        if (models.isEmpty() && allCurrentModels.isNotEmpty()) {
+            val tv = TextView(this).apply {
+                text = "无匹配模型"
+                setTextColor(getColor(android.R.color.darker_gray))
+                textSize = 13f
+                setPadding(0, 16, 0, 16)
+            }
+            binding.containerPresetModels.addView(tv)
+            return
         }
 
         for (model in models) {
