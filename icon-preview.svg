@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+  <!-- 背景 -->
+  <rect width="108" height="108" fill="#0F172A"/>
+  
+  <g transform="translate(54,54)">
+    <!-- 背景圆形 -->
+    <circle cx="0" cy="0" r="30" fill="#2563EB"/>
+    
+    <!-- 内圈微光 -->
+    <circle cx="0" cy="0" r="26" fill="#3B82F6" opacity="0.5"/>
+    
+    <!-- 爪印主体 - 大肉垫 -->
+    <ellipse cx="0" cy="6" rx="11" ry="9" fill="#FFFFFF"/>
+    
+    <!-- 爪印 - 左上趾 -->
+    <ellipse cx="-12" cy="-8" rx="4.5" ry="5.5" transform="rotate(-20,-12,-8)" fill="#FFFFFF"/>
+    
+    <!-- 爪印 - 左中趾 -->
+    <ellipse cx="-5" cy="-16" rx="4" ry="5.5" transform="rotate(-5,-5,-16)" fill="#FFFFFF"/>
+    
+    <!-- 爪印 - 右中趾 -->
+    <ellipse cx="5" cy="-16" rx="4" ry="5.5" transform="rotate(5,5,-16)" fill="#FFFFFF"/>
+    
+    <!-- 爪印 - 右上趾 -->
+    <ellipse cx="12" cy="-8" rx="4.5" ry="5.5" transform="rotate(20,12,-8)" fill="#FFFFFF"/>
+    
+    <!-- Android 天线 - 左 -->
+    <line x1="-4" y1="-20" x2="-7" y2="-26" stroke="#60A5FA" stroke-width="1.8" stroke-linecap="round"/>
+    
+    <!-- Android 天线 - 右 -->
+    <line x1="4" y1="-20" x2="7" y2="-26" stroke="#60A5FA" stroke-width="1.8" stroke-linecap="round"/>
+    
+    <!-- 天线顶端小圆点 -->
+    <circle cx="-7" cy="-26" r="1.2" fill="#60A5FA"/>
+    <circle cx="7" cy="-26" r="1.2" fill="#60A5FA"/>
+    
+    <!-- 肉垫上的电路纹路 -->
+    <line x1="-5" y1="5" x2="5" y2="5" stroke="#3B82F6" stroke-width="0.8" stroke-linecap="round"/>
+    <line x1="0" y1="1" x2="0" y2="9" stroke="#3B82F6" stroke-width="0.8" stroke-linecap="round"/>
+    
+    <!-- 电路节点小点 -->
+    <circle cx="-5" cy="5" r="0.8" fill="#2563EB"/>
+    <circle cx="5" cy="5" r="0.8" fill="#2563EB"/>
+    <circle cx="0" cy="5" r="0.8" fill="#2563EB"/>
+  </g>
+</svg>

@@ -307,10 +307,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         uiSessionManager.deleteSession(sessionId)
         // Clean up sync state
         sessionSyncState.remove(sessionId)
-
-        // Clean up backend session
-        val agentSessionManager = com.xiaomo.androidforclaw.core.MainEntryNew.getSessionManager()
-        agentSessionManager?.clear(sessionId)
+        // Note: backend session clear is already handled inside uiSessionManager.deleteSession()
     }
 
     fun clearCurrentSession() {

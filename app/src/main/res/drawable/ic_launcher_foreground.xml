@@ -4,82 +4,97 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-  <!-- 背景圆形渐变 -->
+  <!-- 主画布以中心 54,54 为原点 -->
   <group
       android:translateX="54"
       android:translateY="54">
 
-    <!-- 外圈光晕效果 -->
+    <!-- 背景圆形 - 渐变蓝色 -->
     <path
-        android:pathData="M 0,0 m -32,0 a 32,32 0 1,0 64,0 a 32,32 0 1,0 -64,0"
-        android:fillColor="#4A90E2"
-        android:fillAlpha="0.2"/>
+        android:pathData="M0,-30 A30,30 0 1,1 0,30 A30,30 0 1,1 0,-30Z"
+        android:fillColor="#2563EB"/>
 
-    <!-- 主圆形背景 -->
+    <!-- 内圈微光 -->
     <path
-        android:pathData="M 0,0 m -28,0 a 28,28 0 1,0 56,0 a 28,28 0 1,0 -56,0"
-        android:fillColor="#5B9BD5"/>
+        android:pathData="M0,-26 A26,26 0 1,1 0,26 A26,26 0 1,1 0,-26Z"
+        android:fillColor="#3B82F6"
+        android:fillAlpha="0.5"/>
 
-    <!-- 字母 A 的主体 - 简化现代设计 -->
-    <group
-        android:translateY="-2">
-      <!-- A 的左边 -->
-      <path
-          android:pathData="M -12,-15 L -8,12 L -4,12 L 0,-15 Z"
-          android:fillColor="#FFFFFF"/>
-
-      <!-- A 的右边 -->
-      <path
-          android:pathData="M 0,-15 L 4,12 L 8,12 L 12,-15 Z"
-          android:fillColor="#FFFFFF"/>
-
-      <!-- A 的横杠 - 设计成爪痕效果 -->
-      <path
-          android:pathData="M -7,-2 L -5,-1 L 5,-1 L 7,-2 L 5,-3 L -5,-3 Z"
-          android:fillColor="#70CFFF"/>
-
-      <!-- 额外的爪痕装饰 -->
-      <path
-          android:pathData="M -6,1 L -4,3 L -3,2 L -5,0 Z"
-          android:fillColor="#70CFFF"
-          android:fillAlpha="0.8"/>
-      <path
-          android:pathData="M 3,2 L 5,4 L 6,3 L 4,1 Z"
-          android:fillColor="#70CFFF"
-          android:fillAlpha="0.8"/>
-    </group>
-
-    <!-- 底部爪子装饰 - 三个小爪印 -->
-    <group
-        android:translateY="18">
-      <!-- 左爪 -->
-      <path
-          android:pathData="M -10,0 L -9,3 L -7,3 L -6,0 Z"
-          android:fillColor="#70CFFF"
-          android:fillAlpha="0.6"/>
-
-      <!-- 中间爪 -->
-      <path
-          android:pathData="M -2,1 L -1,4 L 1,4 L 2,1 Z"
-          android:fillColor="#70CFFF"
-          android:fillAlpha="0.8"/>
-
-      <!-- 右爪 -->
-      <path
-          android:pathData="M 6,0 L 7,3 L 9,3 L 10,0 Z"
-          android:fillColor="#70CFFF"
-          android:fillAlpha="0.6"/>
-    </group>
-
-    <!-- AI 科技感点缀 - 四个角的小点 -->
+    <!-- 爪印主体 - 大肉垫 (椭圆) -->
     <path
-        android:pathData="M -18,-18 L -16,-16 L -18,-14 L -20,-16 Z"
-        android:fillColor="#FFFFFF"
-        android:fillAlpha="0.4"/>
+        android:pathData="M0,6 A11,9 0 1,1 0.01,6Z"
+        android:fillColor="#FFFFFF"/>
+
+    <!-- 爪印 - 左上趾 -->
     <path
-        android:pathData="M 18,-18 L 20,-16 L 18,-14 L 16,-16 Z"
-        android:fillColor="#FFFFFF"
-        android:fillAlpha="0.4"/>
+        android:pathData="M-12,-8 A4.5,5.5 -20 1,1 -11.99,-8Z"
+        android:fillColor="#FFFFFF"/>
+
+    <!-- 爪印 - 左中趾 -->
+    <path
+        android:pathData="M-5,-16 A4,5.5 -5 1,1 -4.99,-16Z"
+        android:fillColor="#FFFFFF"/>
+
+    <!-- 爪印 - 右中趾 -->
+    <path
+        android:pathData="M5,-16 A4,5.5 5 1,1 5.01,-16Z"
+        android:fillColor="#FFFFFF"/>
+
+    <!-- 爪印 - 右上趾 -->
+    <path
+        android:pathData="M12,-8 A4.5,5.5 20 1,1 12.01,-8Z"
+        android:fillColor="#FFFFFF"/>
+
+    <!-- Android 天线 - 左 -->
+    <path
+        android:pathData="M-4,-20 L-7,-26"
+        android:strokeColor="#60A5FA"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"/>
+
+    <!-- Android 天线 - 右 -->
+    <path
+        android:pathData="M4,-20 L7,-26"
+        android:strokeColor="#60A5FA"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"/>
+
+    <!-- 天线顶端小圆点 - 左 -->
+    <path
+        android:pathData="M-7,-26 A1.2,1.2 0 1,1 -6.99,-26Z"
+        android:fillColor="#60A5FA"/>
+
+    <!-- 天线顶端小圆点 - 右 -->
+    <path
+        android:pathData="M7,-26 A1.2,1.2 0 1,1 7.01,-26Z"
+        android:fillColor="#60A5FA"/>
+
+    <!-- 肉垫上的电路纹路 - 水平线 -->
+    <path
+        android:pathData="M-5,5 L5,5"
+        android:strokeColor="#3B82F6"
+        android:strokeWidth="0.8"
+        android:strokeLineCap="round"
+        android:fillAlpha="0"/>
+
+    <!-- 肉垫上的电路纹路 - 竖线 -->
+    <path
+        android:pathData="M0,1 L0,9"
+        android:strokeColor="#3B82F6"
+        android:strokeWidth="0.8"
+        android:strokeLineCap="round"
+        android:fillAlpha="0"/>
+
+    <!-- 电路节点小点 -->
+    <path
+        android:pathData="M-5,5 A0.8,0.8 0 1,1 -4.99,5Z"
+        android:fillColor="#2563EB"/>
+    <path
+        android:pathData="M5,5 A0.8,0.8 0 1,1 5.01,5Z"
+        android:fillColor="#2563EB"/>
+    <path
+        android:pathData="M0,5 A0.8,0.8 0 1,1 0.01,5Z"
+        android:fillColor="#2563EB"/>
 
   </group>
 </vector>

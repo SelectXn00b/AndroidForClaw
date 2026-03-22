@@ -772,6 +772,7 @@ fun SessionControlBar(
                                         IconButton(
                                             onClick = {
                                                 onDeleteSession(session.id)
+                                                expanded = false
                                             },
                                             modifier = Modifier.size(28.dp)
                                         ) {

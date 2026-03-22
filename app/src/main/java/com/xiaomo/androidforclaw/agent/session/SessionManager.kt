@@ -140,23 +140,25 @@ class SessionManager(
      * Clear session
      */
     fun clear(sessionKey: String) {
-        // Try to delete JSONL file from in-memory cache first
-        val session = sessions.remove(sessionKey)
-        if (session != null) {
-            getSessionJSONLFile(session.sessionId).delete()
-        }
-
-        // Also check index (session may not be in memory cache after restart)
-        val metadata = sessionIndex.remove(sessionKey)
-        if (metadata != null) {
-            if (session == null) {
-                // Session wasn't in memory, delete JSONL via index metadata
-                getSessionJSONLFile(metadata.sessionId).delete()
+        sessionWriteLock.write {
+            // Try to delete JSONL file from in-memory cache first
+            val session = sessions.remove(sessionKey)
+            if (session != null) {
+                getSessionJSONLFile(session.sessionId).delete()
             }
-            saveIndex()
-        }
 
-        Log.d(TAG, "Session cleared: $sessionKey")
+            // Also check index (session may not be in memory cache after restart)
+            val metadata = sessionIndex.remove(sessionKey)
+            if (metadata != null) {
+                if (session == null) {
+                    // Session wasn't in memory, delete JSONL via index metadata
+                    getSessionJSONLFile(metadata.sessionId).delete()
+                }
+                saveIndex()
+            }
+
+            Log.d(TAG, "Session cleared: $sessionKey")
+        }
 
         // Opportunistic cleanup: remove orphan JSONL files not referenced by any index entry
         cleanOrphanJsonlFiles()
