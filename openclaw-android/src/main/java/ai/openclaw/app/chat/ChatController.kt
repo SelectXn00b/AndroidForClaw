@@ -111,6 +111,27 @@ class ChatController(
     scope.launch { bootstrap(forceHealth = true, refreshSessions = false) }
   }
 
+  fun deleteSession(sessionKey: String) {
+    val key = sessionKey.trim()
+    if (key.isEmpty()) return
+    scope.launch {
+      try {
+        val params = buildJsonObject { put("sessionKey", JsonPrimitive(key)) }
+        session.request("session.clear", params.toString())
+      } catch (_: Throwable) {
+        // best-effort gateway clear
+      }
+      // Remove from local list immediately
+      _sessions.value = _sessions.value.filter { it.key != key }
+      // If deleted the active session, switch to main
+      if (_sessionKey.value == key) {
+        val fallback = _sessions.value.firstOrNull()?.key ?: "main"
+        _sessionKey.value = fallback
+        bootstrap(forceHealth = false, refreshSessions = true)
+      }
+    }
+  }
+
   fun sendMessage(
     message: String,
     thinkingLevel: String,

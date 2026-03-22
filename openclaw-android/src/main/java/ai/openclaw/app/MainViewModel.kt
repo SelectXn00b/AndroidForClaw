@@ -265,6 +265,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ensureRuntime().switchChatSession(sessionKey)
   }
 
+  fun deleteChatSession(sessionKey: String) {
+    ensureRuntime().deleteChatSession(sessionKey)
+  }
+
   fun abortChat() {
     ensureRuntime().abortChat()
   }

@@ -925,6 +925,10 @@ class NodeRuntime(
     chat.switchSession(sessionKey)
   }
 
+  fun deleteChatSession(sessionKey: String) {
+    chat.deleteSession(sessionKey)
+  }
+
   fun abortChat() {
     chat.abort()
   }

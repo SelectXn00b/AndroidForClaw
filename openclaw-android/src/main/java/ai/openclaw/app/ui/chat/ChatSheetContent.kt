@@ -3,6 +3,8 @@ package ai.openclaw.app.ui.chat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -13,15 +15,20 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -101,6 +108,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
       sessions = sessions,
       mainSessionKey = mainSessionKey,
       onSelectSession = { key -> viewModel.switchChatSession(key) },
+      onDeleteSession = { key -> viewModel.deleteChatSession(key) },
     )
 
     if (!errorText.isNullOrBlank()) {
@@ -148,17 +156,21 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChatThreadSelector(
   sessionKey: String,
   sessions: List<ChatSessionEntry>,
   mainSessionKey: String,
   onSelectSession: (String) -> Unit,
+  onDeleteSession: ((String) -> Unit)? = null,
 ) {
   val sessionOptions =
     remember(sessionKey, sessions, mainSessionKey) {
       resolveSessionChoices(sessionKey, sessions, mainSessionKey = mainSessionKey)
     }
+
+  var deleteConfirmKey by remember { mutableStateOf<String?>(null) }
 
   Row(
     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -167,12 +179,19 @@ private fun ChatThreadSelector(
     for (entry in sessionOptions) {
       val active = entry.key == sessionKey
       Surface(
-        onClick = { onSelectSession(entry.key) },
         shape = RoundedCornerShape(14.dp),
         color = if (active) mobileAccent else mobileCardSurface,
         border = BorderStroke(1.dp, if (active) mobileAccentBorderStrong else mobileBorderStrong),
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
+        modifier = Modifier.combinedClickable(
+          onClick = { onSelectSession(entry.key) },
+          onLongClick = {
+            if (onDeleteSession != null) {
+              deleteConfirmKey = entry.key
+            }
+          },
+        ),
       ) {
         Text(
           text = friendlySessionName(entry.displayName ?: entry.key),
@@ -184,6 +203,34 @@ private fun ChatThreadSelector(
         )
       }
     }
+  }
+
+  // Delete confirmation dialog
+  deleteConfirmKey?.let { key ->
+    val displayName = sessionOptions.find { it.key == key }?.let {
+      friendlySessionName(it.displayName ?: it.key)
+    } ?: key
+    AlertDialog(
+      onDismissRequest = { deleteConfirmKey = null },
+      title = { Text("删除会话") },
+      text = { Text("确定要删除「$displayName」吗？删除后不可恢复。") },
+      confirmButton = {
+        TextButton(
+          onClick = {
+            onDeleteSession?.invoke(key)
+            deleteConfirmKey = null
+          },
+          colors = ButtonDefaults.textButtonColors(contentColor = mobileDanger),
+        ) {
+          Text("删除")
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = { deleteConfirmKey = null }) {
+          Text("取消")
+        }
+      },
+    )
   }
 }
 
