@@ -9,25 +9,45 @@ plugins {
 // 获取打包时间，精确到小时
 def buildTime = new Date().format("yyyyMMddHH", TimeZone.getTimeZone("Asia/Shanghai"))
 
+// 从 keystore.properties 读取签名配置
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 android {
     signingConfigs {
         debug {
-            // Debug和Release使用相同签名 (从上级目录加载)
-            keyAlias 'android'
-            keyPassword 'android'
-            storeFile project.rootProject.file('../keystore.jks')
-            storePassword 'android'
+            if (keystorePropertiesFile.exists()) {
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+                storeFile rootProject.file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+            } else {
+                // 回退：使用默认签名
+                keyAlias 'android'
+                keyPassword 'android'
+                storeFile project.rootProject.file('../keystore.jks')
+                storePassword 'android'
+            }
             enableV1Signing true
             enableV2Signing true
             enableV3Signing true
             enableV4Signing true
         }
         release {
-            // Release使用与Debug相同的签名 (从上级目录加载)
-            keyAlias 'android'
-            keyPassword 'android'
-            storeFile project.rootProject.file('../keystore.jks')
-            storePassword 'android'
+            if (keystorePropertiesFile.exists()) {
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+                storeFile rootProject.file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+            } else {
+                keyAlias 'android'
+                keyPassword 'android'
+                storeFile project.rootProject.file('../keystore.jks')
+                storePassword 'android'
+            }
             enableV1Signing true
             enableV2Signing true
             enableV3Signing true
