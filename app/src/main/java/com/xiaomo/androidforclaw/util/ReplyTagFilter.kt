@@ -1,3 +1,7 @@
+/**
+ * OpenClaw Source Reference:
+ * - src/utils/directive-tags.ts (REPLY_TAG_RE)
+ */
 package com.xiaomo.androidforclaw.util
 
 /**

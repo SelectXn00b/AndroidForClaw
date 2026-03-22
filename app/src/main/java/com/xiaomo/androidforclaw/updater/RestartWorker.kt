@@ -1,3 +1,7 @@
+/**
+ * OpenClaw Source Reference:
+ * - 无 OpenClaw 对应 (Android 平台独有)
+ */
 package com.xiaomo.androidforclaw.updater
 
 import android.content.Context

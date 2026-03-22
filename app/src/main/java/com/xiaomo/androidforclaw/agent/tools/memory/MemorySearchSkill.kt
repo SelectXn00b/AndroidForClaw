@@ -1,3 +1,8 @@
+/**
+ * OpenClaw Source Reference:
+ * - src/agents/tools/memory-tool.ts
+ * - src/agents/memory-search.ts
+ */
 package com.xiaomo.androidforclaw.agent.tools.memory
 
 import com.xiaomo.androidforclaw.logging.Log

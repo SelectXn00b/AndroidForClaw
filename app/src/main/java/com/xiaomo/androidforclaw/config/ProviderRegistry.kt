@@ -1,3 +1,8 @@
+/**
+ * OpenClaw Source Reference:
+ * - src/agents/models-config.ts
+ * - src/agents/model-catalog.ts
+ */
 package com.xiaomo.androidforclaw.config
 
 import android.content.Context

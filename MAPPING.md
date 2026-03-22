@@ -2,7 +2,7 @@
 
 **纯粹的文件和文件夹映射关系,方便快速查找对应实现。**
 
-> 最后更新: 2026-03-20
+> 最后更新: 2026-03-22
 > OpenClaw 版本: 2026.3.11 (29dc654)
 
 ## 对齐统计
@@ -17,9 +17,9 @@
 | Skills | 90% | 文档格式/加载/ClawHub 完整 |
 | Bootstrap | 100% | 8 个文件、预算、截断策略完全一致 |
 | Context 管理 | 85% | 窗口/裁剪/压缩完整,缺 compaction safeguard |
-| Channels | 60% | Feishu/Discord 完整,其余为框架 |
+| Channels | 75% | Feishu 三功能完整 (Content Parser/Reply Dispatcher/Streaming Card),Discord 完整,其余为框架 |
 | Security | 15% | 仅 TokenAuth,缺 Pairing/DM-Policy/External-Content |
-| **总体** | **~78%** | 核心 Agent 路径高度对齐,安全/渠道/高级工具待补 |
+| **总体** | **~80%** | 核心 Agent 路径高度对齐,Feishu 渠道完善,安全/高级工具待补 |
 
 ---
 
@@ -155,9 +155,11 @@
 | `src/channels/registry.ts` | `channel/ChannelDefinition.kt` + `ChannelManager.kt` | ✅ |
 | `src/channels/session.ts` | `channel/ChannelManager.kt` | ✅ |
 | `src/channels/mention-gating.ts` | `extensions/feishu/` (内联) | ✅ |
-| `src/channels/plugins/` | `extensions/feishu/` + `extensions/discord/` | ✅ 部分 |
+| `src/channels/plugins/feishu` | `extensions/feishu/FeishuContentParser.kt` | ✅ 消息内容解析 |
+| `src/channels/plugins/feishu` | `extensions/feishu/FeishuReplyDispatcher.kt` | ✅ 回复分发 |
+| `src/channels/draft-stream-*.ts` | `extensions/feishu/FeishuStreamingCard.kt` | ✅ 流式卡片 |
+| `src/channels/plugins/discord` | `extensions/discord/` | ✅ |
 | `src/channels/typing.ts` | - | ❌ |
-| `src/channels/draft-stream-*.ts` | - | ❌ |
 | `src/whatsapp/` | `extensions/whatsapp/` | 框架 |
 | `src/line/` | - | ❌ |
 
@@ -378,13 +380,25 @@
 
 | AndroidForClaw | 说明 |
 |----------------|------|
-| `ui/activity/` | Activity 层 |
-| `ui/adapter/` | Adapter 层 |
-| `ui/compose/` | Compose UI |
+| `ui/activity/MainActivityCompose.kt` | 主页入口 (Compose) |
+| `ui/activity/ModelSetupActivity.kt` | 首次引导页 (XML) |
+| `ui/activity/ModelConfigActivity.kt` | 模型配置页 (XML) |
+| `ui/activity/ConfigActivity.kt` | 配置页 (XML) |
+| `ui/activity/SkillsActivity.kt` | Skills 管理页 (XML) |
+| `ui/activity/PermissionsActivity.kt` | 权限管理页 (XML) |
+| `ui/activity/ChannelListActivity.kt` | Channel 列表 (Compose) |
+| `ui/activity/FeishuChannelActivity.kt` | 飞书配置页 (Compose) |
+| `ui/activity/McpConfigActivity.kt` | MCP 配置页 (Compose) |
+| `ui/activity/TermuxSetupActivity.kt` | Termux 配置页 (Compose) |
+| `ui/compose/ChatScreen.kt` | 聊天界面 (工具调用卡片渲染) |
+| `ui/compose/ForClawConnectTab.kt` | Connect Tab |
+| `ui/compose/ForClawSettingsTab.kt` | Settings Tab |
+| `ui/compose/ChannelModelPicker.kt` | Channel 模型选择器 |
+| `ui/viewmodel/ChatViewModel.kt` | 聊天 ViewModel (工具调用历史同步) |
+| `ui/session/SessionManager.kt` | 会话状态管理 |
 | `ui/float/` | 悬浮窗 |
-| `ui/session/` | 会话 UI |
 | `ui/view/` | 视图层 |
-| `ui/viewmodel/` | ViewModel 层 |
+| `ui/adapter/` | Adapter 层 |
 
 ### Extensions
 

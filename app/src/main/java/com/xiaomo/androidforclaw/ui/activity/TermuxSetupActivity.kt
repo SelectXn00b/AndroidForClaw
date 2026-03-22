@@ -1,4 +1,7 @@
 /**
+ * OpenClaw Source Reference:
+ * - 无 OpenClaw 对应 (Android 平台独有)
+ *
  * Termux Runtime Setup — Embedded bootstrap, no SSH needed.
  */
 package com.xiaomo.androidforclaw.ui.activity

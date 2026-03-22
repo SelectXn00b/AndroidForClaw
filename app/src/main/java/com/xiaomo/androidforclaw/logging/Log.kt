@@ -1,3 +1,7 @@
+/**
+ * OpenClaw Source Reference:
+ * - src/logger.ts
+ */
 package com.xiaomo.androidforclaw.logging
 
 /**

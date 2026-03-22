@@ -1,8 +1,10 @@
-package com.xiaomo.androidforclaw.agent.tools.device
-
 /**
+ * OpenClaw Source Reference:
+ * - src/agents/tools/browser-tool.ts (架构对齐：DeviceTool 对应 browser-tool)
+ *
  * Adapter: wraps DeviceTool (Tool interface) as a Skill for AndroidToolRegistry.
  */
+package com.xiaomo.androidforclaw.agent.tools.device
 
 import android.content.Context
 import com.xiaomo.androidforclaw.agent.tools.Skill

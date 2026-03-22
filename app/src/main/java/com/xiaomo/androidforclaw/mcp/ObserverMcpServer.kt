@@ -1,3 +1,7 @@
+/**
+ * OpenClaw Source Reference:
+ * - 无 OpenClaw 对应 (Android 平台独有 — MCP Server 供外部 Agent 调用)
+ */
 package com.xiaomo.androidforclaw.mcp
 
 import android.util.Log
