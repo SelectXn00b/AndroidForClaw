@@ -24,7 +24,7 @@ import java.util.UUID
  */
 class GatewayServer(
     private val context: Context,
-    private val port: Int = 8080
+    private val port: Int = 18789
 ) : NanoWSD(null, port) {  // null = listen on all network interfaces (0.0.0.0)
 
     companion object {

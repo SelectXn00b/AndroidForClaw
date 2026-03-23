@@ -148,7 +148,7 @@ fun ForClawConnectTab() {
                     ?.hostAddress ?: "未连接 WiFi"
             } catch (_: Exception) { "获取失败" }
         }
-        val clipboardUrl = if (localIp.contains(".")) "http://$localIp:8080/clipboard" else localIp
+        val clipboardUrl = if (localIp.contains(".")) "http://$localIp:18789/clipboard" else localIp
         StatusCard(
             title = "Web Clipboard",
             icon = Icons.Default.ContentPaste,

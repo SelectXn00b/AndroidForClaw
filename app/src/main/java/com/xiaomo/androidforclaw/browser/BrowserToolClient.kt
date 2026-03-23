@@ -21,14 +21,14 @@ import java.util.concurrent.TimeUnit
  * Used for phoneforclaw to call browserforclaw browser tools
  *
  * Communication method: HTTP API
- * - Endpoint: POST http://localhost:8080/api/browser/execute
+ * - Endpoint: POST http://localhost:18789/api/browser/execute
  * - Format: {"tool": "browser_navigate", "args": {"url": "https://..."}}
  */
 class BrowserToolClient(private val context: Context) {
 
     companion object {
         private const val TAG = "BrowserToolClient"
-        // BrowserForClaw uses port 8765 (AndroidForClaw Gateway uses 8080)
+        // BrowserForClaw uses port 8765 (AndroidForClaw Gateway uses 18789)
         private const val BROWSER_API_URL = "http://localhost:8765/api/browser/execute"
         private const val HEALTH_CHECK_URL = "http://localhost:8765/health"
         private const val DEFAULT_TIMEOUT = 30000L  // 30 seconds

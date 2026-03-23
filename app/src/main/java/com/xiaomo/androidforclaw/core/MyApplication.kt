@@ -318,19 +318,19 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
             gatewayServer = null
 
             // Create and start new instance
-            gatewayServer = GatewayServer(this, port = 8080)
+            gatewayServer = GatewayServer(this, port = 18789)
             gatewayServer?.start()
 
             Log.i(TAG, "✅ Gateway Server 启动成功")
-            Log.i(TAG, "  - HTTP: http://0.0.0.0:8080")
-            Log.i(TAG, "  - WebSocket: ws://0.0.0.0:8080/ws")
+            Log.i(TAG, "  - HTTP: http://0.0.0.0:18789")
+            Log.i(TAG, "  - WebSocket: ws://0.0.0.0:18789/ws")
 
             // Get local IP
             GlobalScope.launch(Dispatchers.IO) {
                 try {
                     val ip = getLocalIpAddress()
                     if (ip != null) {
-                        Log.i(TAG, "  - 局域网访问: http://$ip:8080")
+                        Log.i(TAG, "  - 局域网访问: http://$ip:18789")
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "无法获取本机 IP", e)

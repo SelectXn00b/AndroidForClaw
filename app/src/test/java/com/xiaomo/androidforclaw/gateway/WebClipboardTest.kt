@@ -220,18 +220,18 @@ loadHistory();
     @Test
     fun `IP 地址格式化为 URL`() {
         val ip = "192.168.1.100"
-        val port = 8080
+        val port = 18789
         val url = "http://$ip:$port/clipboard"
-        assertEquals("http://192.168.1.100:8080/clipboard", url)
+        assertEquals("http://192.168.1.100:18789/clipboard", url)
         assertTrue(url.startsWith("http://"))
-        assertTrue(url.contains(":8080"))
+        assertTrue(url.contains(":18789"))
         assertTrue(url.endsWith("/clipboard"))
     }
 
     @Test
     fun `无 WiFi 时不生成 URL`() {
         val ip = "未连接 WiFi"
-        val url = if (ip.contains(".")) "http://$ip:8080/clipboard" else ip
+        val url = if (ip.contains(".")) "http://$ip:18789/clipboard" else ip
         assertEquals("未连接 WiFi", url)
         assertFalse(url.startsWith("http"))
     }
@@ -296,14 +296,14 @@ loadHistory();
     @Test
     fun `有效 IP 显示为可点击链接`() {
         val localIp = "192.168.1.5"
-        val clipboardUrl = if (localIp.contains(".")) "http://$localIp:8080/clipboard" else localIp
+        val clipboardUrl = if (localIp.contains(".")) "http://$localIp:18789/clipboard" else localIp
         assertTrue(clipboardUrl.startsWith("http://"))
     }
 
     @Test
     fun `无效 IP 不显示链接`() {
         val localIp = "获取失败"
-        val clipboardUrl = if (localIp.contains(".")) "http://$localIp:8080/clipboard" else localIp
+        val clipboardUrl = if (localIp.contains(".")) "http://$localIp:18789/clipboard" else localIp
         assertEquals("获取失败", clipboardUrl)
     }
 }
