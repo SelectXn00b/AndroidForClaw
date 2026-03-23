@@ -237,12 +237,12 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
         // 🌐 Start Gateway service
         startGatewayService()
 
-        // 🐧 Termux SSH pre-warm (non-blocking, with timeout guard)
+        // 🐧 Termux SSH pre-warm (non-blocking, no auto-setup)
         GlobalScope.launch(Dispatchers.IO) {
             try {
                 Log.i(TAG, "Termux SSH pre-warm: checking availability...")
                 val termux = com.xiaomo.androidforclaw.agent.tools.TermuxBridgeTool(applicationContext)
-                val status = termux.triggerAutoSetup()
+                val status = termux.getStatus()
                 if (status.ready) {
                     com.xiaomo.androidforclaw.agent.tools.TermuxSSHPool.warmUp(applicationContext)
                     Log.i(TAG, "Termux SSH pool warmed up")

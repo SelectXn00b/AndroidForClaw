@@ -4,9 +4,7 @@
  */
 package com.xiaomo.androidforclaw.agent.tools
 
-import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import com.xiaomo.androidforclaw.logging.Log
 import com.xiaomo.androidforclaw.providers.FunctionDefinition
@@ -14,12 +12,8 @@ import com.xiaomo.androidforclaw.providers.ParametersSchema
 import com.xiaomo.androidforclaw.providers.PropertySchema
 import com.xiaomo.androidforclaw.providers.ToolDefinition
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import net.schmizz.sshj.SSHClient
-import net.schmizz.sshj.DefaultConfig
-import net.schmizz.sshj.transport.verification.PromiscuousVerifier
 import java.io.File
 import java.security.Security
 import java.util.concurrent.TimeUnit
@@ -30,20 +24,20 @@ import java.util.concurrent.TimeUnit
  * Internal transport: SSH to Termux sshd on localhost:8022.
  * All connection details are encapsulated; the model only sees
  * a simple exec interface with stdout/stderr/exitCode.
+ *
+ * Setup is done manually by the user via Settings → Termux Setup.
+ * No automatic RUN_COMMAND dispatching.
  */
 class TermuxBridgeTool(private val context: Context) : Tool {
     companion object {
         private const val TAG = "TermuxBridgeTool"
         private const val TERMUX_PACKAGE = "com.termux"
-        private const val TERMUX_API_PACKAGE = "com.termux.api"
-        private const val RUN_COMMAND_PERMISSION = "com.termux.permission.RUN_COMMAND"
         private const val SSH_HOST = "127.0.0.1"
         private const val SSH_PORT = 8022
         private const val DEFAULT_TIMEOUT_S = 60
 
         private const val CONFIG_DIR = "/sdcard/.androidforclaw"
         private const val SSH_CONFIG_FILE = "$CONFIG_DIR/termux_ssh.json"
-        private const val STATUS_FILE = "$CONFIG_DIR/termux_setup_status.json"
         private const val KEY_DIR = "$CONFIG_DIR/.ssh"
         private const val PRIVATE_KEY = "$KEY_DIR/id_ed25519"
         private const val PUBLIC_KEY = "$KEY_DIR/id_ed25519.pub"
@@ -98,123 +92,52 @@ class TermuxBridgeTool(private val context: Context) : Tool {
     fun isAvailable(): Boolean = isTermuxInstalled() && testSSHAuth()
 
     fun getStatus(): TermuxStatus {
-        val termuxInstalled = isTermuxInstalled()
-
-        // Short-circuit: skip Android-specific API calls when Termux isn't installed.
-        // This avoids Intent.setComponent etc. which aren't available in JVM unit tests.
-        if (!termuxInstalled) {
+        if (!isTermuxInstalled()) {
             return TermuxStatus(
                 termuxInstalled = false,
-                termuxApiInstalled = false,
-                runCommandPermissionDeclared = false,
-                runCommandServiceAvailable = false,
                 sshReachable = false,
                 sshAuthOk = false,
-                sshConfigPresent = false,
                 keypairPresent = false,
                 lastStep = TermuxSetupStep.TERMUX_NOT_INSTALLED,
-                message = "Termux 未安装"
+                message = "Termux \u672a\u5b89\u88c5"
             ).also { persistStatus(it) }
         }
 
-        val termuxApiInstalled = isTermuxApiInstalled()
-        val runCommandPermissionDeclared = isRunCommandPermissionDeclared()
-        val runCommandServiceAvailable = isRunCommandServiceAvailable()
-        val sshReachable = isSSHReachable()
-        val sshConfigPresent = File(SSH_CONFIG_FILE).exists()
         val keypairPresent = File(PRIVATE_KEY).exists() && File(PUBLIC_KEY).exists()
-        // Test real SSH auth, not just TCP port
-        // Allow fallback: even without termux_ssh.json, try auth if keypair exists
-        val sshAuthOk = if (sshReachable && (hasCredentials() || keypairPresent)) testSSHAuth() else false
+        val sshReachable = isSSHReachable()
+        val sshAuthOk = if (sshReachable && keypairPresent) testSSHAuth() else false
 
         // Auto-generate termux_ssh.json if auth succeeded but config file is missing
-        val sshConfigPresent2 = if (sshAuthOk && !sshConfigPresent) {
-            try {
-                writeSSHConfig()
-                File(SSH_CONFIG_FILE).exists()
-            } catch (e: Exception) {
+        if (sshAuthOk && !File(SSH_CONFIG_FILE).exists()) {
+            try { writeSSHConfig() } catch (e: Exception) {
                 Log.w(TAG, "Failed to auto-write SSH config: ${e.message}")
-                false
             }
-        } else sshConfigPresent
+        }
 
         val (step, message) = when {
-            !termuxApiInstalled -> TermuxSetupStep.TERMUX_API_NOT_INSTALLED to "Termux:API 未安装"
-            !runCommandPermissionDeclared -> TermuxSetupStep.RUN_COMMAND_PERMISSION_DENIED to "App 未声明 RUN_COMMAND 权限"
-            !runCommandServiceAvailable -> TermuxSetupStep.RUN_COMMAND_SERVICE_MISSING to "Termux RUN_COMMAND 服务不可用"
-            !keypairPresent -> TermuxSetupStep.KEYPAIR_MISSING to "SSH 密钥对未生成"
-            !sshReachable && !sshConfigPresent2 -> TermuxSetupStep.SSHD_NOT_REACHABLE to "sshd 未启动，SSH 端口 8022 不可达"
-            !sshReachable -> TermuxSetupStep.SSHD_NOT_REACHABLE to "SSH 端口 8022 不可达"
-            !sshConfigPresent2 -> TermuxSetupStep.SSH_CONFIG_MISSING to "termux_ssh.json 未生成"
-            !sshAuthOk -> TermuxSetupStep.SSH_AUTH_FAILED to "SSH 认证失败（密钥权限或 sshd 配置问题）"
-            else -> TermuxSetupStep.READY to "Termux 已就绪"
+            !keypairPresent -> TermuxSetupStep.KEYPAIR_MISSING to "SSH \u5bc6\u94a5\u5bf9\u672a\u751f\u6210"
+            !sshReachable -> TermuxSetupStep.SSHD_NOT_REACHABLE to "SSH \u7aef\u53e3 8022 \u4e0d\u53ef\u8fbe"
+            !sshAuthOk -> TermuxSetupStep.SSH_AUTH_FAILED to "SSH \u8ba4\u8bc1\u5931\u8d25"
+            else -> TermuxSetupStep.READY to "Termux \u5df2\u5c31\u7eea"
         }
 
         return TermuxStatus(
-            termuxInstalled = termuxInstalled,
-            termuxApiInstalled = termuxApiInstalled,
-            runCommandPermissionDeclared = runCommandPermissionDeclared,
-            runCommandServiceAvailable = runCommandServiceAvailable,
+            termuxInstalled = true,
             sshReachable = sshReachable,
             sshAuthOk = sshAuthOk,
-            sshConfigPresent = sshConfigPresent2,
             keypairPresent = keypairPresent,
             lastStep = step,
             message = message
         ).also { persistStatus(it) }
     }
 
-    private fun isTermuxInstalled(): Boolean {
+    fun isTermuxInstalled(): Boolean {
         return try {
             context.packageManager.getPackageInfo(TERMUX_PACKAGE, 0)
             true
         } catch (e: PackageManager.NameNotFoundException) {
             false
         }
-    }
-
-    private fun isTermuxApiInstalled(): Boolean {
-        return try {
-            context.packageManager.getPackageInfo(TERMUX_API_PACKAGE, 0)
-            true
-        } catch (e: PackageManager.NameNotFoundException) {
-            false
-        }
-    }
-
-    private fun isRunCommandPermissionDeclared(): Boolean {
-        // RUN_COMMAND is a dangerous permission defined by Termux.
-        // We need both: declared in manifest AND runtime-granted.
-        val declared = try {
-            val pkgInfo = context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS)
-            pkgInfo.requestedPermissions?.contains(RUN_COMMAND_PERMISSION) == true
-        } catch (e: Exception) { false }
-
-        if (!declared) return false
-
-        // Check if runtime permission is granted
-        return context.checkSelfPermission(RUN_COMMAND_PERMISSION) == PackageManager.PERMISSION_GRANTED
-    }
-
-    /**
-     * Check if RUN_COMMAND permission needs runtime request.
-     * Call this from an Activity to trigger the permission dialog.
-     */
-    fun needsRuntimePermissionRequest(): Boolean {
-        val declared = try {
-            val pkgInfo = context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS)
-            pkgInfo.requestedPermissions?.contains(RUN_COMMAND_PERMISSION) == true
-        } catch (e: Exception) { false }
-
-        if (!declared) return false
-        return context.checkSelfPermission(RUN_COMMAND_PERMISSION) != PackageManager.PERMISSION_GRANTED
-    }
-
-    private fun isRunCommandServiceAvailable(): Boolean {
-        val intent = Intent("com.termux.RUN_COMMAND").apply {
-            component = ComponentName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
-        }
-        return context.packageManager.resolveService(intent, 0) != null
     }
 
     private fun isSSHReachable(): Boolean {
@@ -230,234 +153,60 @@ class TermuxBridgeTool(private val context: Context) : Tool {
 
     /**
      * Test real SSH authentication (not just TCP port open).
-     * Returns true only if we can actually connect + authenticate.
      */
     private fun testSSHAuth(): Boolean {
         if (!isSSHReachable()) return false
-        // Allow auth test even without termux_ssh.json — use defaults
         val keyFile = File(PRIVATE_KEY)
-        if (!hasCredentials() && !keyFile.exists()) return false
+        if (!keyFile.exists()) return false
         return try {
             ensureBouncyCastle()
-            // Read SSH config if available, otherwise use defaults
             val configFile = File(SSH_CONFIG_FILE)
             val user: String
             val keyPath: String
-            val password: String
             if (configFile.exists()) {
                 val configJson = org.json.JSONObject(configFile.readText())
-                user = configJson.optString("user", "shell")
+                user = configJson.optString("user", "")
                 keyPath = configJson.optString("key_file", PRIVATE_KEY)
-                password = configJson.optString("password", "")
             } else {
-                user = "shell"
+                user = ""
                 keyPath = PRIVATE_KEY
-                password = ""
             }
 
             val ssh = net.schmizz.sshj.SSHClient(net.schmizz.sshj.DefaultConfig())
             ssh.addHostKeyVerifier(net.schmizz.sshj.transport.verification.PromiscuousVerifier())
             ssh.connectTimeout = 3000
             ssh.connect(SSH_HOST, SSH_PORT)
-            val authUser = user.ifEmpty { "shell" }
-            when {
-                keyPath.isNotEmpty() && java.io.File(keyPath).exists() ->
-                    ssh.authPublickey(authUser, ssh.loadKeys(keyPath))
-                password.isNotEmpty() ->
-                    ssh.authPassword(authUser, password)
-                else -> {
-                    ssh.disconnect()
-                    return false
-                }
+
+            // Try configured user, then detect from Termux UID
+            val usersToTry = buildList {
+                if (user.isNotEmpty()) add(user)
+                add(getTermuxUsername())
+                add("shell")
+            }.distinct()
+
+            var authenticated = false
+            for (u in usersToTry) {
+                try {
+                    ssh.authPublickey(u, ssh.loadKeys(keyPath))
+                    authenticated = true
+                    break
+                } catch (_: Exception) { continue }
             }
-            // If we get here, auth succeeded
+
             ssh.disconnect()
-            true
+            authenticated
         } catch (e: Exception) {
             Log.w(TAG, "SSH auth test failed: ${e.message}")
             false
         }
     }
 
-    // ==================== Auto-Setup ====================
+    // ==================== Keypair Generation ====================
 
     /**
-     * Ensure Termux SSH is ready. Auto-provisions if needed:
-     * 1. Generate SSH keypair (if missing)
-     * 2. Install openssh in Termux (via RUN_COMMAND)
-     * 3. Deploy authorized_keys
-     * 4. Start sshd
+     * Generate SSH keypair if missing. Public API for TermuxSetupActivity.
      */
-    suspend fun triggerAutoSetup(): TermuxStatus {
-        withContext(Dispatchers.IO) {
-            ensureSSHReady()
-        }
-        return getStatus()
-    }
-
-    /**
-     * Clipboard-based setup: copy command to clipboard + launch Termux.
-     * Works on all devices including Xiaomi/HyperOS where RUN_COMMAND is broken.
-     */
-    fun copySetupCommandAndLaunch(): String {
-        // Generate keypair if missing
-        ensureKeypair()
-
-        // Build the setup command — uses cp instead of >> to avoid permission issues
-        // on Android 13+ scoped storage. Each step tolerates failures.
-        val command = "export PREFIX=/data/data/com.termux/files/usr && " +
-            "export LD_LIBRARY_PATH=\$PREFIX/lib && " +
-            "export PATH=\$PREFIX/bin:\$PATH && " +
-            "export HOME=/data/data/com.termux/files/home && " +
-            "pkg install -y openssh && " +
-            "mkdir -p \$HOME/.ssh && " +
-            "rm -f \$HOME/.ssh/authorized_keys && " +
-            "cp /sdcard/.androidforclaw/.ssh/id_ed25519.pub \$HOME/.ssh/authorized_keys && " +
-            "chmod 700 \$HOME/.ssh && " +
-            "chmod 600 \$HOME/.ssh/authorized_keys && " +
-            "chmod 644 /sdcard/.androidforclaw/.ssh/id_ed25519 && " +
-            "pkill sshd; sshd && echo '✅ SSH configured'"
-
-        // Copy to clipboard
-        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("termux-setup", command))
-
-        // Launch Termux
-        try {
-            val intent = context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE)
-            if (intent != null) {
-                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(intent)
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to launch Termux: ${e.message}")
-        }
-
-        return command
-    }
-
-    private suspend fun ensureSSHReady(): Boolean {
-        if (isSSHReachable() && hasCredentials()) return true
-        if (!isTermuxInstalled() || !isRunCommandPermissionDeclared() || !isRunCommandServiceAvailable()) return false
-
-        Log.i(TAG, "SSH not ready, attempting auto-setup...")
-
-        // Step 1: Generate keypair if missing
-        ensureKeypair()
-
-        // Step 1.5: Fix private key permissions for existing installations
-        val privFile = File(PRIVATE_KEY)
-        if (privFile.exists()) {
-            try {
-                Runtime.getRuntime().exec(arrayOf("chmod", "644", PRIVATE_KEY)).waitFor(3, TimeUnit.SECONDS)
-            } catch (_: Exception) {}
-        }
-
-        // Step 2: Generate setup script using system shell + Termux env
-        // This avoids the "libandroid-support.so not found" issue on Xiaomi/HyperOS
-        // where RUN_COMMAND can't load Termux bootstrap libraries.
-        val setupScript = buildString {
-            appendLine("#!/system/bin/sh")
-            appendLine("# Auto-setup by AndroidForClaw (system-shell variant)")
-            appendLine("# Set up Termux environment from system shell")
-            appendLine("export PREFIX=/data/data/com.termux/files/usr")
-            appendLine("export LD_LIBRARY_PATH=\$PREFIX/lib")
-            appendLine("export PATH=\$PREFIX/bin:\$PATH")
-            appendLine("export HOME=/data/data/com.termux/files/home")
-            appendLine("")
-            appendLine("# Install openssh if not present")
-            appendLine("pkg install -y openssh 2>/dev/null")
-            appendLine("")
-            appendLine("# Set up SSH authorized_keys")
-            appendLine("mkdir -p \$HOME/.ssh")
-            appendLine("chmod 700 \$HOME/.ssh")
-            appendLine("cat '$PUBLIC_KEY' >> \$HOME/.ssh/authorized_keys 2>/dev/null || " +
-                "cat /sdcard/.androidforclaw/.ssh/id_ed25519.pub >> \$HOME/.ssh/authorized_keys 2>/dev/null")
-            appendLine("sort -u \$HOME/.ssh/authorized_keys -o \$HOME/.ssh/authorized_keys")
-            appendLine("chmod 600 \$HOME/.ssh/authorized_keys")
-            appendLine("")
-            appendLine("# Start sshd if not running")
-            appendLine("pgrep sshd > /dev/null || sshd")
-            appendLine("echo SETUP_DONE")
-        }
-
-        // Write setup script to shared storage
-        val scriptFile = File("$CONFIG_DIR/termux_setup.sh")
-        withContext(Dispatchers.IO) {
-            scriptFile.parentFile?.mkdirs()
-            scriptFile.writeText(setupScript, Charsets.UTF_8)
-        }
-
-        // Execute via Termux RUN_COMMAND using /system/bin/sh (more compatible)
-        // Falls back to Termux bash if system shell fails
-        val executed = try {
-            val intent = Intent("com.termux.RUN_COMMAND").apply {
-                setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
-                putExtra("com.termux.RUN_COMMAND_PATH", "/system/bin/sh")
-                putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf(scriptFile.absolutePath))
-                putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
-            }
-            context.startForegroundService(intent)
-            Log.i(TAG, "Sent RUN_COMMAND (system/sh) for SSH auto-setup")
-            true
-        } catch (e: Exception) {
-            Log.w(TAG, "RUN_COMMAND (system/sh) failed: ${e.message}, trying Termux bash")
-            try {
-                // Fallback: use Termux bash directly (works on some devices)
-                val fallbackScript = buildString {
-                    appendLine("#!/data/data/com.termux/files/usr/bin/bash")
-                    appendLine("# Auto-setup by AndroidForClaw (bash fallback)")
-                    appendLine("pkg install -y openssh 2>/dev/null")
-                    appendLine("mkdir -p ~/.ssh")
-                    appendLine("chmod 700 ~/.ssh")
-                    appendLine("cat '$PUBLIC_KEY' >> ~/.ssh/authorized_keys 2>/dev/null || " +
-                        "cat ~/storage/shared/.androidforclaw/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys 2>/dev/null")
-                    appendLine("sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys")
-                    appendLine("chmod 600 ~/.ssh/authorized_keys")
-                    appendLine("pgrep sshd > /dev/null || sshd")
-                    appendLine("echo SETUP_DONE")
-                }
-                val fallbackFile = File("$CONFIG_DIR/termux_setup_fallback.sh")
-                withContext(Dispatchers.IO) {
-                    fallbackFile.writeText(fallbackScript, Charsets.UTF_8)
-                }
-                val intent = Intent("com.termux.RUN_COMMAND").apply {
-                    setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
-                    putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash")
-                    putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf(fallbackFile.absolutePath))
-                    putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
-                }
-                context.startForegroundService(intent)
-                Log.i(TAG, "Sent RUN_COMMAND (bash fallback) for SSH auto-setup")
-                true
-            } catch (e2: Exception) {
-                Log.e(TAG, "Both auto-setup strategies failed: ${e2.message}")
-                false
-            }
-        }
-
-        if (!executed) return false
-
-        // Wait for sshd to come up
-        for (i in 1..20) {
-            delay(1000)
-            if (isSSHReachable()) {
-                Log.i(TAG, "SSH is now reachable after ${i}s")
-
-                // Write config with key auth
-                writeSSHConfig()
-
-                // Pre-warm the persistent SSH connection pool
-                TermuxSSHPool.warmUp(context)
-                return true
-            }
-        }
-
-        Log.w(TAG, "SSH not reachable after auto-setup wait")
-        return false
-    }
-
-    private fun ensureKeypair() {
+    fun ensureKeypair() {
         val privFile = File(PRIVATE_KEY)
         val pubFile = File(PUBLIC_KEY)
         if (privFile.exists() && pubFile.exists()) return
@@ -465,29 +214,27 @@ class TermuxBridgeTool(private val context: Context) : Tool {
         val keyDir = File(KEY_DIR)
         keyDir.mkdirs()
 
-        // Strategy 1: ssh-keygen (available on most Android devices)
+        // Strategy 1: ssh-keygen
         try {
             val pb = ProcessBuilder("sh", "-c",
                 "ssh-keygen -t ed25519 -f '${privFile.absolutePath}' -N '' -q 2>/dev/null; echo \$?")
             pb.redirectErrorStream(true)
             val proc = pb.start()
-            val output = proc.inputStream.bufferedReader().readText().trim()
+            proc.inputStream.bufferedReader().readText().trim()
             proc.waitFor(5, TimeUnit.SECONDS)
 
             if (privFile.exists() && pubFile.exists()) {
-                // Fix permissions for /sdcard/ FUSE
                 try {
                     Runtime.getRuntime().exec(arrayOf("chmod", "644", privFile.absolutePath)).waitFor(3, TimeUnit.SECONDS)
                 } catch (_: Exception) {}
                 Log.i(TAG, "Generated SSH keypair via ssh-keygen at $KEY_DIR")
                 return
             }
-            Log.w(TAG, "ssh-keygen attempt failed: $output")
         } catch (e: Exception) {
             Log.w(TAG, "ssh-keygen not available: ${e.message}")
         }
 
-        // Strategy 2: BouncyCastle Ed25519 keypair generation
+        // Strategy 2: BouncyCastle Ed25519
         try {
             ensureBouncyCastle()
             val gen = org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator()
@@ -497,7 +244,7 @@ class TermuxBridgeTool(private val context: Context) : Tool {
             val privParams = pair.private as org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
             val pubParams = pair.public as org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 
-            // Write public key in OpenSSH format: "ssh-ed25519 <base64>"
+            // Write public key in OpenSSH format
             val pubBlob = java.io.ByteArrayOutputStream()
             fun writeSSHString(out: java.io.ByteArrayOutputStream, data: ByteArray) {
                 val len = data.size
@@ -509,11 +256,9 @@ class TermuxBridgeTool(private val context: Context) : Tool {
             val pubB64 = android.util.Base64.encodeToString(pubBlob.toByteArray(), android.util.Base64.NO_WRAP)
             pubFile.writeText("ssh-ed25519 $pubB64 androidforclaw@device\n", Charsets.UTF_8)
 
-            // Write private key in OpenSSH PEM format (sshj-compatible)
+            // Write private key in OpenSSH PEM format
             val privBlob = buildOpenSSHPrivateKey(privParams, pubParams)
             privFile.writeBytes(privBlob)
-            // Set restrictive permissions (best-effort on Android)
-            // Fix permissions: /sdcard/ FUSE ignores setReadable(), use chmod instead
             try {
                 Runtime.getRuntime().exec(arrayOf("chmod", "644", privFile.absolutePath)).waitFor(3, TimeUnit.SECONDS)
             } catch (_: Exception) {}
@@ -530,36 +275,45 @@ class TermuxBridgeTool(private val context: Context) : Tool {
     }
 
     /**
-     * Build an OpenSSH-format private key blob for Ed25519.
-     *
-     * Format: "openssh-key-v1\0" magic, then:
-     *   ciphername="none", kdfname="none", kdf="", nkeys=1,
-     *   public key blob, private section (checkint×2 + keytype + pub + priv + comment + padding).
-     *
-     * This produces a file that sshj and standard `ssh` can read directly.
+     * Get the public key content (for display in setup UI).
      */
+    fun getPublicKey(): String? {
+        val pubFile = File(PUBLIC_KEY)
+        return if (pubFile.exists()) pubFile.readText().trim() else null
+    }
+
+    /**
+     * Detect Termux username from package UID.
+     */
+    fun getTermuxUsername(): String {
+        return try {
+            val info = context.packageManager.getApplicationInfo(TERMUX_PACKAGE, 0)
+            val uid = info.uid
+            "u${uid / 100000}_a${uid % 100000}"
+        } catch (_: Exception) {
+            "shell"
+        }
+    }
+
     private fun buildOpenSSHPrivateKey(
         privParams: org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters,
         pubParams: org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
     ): ByteArray {
-        val pubRaw = pubParams.encoded   // 32 bytes
-        val privRaw = privParams.encoded  // 32 bytes (seed)
+        val pubRaw = pubParams.encoded
+        val privRaw = privParams.encoded
         val comment = "androidforclaw@device"
 
-        // SSH wire format helpers
         fun sshPutInt(out: java.io.ByteArrayOutputStream, v: Int) {
             out.write(byteArrayOf((v shr 24).toByte(), (v shr 16).toByte(), (v shr 8).toByte(), v.toByte()))
         }
         fun sshPutBytes(out: java.io.ByteArrayOutputStream, b: ByteArray) { sshPutInt(out, b.size); out.write(b) }
         fun sshPutString(out: java.io.ByteArrayOutputStream, s: String) { sshPutBytes(out, s.toByteArray()) }
 
-        // --- public key blob (for the "public key" section) ---
         val pubBlob = java.io.ByteArrayOutputStream().also { buf ->
             sshPutString(buf, "ssh-ed25519")
             sshPutBytes(buf, pubRaw)
         }.toByteArray()
 
-        // --- private section (unencrypted) ---
         val rng = java.security.SecureRandom()
         val checkInt = rng.nextInt()
         val privSection = java.io.ByteArrayOutputStream().also { buf ->
@@ -567,26 +321,23 @@ class TermuxBridgeTool(private val context: Context) : Tool {
             sshPutInt(buf, checkInt)
             sshPutString(buf, "ssh-ed25519")
             sshPutBytes(buf, pubRaw)
-            // Ed25519 private key in OpenSSH = 64 bytes: seed(32) || public(32)
             sshPutBytes(buf, privRaw + pubRaw)
             sshPutString(buf, comment)
         }
-        // Pad to block size 8 (cipher "none" uses blocksize=8)
         var pad = 1
         while (privSection.size() % 8 != 0) {
             privSection.write(pad++)
         }
         val privSectionBytes = privSection.toByteArray()
 
-        // --- assemble full blob ---
         val out = java.io.ByteArrayOutputStream()
-        out.write("openssh-key-v1\u0000".toByteArray()) // AUTH_MAGIC
-        sshPutString(out, "none")       // ciphername
-        sshPutString(out, "none")       // kdfname
-        sshPutBytes(out, ByteArray(0))  // kdf (empty)
-        sshPutInt(out, 1)               // number of keys
-        sshPutBytes(out, pubBlob)       // public key
-        sshPutBytes(out, privSectionBytes) // private section
+        out.write("openssh-key-v1\u0000".toByteArray())
+        sshPutString(out, "none")
+        sshPutString(out, "none")
+        sshPutBytes(out, ByteArray(0))
+        sshPutInt(out, 1)
+        sshPutBytes(out, pubBlob)
+        sshPutBytes(out, privSectionBytes)
 
         val raw = out.toByteArray()
         val b64 = android.util.Base64.encodeToString(raw, android.util.Base64.NO_WRAP)
@@ -600,10 +351,7 @@ class TermuxBridgeTool(private val context: Context) : Tool {
 
     private fun writeSSHConfig() {
         try {
-            // Detect Termux username
-            val whoami = runQuickSSHCommand("whoami")?.trim()
-            val user = if (!whoami.isNullOrBlank()) whoami else "shell"
-
+            val user = getTermuxUsername()
             val config = org.json.JSONObject().apply {
                 put("user", user)
                 put("key_file", PRIVATE_KEY)
@@ -615,71 +363,19 @@ class TermuxBridgeTool(private val context: Context) : Tool {
         }
     }
 
-    private fun runQuickSSHCommand(command: String): String? {
-        return try {
-            ensureBouncyCastle()
-            val client = SSHClient(DefaultConfig())
-            client.addHostKeyVerifier(PromiscuousVerifier())
-            client.connectTimeout = 5000
-            client.connect(SSH_HOST, SSH_PORT)
-
-            // Try key auth
-            val keyFile = File(PRIVATE_KEY)
-            if (keyFile.exists()) {
-                val keys = client.loadKeys(keyFile.absolutePath)
-                // Try common Termux usernames
-                for (user in listOf("shell", "u0_a408", "u0_a100")) {
-                    try {
-                        client.authPublickey(user, keys)
-                        break
-                    } catch (e: Exception) { continue }
-                }
-            }
-
-            if (!client.isAuthenticated) {
-                client.disconnect()
-                return null
-            }
-
-            val session = client.startSession()
-            val cmd = session.exec(command)
-            cmd.join(5, TimeUnit.SECONDS)
-            val result = cmd.inputStream.bufferedReader().readText()
-            session.close()
-            client.disconnect()
-            result
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    private fun hasCredentials(): Boolean {
-        val configFile = File(SSH_CONFIG_FILE)
-        if (!configFile.exists()) return false
-        return try {
-            val json = org.json.JSONObject(configFile.readText())
-            json.optString("user", "").isNotEmpty() &&
-                (json.optString("password", "").isNotEmpty() || json.optString("key_file", "").isNotEmpty())
-        } catch (e: Exception) { false }
-    }
-
     private fun persistStatus(status: TermuxStatus) {
         try {
             val json = org.json.JSONObject().apply {
                 put("termuxInstalled", status.termuxInstalled)
-                put("termuxApiInstalled", status.termuxApiInstalled)
-                put("runCommandPermissionDeclared", status.runCommandPermissionDeclared)
-                put("runCommandServiceAvailable", status.runCommandServiceAvailable)
                 put("sshReachable", status.sshReachable)
                 put("sshAuthOk", status.sshAuthOk)
-                put("sshConfigPresent", status.sshConfigPresent)
                 put("keypairPresent", status.keypairPresent)
                 put("lastStep", status.lastStep.name)
                 put("message", status.message)
                 put("ready", status.ready)
                 put("updatedAt", System.currentTimeMillis())
             }
-            val file = File(STATUS_FILE)
+            val file = File("$CONFIG_DIR/termux_setup_status.json")
             file.parentFile?.mkdirs()
             file.writeText(json.toString(2).replace("\\/", "/"), Charsets.UTF_8)
         } catch (e: Exception) {
@@ -687,7 +383,7 @@ class TermuxBridgeTool(private val context: Context) : Tool {
         }
     }
 
-    // ==================== SSH Execution (delegated to TermuxSSHPool) ====================
+    // ==================== SSH Execution ====================
 
     private fun ensureBouncyCastle() {
         if (bcRegistered) return
@@ -706,19 +402,25 @@ class TermuxBridgeTool(private val context: Context) : Tool {
     // ==================== Tool Interface ====================
 
     override suspend fun execute(args: Map<String, Any?>): ToolResult {
-        // 1. Fast check: Termux not installed (avoids getStatus() which calls Android-only APIs)
         if (!isTermuxInstalled()) {
             return ToolResult(
                 success = false,
-                content = "Termux is not installed. Install from F-Droid: https://f-droid.org/packages/com.termux/",
-                metadata = mapOf("backend" to "termux", "status" to "Termux 未安装", "step" to TermuxSetupStep.TERMUX_NOT_INSTALLED.name)
+                content = "Termux is not installed. Please install from F-Droid.",
+                metadata = mapOf("backend" to "termux", "step" to TermuxSetupStep.TERMUX_NOT_INSTALLED.name)
             )
         }
 
-        // 1b. Full status check (requires Android runtime for deeper checks)
-        val initialStatus = getStatus()
+        // Check SSH availability (no auto-setup)
+        val status = getStatus()
+        if (!status.ready) {
+            return ToolResult(
+                success = false,
+                content = TermuxStatusFormatter.userFacingMessage(status),
+                metadata = mapOf("backend" to "termux", "status" to status.message, "step" to status.lastStep.name)
+            )
+        }
 
-        // 2. Resolve command
+        // Resolve command
         val command = args["command"] as? String
         val runtime = args["runtime"] as? String
         val code = args["code"] as? String
@@ -738,18 +440,7 @@ class TermuxBridgeTool(private val context: Context) : Tool {
             else -> return ToolResult.error("Missing required parameter: command")
         }
 
-        // 3. Ensure SSH is ready (auto-setup if needed)
-        val sshReady = withContext(Dispatchers.IO) { ensureSSHReady() }
-        if (!sshReady) {
-            val status = getStatus()
-            return ToolResult(
-                success = false,
-                content = TermuxStatusFormatter.userFacingMessage(status),
-                metadata = mapOf("backend" to "termux", "status" to status.message, "step" to status.lastStep.name)
-            )
-        }
-
-        // 4. Execute via SSH (persistent connection pool)
+        // Execute via SSH pool
         return withContext(Dispatchers.IO) {
             try {
                 withTimeout(timeout * 1000L + 5000L) {
@@ -794,5 +485,4 @@ class TermuxBridgeTool(private val context: Context) : Tool {
             }
         }
     }
-
 }

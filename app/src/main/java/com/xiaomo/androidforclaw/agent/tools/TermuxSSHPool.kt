@@ -2,6 +2,7 @@ package com.xiaomo.androidforclaw.agent.tools
 
 import android.content.Context
 import com.xiaomo.androidforclaw.logging.Log
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import net.schmizz.sshj.SSHClient
@@ -16,19 +17,22 @@ import java.util.concurrent.TimeUnit
  * Singleton SSH connection pool for Termux.
  *
  * Maintains a single persistent SSH connection to Termux sshd (localhost:8022),
- * with automatic reconnection and keepalive.
+ * with automatic reconnection, keepalive, and retry with backoff.
  */
 object TermuxSSHPool {
     private const val TAG = "TermuxSSHPool"
     private const val SSH_HOST = "127.0.0.1"
     private const val SSH_PORT = 8022
     private const val CONNECT_TIMEOUT_MS = 5000
-    private const val KEEPALIVE_INTERVAL_S = 30
+    private const val KEEPALIVE_INTERVAL_S = 15
 
     private const val CONFIG_DIR = "/sdcard/.androidforclaw"
     private const val SSH_CONFIG_FILE = "$CONFIG_DIR/termux_ssh.json"
     private const val KEY_DIR = "$CONFIG_DIR/.ssh"
     private const val PRIVATE_KEY = "$KEY_DIR/id_ed25519"
+
+    private const val MAX_RETRIES = 3
+    private val RETRY_DELAYS_MS = longArrayOf(500, 1000, 2000)
 
     private var client: SSHClient? = null
     private val lock = Mutex()
@@ -47,34 +51,38 @@ object TermuxSSHPool {
     suspend fun getClient(): SSHClient = lock.withLock {
         val c = client
         if (c != null && c.isConnected && c.isAuthenticated) return@withLock c
-        // Tear down stale client
         safeDisconnect(c)
-        val newClient = connect()
+        val newClient = connectWithRetry()
         client = newClient
         newClient
     }
 
     /**
      * Execute a command over the persistent connection.
-     * Retries once on connection failure.
+     * Retries up to MAX_RETRIES times on connection failure.
      */
     suspend fun exec(command: String, cwd: String?, timeoutS: Int): ExecResult {
-        return try {
-            execOnce(command, cwd, timeoutS)
-        } catch (e: Exception) {
-            // Connection might be stale — reconnect and retry once
-            Log.w(TAG, "exec failed (${e.message}), reconnecting and retrying...")
-            lock.withLock {
-                safeDisconnect(client)
-                client = null
+        var lastException: Exception? = null
+        for (attempt in 0 until MAX_RETRIES) {
+            try {
+                return execOnce(command, cwd, timeoutS)
+            } catch (e: Exception) {
+                lastException = e
+                Log.w(TAG, "exec attempt ${attempt + 1}/$MAX_RETRIES failed: ${e.message}")
+                lock.withLock {
+                    safeDisconnect(client)
+                    client = null
+                }
+                if (attempt < MAX_RETRIES - 1) {
+                    delay(RETRY_DELAYS_MS[attempt])
+                }
             }
-            execOnce(command, cwd, timeoutS)
         }
+        throw lastException ?: java.io.IOException("exec failed after $MAX_RETRIES retries")
     }
 
     /**
      * Pre-warm: establish the persistent connection eagerly.
-     * Non-fatal — logs and returns on failure.
      */
     @Suppress("UNUSED_PARAMETER")
     suspend fun warmUp(context: Context) {
@@ -95,7 +103,7 @@ object TermuxSSHPool {
         safeDisconnect(c)
     }
 
-    // ─── internals ───
+    // --- internals ---
 
     private suspend fun execOnce(command: String, cwd: String?, timeoutS: Int): ExecResult {
         val ssh = getClient()
@@ -117,6 +125,25 @@ object TermuxSSHPool {
         }
     }
 
+    /**
+     * Connect with retry and exponential backoff.
+     */
+    private suspend fun connectWithRetry(): SSHClient {
+        var lastException: Exception? = null
+        for (attempt in 0 until MAX_RETRIES) {
+            try {
+                return connect()
+            } catch (e: Exception) {
+                lastException = e
+                Log.w(TAG, "connect attempt ${attempt + 1}/$MAX_RETRIES failed: ${e.message}")
+                if (attempt < MAX_RETRIES - 1) {
+                    delay(RETRY_DELAYS_MS[attempt])
+                }
+            }
+        }
+        throw lastException ?: java.io.IOException("SSH connect failed after $MAX_RETRIES retries")
+    }
+
     private fun connect(): SSHClient {
         ensureBouncyCastle()
         val config = loadSSHConfig()
@@ -128,7 +155,6 @@ object TermuxSSHPool {
         ssh.connect(SSH_HOST, SSH_PORT)
         Log.d(TAG, "TCP connected, authenticating...")
 
-        // Authenticate
         val user = config.user.ifEmpty { "shell" }
         when {
             config.keyFile.isNotEmpty() && File(config.keyFile).exists() -> {
@@ -140,8 +166,7 @@ object TermuxSSHPool {
                 ssh.authPassword(user, config.password)
             }
             else -> {
-                // Try default key locations
-                val keyPaths = listOf(PRIVATE_KEY, "$CONFIG_DIR/termux_id_rsa", "$CONFIG_DIR/id_rsa")
+                val keyPaths = listOf(PRIVATE_KEY)
                 var authenticated = false
                 for (path in keyPaths) {
                     try {
@@ -162,7 +187,6 @@ object TermuxSSHPool {
             }
         }
 
-        // Set keepalive and timeouts after successful auth
         ssh.connection.keepAlive.keepAliveInterval = KEEPALIVE_INTERVAL_S
         Log.i(TAG, "SSH connected & authenticated (user=$user)")
         return ssh

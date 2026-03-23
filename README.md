@@ -32,7 +32,7 @@ AI：→ 微信复制地址 → 打开高德 → 搜索 → 开始导航
 
 ### 🐧 执行代码
 
-Shell 脚本直接在内置 Termux 中运行（Python、Node.js 需在设置中安装）：
+通过 Termux SSH 执行命令（Shell 直接可用，Python/Node.js 需在 Termux 中安装）：
 
 ```
 你：用 Python 帮我分析一下 Downloads 文件夹里的 CSV
@@ -92,7 +92,8 @@ AI：→ skills_search("") → 展示可用技能列表
 |-----|------|--------|
 | **AndroidForClaw** | 主应用 (含无障碍服务、Agent、Gateway) | ✅ 必装 |
 | **BrowserForClaw** | AI 浏览器 (网页自动化) | 可选 |
-| **termux-app + termux-api** | 终端 (执行 Python/Node.js) | 可选 |
+
+> Termux 需从 [F-Droid](https://f-droid.org/packages/com.termux/) 单独安装（不要用 Play Store 版本）。
 
 ### 3 步上手
 
@@ -104,9 +105,17 @@ AI：→ skills_search("") → 展示可用技能列表
 
 ### Termux 配置（可选）
 
-装了 Termux，AI 就能跑 Python/Node.js/Shell。App 内置一键配置向导：
+装了 Termux，AI 就能跑 Shell 命令（Python/Node.js 需额外安装）。
 
-**设置 → Termux 配置 → 复制命令 → 粘贴到 Termux → 完成**
+**设置 → Termux 配置**，按向导 7 步完成：
+
+1. 安装 Termux（F-Droid 版）
+2. 生成 SSH 密钥（App 内一键生成）
+3. 在 Termux 中运行 `termux-setup-storage`
+4. `pkg install -y openssh`
+5. 复制密钥配置命令并执行
+6. `sshd`
+7. App 自动验证连接
 
 ---
 
@@ -141,7 +150,7 @@ AI：→ skills_search("") → 展示可用技能列表
 | 特性 | 说明 |
 |------|------|
 | **Playwright 模式** | 屏幕操作对齐 Playwright —— `snapshot` 获取 UI 树 + ref → `act` 操作元素 |
-| **统一 exec** | 自动路由 Termux（SSH）或内置 Shell，对模型透明 |
+| **统一 exec** | 自动路由 Termux（SSH 连接池，3 次重试）或内置 Shell，对模型透明 |
 | **Context 管理** | 4 层防护对齐 OpenClaw：limitHistoryTurns + 工具结果裁剪 + budget guard |
 | **Skill 体系** | 20 个内置 Skill 可在设备上自由编辑，支持 ClawHub 在线安装 |
 | **多模型** | MiMo V2 Pro · DeepSeek R1 · Claude Sonnet 4 · Gemini 2.5 · GPT-4.1 |

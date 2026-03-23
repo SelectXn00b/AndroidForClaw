@@ -63,7 +63,7 @@ fun ForClawSettingsTab() {
             SettingsNavItem(
                 icon = Icons.Default.Terminal,
                 title = "Termux 配置",
-                subtitle = "查看状态并自动配置 Termux 环境",
+                subtitle = "\u914d\u7f6e Termux SSH \u8fde\u63a5",
                 onClick = { context.startActivity(Intent(context, TermuxSetupActivity::class.java)) }
             )
         }

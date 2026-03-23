@@ -53,7 +53,7 @@ class TermuxBridgeToolTest {
         val result = tool().execute(mapOf("command" to "echo hi"))
         assertFalse(result.success)
         assertTrue(result.content.contains("not installed"))
-        assertTrue(result.content.contains("f-droid.org"))
+        assertTrue(result.content.contains("F-Droid"))
     }
 
     @Test
