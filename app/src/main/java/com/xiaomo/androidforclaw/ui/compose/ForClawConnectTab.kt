@@ -66,11 +66,18 @@ fun ForClawConnectTab() {
                 val loader = ConfigLoader(context)
                 val config = loader.loadOpenClawConfig()
                 val providers = config.resolveProviders()
-                val entry = providers.entries.firstOrNull()
+                // 使用实际生效的默认模型（与 Agent 运行时一致）
+                val resolvedModel = config.resolveDefaultModel()
+                val resolvedProvider = resolvedModel.substringBefore("/", "")
+                val entry = if (resolvedProvider.isNotEmpty()) {
+                    providers[resolvedProvider]?.let { resolvedProvider to it }
+                } else {
+                    providers.entries.firstOrNull()?.let { it.key to it.value }
+                }
                 if (entry != null) {
-                    providerName = entry.key
-                    modelId = entry.value.models.firstOrNull()?.id ?: config.resolveDefaultModel()
-                    val key = entry.value.apiKey
+                    providerName = entry.first
+                    modelId = resolvedModel  // 显示完整的 provider/model 引用
+                    val key = entry.second.apiKey
                     apiKeyOk = !key.isNullOrBlank() && !key.startsWith("\${") && key != "未配置"
                 } else {
                     providerName = "未配置"
