@@ -89,17 +89,64 @@ class MessageQueueManager {
 
     // Active AgentLoop instances keyed by queue key.
     // Set when an agent run starts; cleared when it finishes.
-    // Used by STEER mode to inject mid-run messages.
+    // Used by STEER mode to inject mid-run messages and STOP to cancel runs.
     private val activeAgentLoops = ConcurrentHashMap<String, AgentLoop>()
+
+    // Active coroutine Jobs keyed by queue key.
+    // Used to cancel the coroutine when stopping a run.
+    private val activeJobs = ConcurrentHashMap<String, Job>()
+
+    /**
+     * Stop commands recognized across all channels.
+     */
+    private val STOP_COMMANDS = setOf(
+        "停止", "停", "stop", "cancel", "取消",
+        "停止任务", "停止全部任务", "中止", "终止"
+    )
+
+    /**
+     * Check if a message is a stop/cancel command (channel-agnostic).
+     */
+    fun isStopCommand(text: String): Boolean {
+        return text.trim().lowercase() in STOP_COMMANDS
+    }
+
+    /**
+     * Stop the currently running AgentLoop + Job for the given queue key.
+     *
+     * @return true if there was an active run that was stopped
+     */
+    fun stopActiveRun(key: String): Boolean {
+        val loop = activeAgentLoops[key]
+        val job = activeJobs[key]
+        if (loop != null || job != null) {
+            Log.i(TAG, "🛑 [STOP] Stopping active run for $key")
+            loop?.stop()
+            job?.cancel()
+            activeAgentLoops.remove(key)
+            activeJobs.remove(key)
+            return true
+        }
+        return false
+    }
 
     /**
      * Register the currently running AgentLoop for a queue key.
      * Call this before starting an agent run so that STEER mode can
-     * push messages into the agent's steerChannel.
+     * push messages into the agent's steerChannel, and stop commands
+     * can cancel the run.
      */
     fun setActiveAgentLoop(key: String, agentLoop: AgentLoop) {
         activeAgentLoops[key] = agentLoop
-        Log.d(TAG, "🎯 [STEER] Registered active AgentLoop for $key")
+        Log.d(TAG, "🎯 Registered active AgentLoop for $key")
+    }
+
+    /**
+     * Register the currently running coroutine Job for a queue key.
+     */
+    fun setActiveJob(key: String, job: Job) {
+        activeJobs[key] = job
+        Log.d(TAG, "🎯 Registered active Job for $key")
     }
 
     /**
@@ -107,7 +154,15 @@ class MessageQueueManager {
      */
     fun clearActiveAgentLoop(key: String) {
         activeAgentLoops.remove(key)
-        Log.d(TAG, "🎯 [STEER] Cleared active AgentLoop for $key")
+        Log.d(TAG, "🎯 Cleared active AgentLoop for $key")
+    }
+
+    /**
+     * Unregister the Job for a queue key (call when the run finishes).
+     */
+    fun clearActiveJob(key: String) {
+        activeJobs.remove(key)
+        Log.d(TAG, "🎯 Cleared active Job for $key")
     }
 
     /**
@@ -153,10 +208,10 @@ class MessageQueueManager {
             QueueState(key = key, mode = QueueMode.INTERRUPT)
         }
 
-        // 1. Cancel currently running task
+        // 1. Cancel currently running task (AgentLoop + Job)
         if (state.isProcessing.get()) {
             Log.d(TAG, "🛑 [INTERRUPT] Aborting current run for $key")
-            state.currentJob?.cancel()
+            stopActiveRun(key)
         }
 
         // 2. Clear queue

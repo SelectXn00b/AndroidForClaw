@@ -112,9 +112,7 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
         private var weixinChannel: com.xiaomo.weixin.WeixinChannel? = null
         fun getWeixinChannel(): com.xiaomo.weixin.WeixinChannel? = weixinChannel
 
-        // Track active Weixin agent loops per user for stop/cancel support
-        private val activeWeixinAgentLoops = java.util.concurrent.ConcurrentHashMap<String, AgentLoop>()
-        private val activeWeixinJobs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
+        // Weixin agent loop tracking moved to MessageQueueManager (channel-agnostic)
 
         // Accessibility Health Monitor
         private var healthMonitor: AccessibilityHealthMonitor? = null
@@ -1169,6 +1167,18 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                 // 🔑 Generate queue key (aligned with OpenClaw)
                 val queueKey = "feishu:${event.chatId}"
 
+                // 🛑 Channel-agnostic stop command check
+                if (messageQueueManager.isStopCommand(event.content)) {
+                    GlobalScope.launch(Dispatchers.IO) {
+                        if (messageQueueManager.stopActiveRun(queueKey)) {
+                            sendFeishuReply(event, "✅ 已停止当前任务")
+                        } else {
+                            sendFeishuReply(event, "当前没有正在执行的任务")
+                        }
+                    }
+                    return
+                }
+
                 // 📦 Build queued message
                 val queuedMessage = MessageQueueManager.QueuedMessage(
                     messageId = event.messageId,
@@ -2083,7 +2093,7 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                 weixinChannel = channel
                 Log.i(TAG, "✅ Weixin Channel 启动成功")
 
-                // Collect inbound messages and dispatch to agent
+                // Collect inbound messages and dispatch to agent via MessageQueueManager
                 channel.messageFlow?.collect { msg ->
                     Log.i(TAG, "📨 Weixin 收到消息: from=${msg.fromUserId} body=${msg.body.take(50)}")
 
@@ -2092,64 +2102,56 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                         return@collect
                     }
 
-                    // Check if this is a stop command
-                    val trimmedBody = msg.body.trim()
-                    if (isWeixinStopCommand(trimmedBody)) {
-                        val userId = msg.fromUserId
-                        val loop = activeWeixinAgentLoops[userId]
-                        val job = activeWeixinJobs[userId]
-                        if (loop != null || job != null) {
-                            Log.i(TAG, "🛑 Weixin: 用户 $userId 请求停止任务")
-                            loop?.stop()
-                            job?.cancel()
-                            activeWeixinAgentLoops.remove(userId)
-                            activeWeixinJobs.remove(userId)
-                            channel.sender?.sendText(userId, "✅ 已停止当前任务")
+                    val queueKey = "weixin:${msg.fromUserId}"
+
+                    // Channel-agnostic stop command check
+                    if (messageQueueManager.isStopCommand(msg.body)) {
+                        if (messageQueueManager.stopActiveRun(queueKey)) {
+                            channel.sender?.sendText(msg.fromUserId, "✅ 已停止当前任务")
                         } else {
-                            channel.sender?.sendText(userId, "当前没有正在执行的任务")
+                            channel.sender?.sendText(msg.fromUserId, "当前没有正在执行的任务")
                         }
                         return@collect
                     }
 
-                    val job = launch {
+                    val queuedMessage = MessageQueueManager.QueuedMessage(
+                        messageId = msg.messageId?.toString() ?: "weixin_${System.currentTimeMillis()}",
+                        content = msg.body,
+                        senderId = msg.fromUserId,
+                        chatId = msg.fromUserId,
+                        chatType = "p2p",
+                        metadata = mapOf("weixinMsg" to msg)
+                    )
+
+                    val queueMode = getQueueModeForChat(msg.fromUserId, "p2p")
+
+                    GlobalScope.launch(Dispatchers.IO) {
                         try {
-                            // Send typing indicator
-                            channel.sender?.sendTyping(msg.fromUserId)
-
-                            // Process message through agent (with intermediate progress sending)
-                            val (response, blockRepliesSent) = processWeixinMessage(msg)
-
-                            // Send final reply — skip parts already sent as BlockReply
-                            if (response.isNotBlank() && !shouldSkipWeixinReply(response)) {
-                                var sanitized = com.xiaomo.androidforclaw.agent.session.HistorySanitizer
-                                    .stripControlTokensFromText(response)
-                                    .replace(Regex("(?:^|\\s+|\\*+)NO_REPLY\\s*$"), "")
-                                    .replace(Regex("(?:^|\\s+|\\*+)HEARTBEAT_OK\\s*$"), "")
-                                    .trim()
-                                // Deduplicate: remove block reply text already sent mid-process
-                                for (sent in blockRepliesSent) {
-                                    sanitized = sanitized.replace(sent, "").trim()
-                                }
-                                if (sanitized.isNotBlank()) {
-                                    channel.sender?.sendText(msg.fromUserId, sanitized)
+                            messageQueueManager.enqueue(
+                                key = queueKey,
+                                message = queuedMessage,
+                                mode = queueMode
+                            ) { qMsg ->
+                                kotlinx.coroutines.withTimeout(5 * 60 * 1000L) {
+                                    val originalMsg = qMsg.metadata["weixinMsg"]
+                                        as? com.xiaomo.weixin.messaging.WeixinInboundMessage ?: msg
+                                    processWeixinMessageQueued(originalMsg, queueKey)
                                 }
                             }
-
-                            // Cancel typing
-                            channel.sender?.cancelTyping(msg.fromUserId)
+                        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                            Log.e(TAG, "Weixin 消息处理超时 (5min)", e)
+                            try {
+                                channel.sender?.sendText(msg.fromUserId, "⚠️ 处理超时，请重试")
+                            } catch (_: Exception) {}
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             Log.i(TAG, "Weixin: 任务被用户取消 ${msg.fromUserId}")
                         } catch (e: Exception) {
-                            Log.e(TAG, "Weixin 消息处理异常", e)
+                            Log.e(TAG, "Weixin 消息队列处理失败", e)
                             try {
                                 channel.sender?.sendText(msg.fromUserId, "处理消息时出错：${e.message}")
                             } catch (_: Exception) {}
-                        } finally {
-                            activeWeixinAgentLoops.remove(msg.fromUserId)
-                            activeWeixinJobs.remove(msg.fromUserId)
                         }
                     }
-                    activeWeixinJobs[msg.fromUserId] = job
                 }
 
             } catch (e: Exception) {
@@ -2158,26 +2160,22 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
         }
     }
 
-    private fun isWeixinStopCommand(text: String): Boolean {
-        val lower = text.lowercase()
-        return lower == "停止" || lower == "停" || lower == "stop" || lower == "cancel"
-                || lower == "取消" || lower == "停止任务" || lower == "停止全部任务"
-                || lower == "中止" || lower == "终止"
-    }
-
-    private fun shouldSkipWeixinReply(response: String): Boolean {
-        val trimmed = response.trim()
-        return trimmed == "NO_REPLY" || trimmed == "HEARTBEAT_OK" || trimmed.isEmpty()
-    }
-
     /**
-     * Process Weixin message with intermediate progress sending.
-     * Returns Pair(finalContent, blockRepliesSent).
+     * Process Weixin message through MessageQueueManager pipeline.
+     * Registers AgentLoop with MessageQueueManager for channel-agnostic stop support.
      */
-    private suspend fun processWeixinMessage(
-        msg: com.xiaomo.weixin.messaging.WeixinInboundMessage
-    ): Pair<String, List<String>> = withContext(Dispatchers.IO) {
+    private suspend fun processWeixinMessageQueued(
+        msg: com.xiaomo.weixin.messaging.WeixinInboundMessage,
+        queueKey: String
+    ) {
+        val channel = weixinChannel ?: return
+        val sender = channel.sender
+        val toUser = msg.fromUserId
+
         try {
+            // Send typing indicator
+            sender?.sendTyping(toUser)
+
             val sessionId = "weixin_${msg.fromUserId}"
             Log.i(TAG, "🆔 Weixin Session ID: $sessionId")
 
@@ -2185,7 +2183,10 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                 MainEntryNew.initialize(this@MyApplication)
             }
             val sessionManager = MainEntryNew.getSessionManager()
-                ?: return@withContext Pair("系统错误：无法创建会话", emptyList())
+            if (sessionManager == null) {
+                sender?.sendText(toUser, "系统错误：无法创建会话")
+                return
+            }
 
             val session = sessionManager.getOrCreate(sessionId)
 
@@ -2227,8 +2228,8 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                 modelRef = weixinModel
             )
 
-            // Register for stop/cancel support
-            activeWeixinAgentLoops[msg.fromUserId] = agentLoop
+            // Register with MessageQueueManager (channel-agnostic stop/steer support)
+            messageQueueManager.setActiveAgentLoop(queueKey, agentLoop)
 
             val channelCtx = ContextBuilder.ChannelContext(
                 channel = "weixin",
@@ -2246,14 +2247,11 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
 
             // Collect intermediate progress updates and send to Weixin user
             val blockRepliesSent = mutableListOf<String>()
-            val sender = weixinChannel?.sender
-            val toUser = msg.fromUserId
 
             val progressJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
                 agentLoop.progressFlow.collect { update ->
                     when (update) {
                         is ProgressUpdate.ToolCall -> {
-                            // 只记日志，不发给用户（避免刷屏）
                             Log.d(TAG, "Weixin: ToolCall ${update.name}")
                         }
                         is ProgressUpdate.BlockReply -> {
@@ -2282,11 +2280,16 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                 }
             }
 
-            val result = agentLoop.run(
-                systemPrompt = systemPrompt,
-                userMessage = msg.body,
-                contextHistory = contextHistory.map { it.toNewMessage() },
-            )
+            val result = try {
+                agentLoop.run(
+                    systemPrompt = systemPrompt,
+                    userMessage = msg.body,
+                    contextHistory = contextHistory.map { it.toNewMessage() },
+                )
+            } finally {
+                // Always unregister after the run completes (or fails)
+                messageQueueManager.clearActiveAgentLoop(queueKey)
+            }
 
             // Cancel progress collection after agent finishes
             progressJob.cancel()
@@ -2299,10 +2302,35 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                 role = "assistant", content = result.finalContent
             ))
 
-            Pair(result.finalContent, blockRepliesSent.toList())
+            // Send final reply — skip parts already sent as BlockReply
+            val response = result.finalContent
+            if (response.isNotBlank()) {
+                val trimmed = response.trim()
+                if (trimmed != "NO_REPLY" && trimmed != "HEARTBEAT_OK") {
+                    var sanitized = com.xiaomo.androidforclaw.agent.session.HistorySanitizer
+                        .stripControlTokensFromText(response)
+                        .replace(Regex("(?:^|\\s+|\\*+)NO_REPLY\\s*$"), "")
+                        .replace(Regex("(?:^|\\s+|\\*+)HEARTBEAT_OK\\s*$"), "")
+                        .trim()
+                    // Deduplicate: remove block reply text already sent mid-process
+                    for (sent in blockRepliesSent) {
+                        sanitized = sanitized.replace(sent, "").trim()
+                    }
+                    if (sanitized.isNotBlank()) {
+                        sender?.sendText(toUser, sanitized)
+                    }
+                }
+            }
+
+            // Cancel typing
+            sender?.cancelTyping(toUser)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            Log.i(TAG, "Weixin: 任务被用户取消 ${msg.fromUserId}")
         } catch (e: Exception) {
-            Log.e(TAG, "processWeixinMessage 异常", e)
-            Pair("处理消息时出错：${e.message}", emptyList())
+            Log.e(TAG, "processWeixinMessageQueued 异常", e)
+            try {
+                sender?.sendText(toUser, "处理消息时出错：${e.message}")
+            } catch (_: Exception) {}
         }
     }
 
