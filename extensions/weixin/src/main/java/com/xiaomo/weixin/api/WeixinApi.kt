@@ -31,7 +31,7 @@ class WeixinApi(
 ) {
     companion object {
         private const val TAG = "WeixinApi"
-        private const val CHANNEL_VERSION = "1.0.2-android"
+        private const val CHANNEL_VERSION = "1.0.3"
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
         private const val DEFAULT_LONG_POLL_TIMEOUT_MS = 35_000L
         private const val DEFAULT_API_TIMEOUT_MS = 15_000L
@@ -174,7 +174,9 @@ class WeixinApi(
     /** Send a text message to a user. */
     suspend fun sendText(toUserId: String, text: String, contextToken: String?) {
         val msg = WeixinMessage(
+            fromUserId = "",
             toUserId = toUserId,
+            clientId = generateClientId(),
             contextToken = contextToken,
             messageType = MessageType.BOT,
             messageState = MessageState.FINISH,
@@ -186,6 +188,12 @@ class WeixinApi(
             )
         )
         sendMessage(msg)
+    }
+
+    /** Generate a unique client ID for outbound messages (aligned with OpenClaw). */
+    private fun generateClientId(): String {
+        val rand = Random.nextLong().toULong().toString(36)
+        return "openclaw-weixin-$rand"
     }
 
     // ── sendTyping ──────────────────────────────────────────────────────────
