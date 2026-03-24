@@ -28,7 +28,7 @@ object QRCodeGenerator {
                 EncodeHintType.CHARACTER_SET to "UTF-8",
             )
             val matrix = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, size, size, hints)
-            val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.RGB_565)
+            val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
             for (x in 0 until size) {
                 for (y in 0 until size) {
                     bitmap.setPixel(x, y, if (matrix.get(x, y)) Color.BLACK else Color.WHITE)
