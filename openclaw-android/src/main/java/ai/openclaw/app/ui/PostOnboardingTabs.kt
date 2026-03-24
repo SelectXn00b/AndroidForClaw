@@ -30,11 +30,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -62,14 +60,6 @@ private enum class HomeTab(
   Settings(labelRes = R.string.tab_settings, icon = Icons.Default.Settings),
 }
 
-private enum class StatusVisual {
-  Connected,
-  Connecting,
-  Warning,
-  Error,
-  Offline,
-}
-
 @Composable
 fun PostOnboardingTabs(
   viewModel: MainViewModel,
@@ -93,21 +83,6 @@ fun PostOnboardingTabs(
     }
   }
 
-  val statusText by viewModel.statusText.collectAsState()
-  val isConnected by viewModel.isConnected.collectAsState()
-
-  val statusVisual =
-    remember(statusText, isConnected) {
-      val lower = statusText.lowercase()
-      when {
-        isConnected -> StatusVisual.Connected
-        lower.contains("connecting") || lower.contains("reconnecting") -> StatusVisual.Connecting
-        lower.contains("pairing") || lower.contains("approval") || lower.contains("auth") -> StatusVisual.Warning
-        lower.contains("error") || lower.contains("failed") -> StatusVisual.Error
-        else -> StatusVisual.Offline
-      }
-    }
-
   val density = LocalDensity.current
   val imeVisible = WindowInsets.ime.getBottom(density) > 0
   val hideBottomTabBar = activeTab == HomeTab.Chat && imeVisible
@@ -116,12 +91,7 @@ fun PostOnboardingTabs(
     modifier = modifier,
     containerColor = Color.Transparent,
     contentWindowInsets = WindowInsets(0, 0, 0, 0),
-    topBar = {
-      TopStatusBar(
-        statusText = statusText,
-        statusVisual = statusVisual,
-      )
-    },
+    topBar = { TopStatusBar() },
     bottomBar = {
       if (!hideBottomTabBar) {
         BottomTabBar(
@@ -176,13 +146,12 @@ fun PostOnboardingTabs(
 
 @Composable
 private fun ScreenTabScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier = Modifier) {
-  val isConnected by viewModel.isConnected.collectAsState()
-  var refreshedForCurrentConnection by rememberSaveable(isConnected) { mutableStateOf(false) }
+  var refreshedOnce by rememberSaveable { mutableStateOf(false) }
 
-  LaunchedEffect(isConnected, visible, refreshedForCurrentConnection) {
-    if (visible && isConnected && !refreshedForCurrentConnection) {
+  LaunchedEffect(visible, refreshedOnce) {
+    if (visible && !refreshedOnce) {
       viewModel.refreshHomeCanvasOverviewIfConnected()
-      refreshedForCurrentConnection = true
+      refreshedOnce = true
     }
   }
 
@@ -192,50 +161,8 @@ private fun ScreenTabScreen(viewModel: MainViewModel, visible: Boolean, modifier
 }
 
 @Composable
-private fun TopStatusBar(
-  statusText: String,
-  statusVisual: StatusVisual,
-) {
+private fun TopStatusBar() {
   val safeInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
-
-  val (chipBg, chipDot, chipText, chipBorder) =
-    when (statusVisual) {
-      StatusVisual.Connected ->
-        listOf(
-          mobileSuccessSoft,
-          mobileSuccess,
-          mobileSuccess,
-          LocalMobileColors.current.chipBorderConnected,
-        )
-      StatusVisual.Connecting ->
-        listOf(
-          mobileAccentSoft,
-          mobileAccent,
-          mobileAccent,
-          LocalMobileColors.current.chipBorderConnecting,
-        )
-      StatusVisual.Warning ->
-        listOf(
-          mobileWarningSoft,
-          mobileWarning,
-          mobileWarning,
-          LocalMobileColors.current.chipBorderWarning,
-        )
-      StatusVisual.Error ->
-        listOf(
-          mobileDangerSoft,
-          mobileDanger,
-          mobileDanger,
-          LocalMobileColors.current.chipBorderError,
-        )
-      StatusVisual.Offline ->
-        listOf(
-          mobileSurface,
-          mobileTextTertiary,
-          mobileTextSecondary,
-          mobileBorder,
-        )
-    }
 
   Surface(
     modifier = Modifier.fillMaxWidth().windowInsetsPadding(safeInsets),
@@ -245,38 +172,12 @@ private fun TopStatusBar(
     Row(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
     ) {
       Text(
         text = stringResource(R.string.brand_name),
         style = mobileTitle2,
         color = mobileText,
       )
-      Surface(
-        shape = RoundedCornerShape(999.dp),
-        color = chipBg,
-        border = androidx.compose.foundation.BorderStroke(1.dp, chipBorder),
-      ) {
-        Row(
-          modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Surface(
-            modifier = Modifier.padding(top = 1.dp),
-            color = chipDot,
-            shape = RoundedCornerShape(999.dp),
-          ) {
-            Box(modifier = Modifier.padding(4.dp))
-          }
-          Text(
-            text = statusText.trim().ifEmpty { stringResource(R.string.status_offline) },
-            style = mobileCaption1,
-            color = chipText,
-            maxLines = 1,
-          )
-        }
-      }
     }
   }
 }

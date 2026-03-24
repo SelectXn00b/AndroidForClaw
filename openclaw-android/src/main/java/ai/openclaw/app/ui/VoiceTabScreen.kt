@@ -82,7 +82,6 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
   val activity = remember(context) { context.findActivity() }
   val listState = rememberLazyListState()
 
-  val gatewayStatus by viewModel.statusText.collectAsState()
   val micEnabled by viewModel.micEnabled.collectAsState()
   val micCooldown by viewModel.micCooldown.collectAsState()
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
@@ -319,7 +318,7 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
         border = BorderStroke(1.dp, if (micEnabled) mobileSuccess.copy(alpha = 0.3f) else mobileBorder),
       ) {
         Text(
-          "$gatewayStatus · $stateText",
+          stateText,
           style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
           color = stateColor,
           modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
