@@ -50,6 +50,7 @@ fun WeixinChannelScreen(onBack: () -> Unit) {
     val openClawConfig = remember { configLoader.loadOpenClawConfig() }
     val weixinCfg = openClawConfig.channels.weixin
 
+    var enabled by remember { mutableStateOf(weixinCfg?.enabled ?: false) }
     var statusText by remember { mutableStateOf("") }
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var isLoggingIn by remember { mutableStateOf(false) }
@@ -91,6 +92,54 @@ fun WeixinChannelScreen(onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            // 启用开关
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "启用微信 Channel",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            text = "开启后将接收微信消息",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = enabled,
+                        onCheckedChange = { newValue ->
+                            enabled = newValue
+                            // 保存到配置
+                            val currentConfig = configLoader.loadOpenClawConfig()
+                            val updatedWeixin = (currentConfig.channels.weixin ?: com.xiaomo.androidforclaw.config.WeixinChannelConfig())
+                                .copy(enabled = newValue)
+                            val updatedConfig = currentConfig.copy(
+                                channels = currentConfig.channels.copy(weixin = updatedWeixin)
+                            )
+                            configLoader.saveOpenClawConfig(updatedConfig)
+
+                            if (newValue) {
+                                // 启用：尝试启动通道
+                                (context.applicationContext as? com.xiaomo.androidforclaw.core.MyApplication)
+                                    ?.restartWeixinChannel()
+                                statusText = "✅ 已启用"
+                            } else {
+                                // 禁用：停止通道
+                                com.xiaomo.androidforclaw.core.MyApplication.getWeixinChannel()?.stop()
+                                statusText = "已禁用"
+                            }
+                        },
+                    )
+                }
+            }
 
             if (isLoggedIn) {
                 // Show logged-in state
