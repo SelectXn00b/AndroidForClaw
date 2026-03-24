@@ -2214,11 +2214,8 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                 agentLoop.progressFlow.collect { update ->
                     when (update) {
                         is ProgressUpdate.ToolCall -> {
-                            try {
-                                sender?.sendText(toUser, "🔧 正在使用: ${update.name}...")
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Weixin: 发送工具调用提示失败: ${e.message}")
-                            }
+                            // 只记日志，不发给用户（避免刷屏）
+                            Log.d(TAG, "Weixin: ToolCall ${update.name}")
                         }
                         is ProgressUpdate.BlockReply -> {
                             val text = update.text.trim()
