@@ -8,12 +8,12 @@
     <string name="tab_settings">Settings</string>
 
     <!-- Brand / status -->
-    <string name="brand_name">ForClaw</string>
+    <string name="brand_name">OpenClaw</string>
     <string name="status_offline">Offline</string>
 
     <!-- Chat sender labels -->
     <string name="sender_you">You</string>
-    <string name="sender_ai">ForClaw</string>
+    <string name="sender_ai">OpenClaw</string>
     <string name="sender_system">System</string>
     <string name="sender_live_suffix">· Live</string>
 
@@ -26,7 +26,7 @@
     <!-- Chat misc -->
     <string name="chat_error_label">CHAT ERROR</string>
     <string name="chat_thinking">Thinking…</string>
-    <string name="chat_thinking_full">ForClaw is thinking…</string>
+    <string name="chat_thinking_full">OpenClaw is thinking…</string>
     <string name="tools_label">Tools</string>
     <string name="tools_running">Running tools…</string>
     <string name="tools_completed">Tools completed</string>
