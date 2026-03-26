@@ -9,8 +9,11 @@ package com.xiaomo.androidforclaw.agent.tools
  * 支持 list / snap / clip 三种操作
  */
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import com.xiaomo.androidforclaw.camera.CameraCaptureManager
+import com.xiaomo.androidforclaw.camera.CameraPermissionActivity
 import com.xiaomo.androidforclaw.logging.Log
 import com.xiaomo.androidforclaw.providers.FunctionDefinition
 import com.xiaomo.androidforclaw.providers.ParametersSchema
@@ -90,9 +93,40 @@ class CameraSkill(
 
         return when (action) {
             "list" -> executeList()
-            "snap" -> executeSnap(args)
-            "clip" -> executeClip(args)
+            "snap" -> {
+                val permResult = ensureCameraPermission()
+                if (permResult != null) return permResult
+                executeSnap(args)
+            }
+            "clip" -> {
+                val permResult = ensureCameraPermission()
+                if (permResult != null) return permResult
+                executeClip(args)
+            }
             else -> SkillResult.error("Unknown action: $action. Use: list, snap, clip")
+        }
+    }
+
+    /**
+     * 检查相机权限，如果没有则弹出透明 Activity 请求。
+     * @return null=权限已就绪，SkillResult=权限被拒绝的错误结果
+     */
+    private suspend fun ensureCameraPermission(): SkillResult? {
+        if (context.checkSelfPermission(Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return null // 已有权限
+        }
+
+        Log.d(TAG, "CAMERA permission not granted, requesting via CameraPermissionActivity")
+        val granted = CameraPermissionActivity.requestPermission(context)
+
+        return if (granted) {
+            Log.d(TAG, "CAMERA permission granted by user")
+            null // 权限已授予
+        } else {
+            Log.w(TAG, "CAMERA permission denied by user")
+            SkillResult.error("相机权限被拒绝，无法执行操作。请在系统设置中授予相机权限后重试。")
         }
     }
 
