@@ -225,6 +225,7 @@ object MainEntryNew {
                     parentSessionKey = "agent:main:main",
                     parentAgentLoop = agentLoop,
                     parentDepth = 0,
+                    configLoader = configLoader,
                 )
                 agentLoop.extraTools = subagentTools
                 Log.d(TAG, "✓ Subagent system initialized (${subagentTools.size} tools)")

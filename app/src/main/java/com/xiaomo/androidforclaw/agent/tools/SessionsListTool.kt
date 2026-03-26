@@ -12,6 +12,7 @@ import android.util.Log
 import com.xiaomo.androidforclaw.agent.subagent.SessionVisibilityGuard
 import com.xiaomo.androidforclaw.agent.subagent.SubagentRegistry
 import com.xiaomo.androidforclaw.agent.subagent.SubagentRunStatus
+import com.xiaomo.androidforclaw.agent.subagent.isActiveSubagentRun
 import com.xiaomo.androidforclaw.providers.FunctionDefinition
 import com.xiaomo.androidforclaw.providers.ParametersSchema
 import com.xiaomo.androidforclaw.providers.PropertySchema

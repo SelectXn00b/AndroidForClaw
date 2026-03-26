@@ -65,19 +65,16 @@ object SessionVisibilityGuard {
             return SessionToolsVisibility.TREE
         }
 
-        // Check if caller can spawn (ORCHESTRATOR vs LEAF)
-        // LEAF subagents get SELF visibility (controlScope = "none" in OpenClaw)
-        val depth = callerRun.depth
-        // If the subagent is at max depth or is explicitly a LEAF, restrict to SELF
-        val runRecord = registry.getRunById(callerRun.runId)
-        if (runRecord != null) {
-            // Check by looking at whether the run was registered with spawn capabilities
-            // A simple heuristic: if depth >= 2, likely a leaf
-            // More accurate: check if SubagentSpawner gave this session subagent tools
-            // For now, use TREE for all subagents (they can only see their own children anyway)
+        // Resolve stored capabilities from run depth
+        // Aligned with OpenClaw resolveStoredSubagentCapabilities
+        val capabilities = resolveSubagentCapabilities(callerRun.depth)
+        return if (capabilities.controlScope == SubagentControlScope.NONE) {
+            // LEAF: controlScope = "none" → SELF visibility
+            SessionToolsVisibility.SELF
+        } else {
+            // MAIN/ORCHESTRATOR: controlScope = "children" → TREE visibility
+            SessionToolsVisibility.TREE
         }
-
-        return SessionToolsVisibility.TREE
     }
 
     /**

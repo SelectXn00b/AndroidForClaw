@@ -13,6 +13,8 @@ import com.xiaomo.androidforclaw.agent.subagent.DEFAULT_RECENT_MINUTES
 import com.xiaomo.androidforclaw.agent.subagent.MAX_STEER_MESSAGE_CHARS
 import com.xiaomo.androidforclaw.agent.subagent.SubagentRegistry
 import com.xiaomo.androidforclaw.agent.subagent.SubagentSpawner
+import com.xiaomo.androidforclaw.agent.subagent.getSubagentSessionStartedAt
+import com.xiaomo.androidforclaw.agent.subagent.isActiveSubagentRun
 import com.xiaomo.androidforclaw.providers.FunctionDefinition
 import com.xiaomo.androidforclaw.providers.ParametersSchema
 import com.xiaomo.androidforclaw.providers.PropertySchema
@@ -99,42 +101,57 @@ class SubagentsTool(
         val now = System.currentTimeMillis()
         val recentCutoff = now - recentMinutes * 60_000L
 
-        val active = allRuns.filter { it.isActive }
-        val recent = allRuns.filter { !it.isActive && (it.endedAt ?: 0L) >= recentCutoff }
+        // Use isActiveSubagentRun (aligned with OpenClaw: active = not ended OR has pending descendants)
+        val pendingDescendantCount = { sessionKey: String ->
+            registry.countPendingDescendantRuns(sessionKey)
+        }
+        val active = allRuns.filter { isActiveSubagentRun(it, pendingDescendantCount) }
+        val recent = allRuns.filter {
+            !isActiveSubagentRun(it, pendingDescendantCount) &&
+            (it.endedAt ?: 0L) >= recentCutoff
+        }
 
         val text = buildString {
             appendLine("Subagents for session: $callerSessionKey")
             appendLine("Total: ${allRuns.size} (${active.size} active, ${recent.size} recent)")
             appendLine()
 
+            var index = 1
             if (active.isNotEmpty()) {
                 appendLine("## Active")
-                for ((i, run) in active.withIndex()) {
-                    val runtimeSec = run.runtimeMs / 1000
+                for (run in active) {
+                    val runtime = SessionsListTool.formatDurationCompact(run.runtimeMs)
                     val pendingChildren = registry.countPendingDescendantRunsExcludingRun(run.childSessionKey, run.runId)
                     val status = if (pendingChildren > 0) {
                         "active (waiting on $pendingChildren children)"
                     } else {
                         "running"
                     }
-                    appendLine("${i + 1}. [${run.label}] status=$status runtime=${runtimeSec}s depth=${run.depth} model=${run.model ?: "default"}")
-                    appendLine("   runId=${run.runId} session=${run.childSessionKey}")
+                    val task = run.task.take(72).replace('\n', ' ')
+                    val taskSuffix = if (task.lowercase() != run.label.lowercase()) " - $task" else ""
+                    val startedAt = getSubagentSessionStartedAt(run)
+                    appendLine("${index}. ${run.label} (${run.model ?: "default"}, $runtime) $status$taskSuffix")
+                    appendLine("   runId=${run.runId} session=${run.childSessionKey} startedAt=$startedAt")
+                    index++
                 }
                 appendLine()
             }
 
             if (recent.isNotEmpty()) {
                 appendLine("## Recent (last ${recentMinutes}min)")
-                for ((i, run) in recent.withIndex()) {
+                for (run in recent) {
                     val status = when (run.outcome?.status?.wireValue) {
                         "ok" -> "done"
                         "error" -> "failed: ${run.outcome?.error ?: "unknown"}"
                         "timeout" -> "timed out"
                         else -> run.outcome?.status?.wireValue ?: "unknown"
                     }
-                    val runtimeSec = run.runtimeMs / 1000
-                    appendLine("${i + 1}. [${run.label}] status=$status runtime=${runtimeSec}s depth=${run.depth}")
-                    appendLine("   runId=${run.runId} session=${run.childSessionKey}")
+                    val runtime = SessionsListTool.formatDurationCompact(run.runtimeMs)
+                    val task = run.task.take(72).replace('\n', ' ')
+                    val taskSuffix = if (task.lowercase() != run.label.lowercase()) " - $task" else ""
+                    appendLine("${index}. ${run.label} (${run.model ?: "default"}, $runtime) $status$taskSuffix")
+                    appendLine("   runId=${run.runId} session=${run.childSessionKey} endedAt=${run.endedAt}")
+                    index++
                 }
             }
         }.trimEnd()

@@ -427,3 +427,86 @@ fun resolveSubagentSessionEndedOutcome(reason: SubagentLifecycleEndedReason): Su
         else -> SubagentLifecycleEndedOutcome.DELETED
     }
 }
+
+/**
+ * Check if a subagent run is considered "active" (not ended OR has pending descendants).
+ * Aligned with OpenClaw isActiveSubagentRun.
+ */
+fun isActiveSubagentRun(
+    entry: SubagentRunRecord,
+    pendingDescendantCount: (sessionKey: String) -> Int,
+): Boolean {
+    return entry.endedAt == null || pendingDescendantCount(entry.childSessionKey) > 0
+}
+
+/**
+ * Get session started-at time with fallback chain.
+ * Aligned with OpenClaw getSubagentSessionStartedAt.
+ */
+fun getSubagentSessionStartedAt(entry: SubagentRunRecord): Long? {
+    return entry.sessionStartedAt ?: entry.startedAt ?: entry.createdAt
+}
+
+// ==================== Deferred Cleanup Decision ====================
+
+/**
+ * Deferred cleanup decision.
+ * Aligned with OpenClaw DeferredCleanupDecision.
+ */
+sealed class DeferredCleanupDecision {
+    /** Defer: active descendants still running */
+    data class DeferDescendants(val delayMs: Long) : DeferredCleanupDecision()
+    /** Give up: retry limit or expiry reached */
+    data class GiveUp(val reason: String, val retryCount: Int? = null) : DeferredCleanupDecision()
+    /** Retry: exponential backoff */
+    data class Retry(val retryCount: Int, val resumeDelayMs: Long? = null) : DeferredCleanupDecision()
+}
+
+/** Aligned with OpenClaw DEFER_DESCENDANT_DELAY_MS default */
+const val DEFER_DESCENDANT_DELAY_MS = 10_000L
+
+/**
+ * Resolve deferred cleanup decision.
+ * Aligned with OpenClaw resolveDeferredCleanupDecision.
+ */
+fun resolveDeferredCleanupDecision(
+    entry: SubagentRunRecord,
+    now: Long,
+    activeDescendantRuns: Int,
+    announceExpiryMs: Long = ANNOUNCE_EXPIRY_MS,
+    announceCompletionHardExpiryMs: Long = ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
+    maxAnnounceRetryCount: Int = MAX_ANNOUNCE_RETRY_COUNT,
+    deferDescendantDelayMs: Long = DEFER_DESCENDANT_DELAY_MS,
+): DeferredCleanupDecision {
+    val endedAgo = if (entry.endedAt != null) now - entry.endedAt!! else 0L
+    val isCompletionMessageFlow = entry.expectsCompletionMessage
+    val completionHardExpiryExceeded = isCompletionMessageFlow && endedAgo > announceCompletionHardExpiryMs
+
+    // If completion flow with active descendants: defer or give-up
+    if (isCompletionMessageFlow && activeDescendantRuns > 0) {
+        return if (completionHardExpiryExceeded) {
+            DeferredCleanupDecision.GiveUp(reason = "expiry")
+        } else {
+            DeferredCleanupDecision.DeferDescendants(delayMs = deferDescendantDelayMs)
+        }
+    }
+
+    val retryCount = entry.announceRetryCount + 1
+    val expiryExceeded = if (isCompletionMessageFlow) {
+        completionHardExpiryExceeded
+    } else {
+        endedAgo > announceExpiryMs
+    }
+
+    if (retryCount >= maxAnnounceRetryCount || expiryExceeded) {
+        return DeferredCleanupDecision.GiveUp(
+            reason = if (retryCount >= maxAnnounceRetryCount) "retry-limit" else "expiry",
+            retryCount = retryCount,
+        )
+    }
+
+    return DeferredCleanupDecision.Retry(
+        retryCount = retryCount,
+        resumeDelayMs = if (isCompletionMessageFlow) computeAnnounceRetryDelayMs(retryCount) else null,
+    )
+}

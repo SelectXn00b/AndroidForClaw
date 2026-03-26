@@ -200,8 +200,22 @@ class SubagentRegistry(
             .sortedByDescending { it.createdAt }
     }
 
+    /**
+     * Count active runs for a session (using controllerSessionKey).
+     * Active = not ended OR has pending descendants.
+     * Aligned with OpenClaw countActiveRunsForSessionFromRuns.
+     */
+    fun countActiveRunsForSession(controllerSessionKey: String): Int {
+        return runs.values.count { record ->
+            val key = record.controllerSessionKey ?: record.requesterSessionKey
+            key == controllerSessionKey && isActiveSubagentRun(record) { sessionKey ->
+                countPendingDescendantRuns(sessionKey)
+            }
+        }
+    }
+
     fun activeChildCount(parentSessionKey: String): Int {
-        return runs.values.count { it.requesterSessionKey == parentSessionKey && it.isActive }
+        return countActiveRunsForSession(parentSessionKey)
     }
 
     /**
@@ -413,6 +427,72 @@ class SubagentRegistry(
             }
         }
         return result
+    }
+
+    // ==================== Steer Restart Management ====================
+
+    /**
+     * Clear steer-restart suppression on a run.
+     * If the run already ended while suppression was active, resume cleanup.
+     * Aligned with OpenClaw clearSubagentRunSteerRestart.
+     */
+    fun clearSubagentRunSteerRestart(runId: String): Boolean {
+        val entry = runs[runId] ?: return false
+        if (entry.suppressAnnounceReason != "steer-restart") return true
+        entry.suppressAnnounceReason = null
+        persistToDisk()
+        // If the run already finished while suppression was active, it needs cleanup
+        if (entry.endedAt != null && entry.cleanupCompletedAt == null) {
+            Log.i(TAG, "Resuming cleanup for run $runId after clearing steer-restart suppression")
+        }
+        return true
+    }
+
+    // ==================== Bulk Termination ====================
+
+    /**
+     * Mark matching runs as terminated (killed).
+     * Can match by runId and/or childSessionKey.
+     * Aligned with OpenClaw markSubagentRunTerminated.
+     * @return Number of runs updated.
+     */
+    fun markSubagentRunTerminated(
+        runId: String? = null,
+        childSessionKey: String? = null,
+        reason: String = "killed",
+    ): Int {
+        val targetRunIds = mutableSetOf<String>()
+        if (!runId.isNullOrBlank()) targetRunIds.add(runId)
+        if (!childSessionKey.isNullOrBlank()) {
+            runs.values.filter { it.childSessionKey == childSessionKey }.forEach {
+                targetRunIds.add(it.runId)
+            }
+        }
+        if (targetRunIds.isEmpty()) return 0
+
+        val now = System.currentTimeMillis()
+        var updated = 0
+        for (rid in targetRunIds) {
+            val entry = runs[rid] ?: continue
+            if (entry.endedAt != null) continue // already ended
+            entry.endedAt = now
+            entry.outcome = SubagentRunOutcome(SubagentRunStatus.ERROR, reason)
+            entry.endedReason = SubagentLifecycleEndedReason.SUBAGENT_KILLED
+            entry.cleanupHandled = true
+            entry.cleanupCompletedAt = now
+            entry.suppressAnnounceReason = "killed"
+            // Cancel job if exists
+            jobs[rid]?.cancel()
+            jobs.remove(rid)
+            agentLoops.remove(rid)
+            updated++
+            listeners.forEach { it.onRunCompleted(entry) }
+        }
+        if (updated > 0) {
+            Log.i(TAG, "markSubagentRunTerminated: $updated runs terminated (reason=$reason)")
+            persistToDisk()
+        }
+        return updated
     }
 
     // ==================== Control ====================

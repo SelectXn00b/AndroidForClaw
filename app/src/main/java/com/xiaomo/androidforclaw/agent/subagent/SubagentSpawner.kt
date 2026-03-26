@@ -18,6 +18,7 @@ import com.xiaomo.androidforclaw.agent.tools.SessionsKillTool
 import com.xiaomo.androidforclaw.agent.tools.SessionsListTool
 import com.xiaomo.androidforclaw.agent.tools.SessionsSendTool
 import com.xiaomo.androidforclaw.agent.tools.SessionsSpawnTool
+import com.xiaomo.androidforclaw.agent.tools.SessionStatusTool
 import com.xiaomo.androidforclaw.agent.tools.SessionsYieldTool
 import com.xiaomo.androidforclaw.agent.tools.SubagentsTool
 import com.xiaomo.androidforclaw.agent.tools.Tool
@@ -64,6 +65,7 @@ class SubagentSpawner(
             parentSessionKey: String,
             parentAgentLoop: AgentLoop,
             parentDepth: Int,
+            configLoader: ConfigLoader,
         ): List<Tool> {
             return listOf(
                 SessionsSpawnTool(spawner, parentSessionKey, parentAgentLoop, parentDepth),
@@ -73,6 +75,7 @@ class SubagentSpawner(
                 SessionsHistoryTool(spawner.registry, parentSessionKey),
                 SessionsYieldTool(parentAgentLoop),
                 SubagentsTool(spawner, spawner.registry, parentSessionKey, parentAgentLoop),
+                SessionStatusTool(spawner.registry, parentSessionKey, configLoader),
             )
         }
     }
@@ -201,6 +204,7 @@ class SubagentSpawner(
                 parentSessionKey = childSessionKey,
                 parentAgentLoop = childLoop,
                 parentDepth = childDepth,
+                configLoader = configLoader,
             )
             childLoop.extraTools = childSubagentTools
         }
@@ -523,6 +527,27 @@ class SubagentSpawner(
             val success = registry.killRun(runId)
             Pair(success, if (success) listOf(runId) else emptyList())
         }
+    }
+
+    /**
+     * Admin kill: kill a subagent by session key without ownership check.
+     * Includes cascade to descendants.
+     * Aligned with OpenClaw killSubagentRunAdmin.
+     */
+    fun killAdmin(sessionKey: String): Map<String, Any?> {
+        val entry = registry.getRunByChildSessionKey(sessionKey)
+            ?: return mapOf("found" to false, "killed" to false)
+
+        val (killed, killedIds) = kill(entry.runId, cascade = true, callerSessionKey = null)
+        val cascadeKilled = if (killedIds.size > 1) killedIds.size - 1 else 0
+
+        return mapOf(
+            "found" to true,
+            "killed" to killed,
+            "runId" to entry.runId,
+            "sessionKey" to entry.childSessionKey,
+            "cascadeKilled" to cascadeKilled,
+        )
     }
 
     /**
