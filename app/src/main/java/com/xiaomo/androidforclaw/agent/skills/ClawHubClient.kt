@@ -111,6 +111,9 @@ class ClawHubClient(private val context: Context? = null) {
 
             if (!response.isSuccessful || body == null) {
                 Log.e(TAG, "Search failed: ${response.code} - ${response.message}")
+                if (response.code == 429) {
+                    return@withContext Result.failure(ClawHubRateLimitException("ClawHub API 请求被限流 (429)"))
+                }
                 return@withContext Result.failure(
                     Exception("Search failed: ${response.code} - ${response.message}")
                 )
@@ -164,6 +167,9 @@ class ClawHubClient(private val context: Context? = null) {
             val body = response.body?.string()
 
             if (!response.isSuccessful || body == null) {
+                if (response.code == 429) {
+                    return@withContext Result.failure(ClawHubRateLimitException("ClawHub API 请求被限流 (429)"))
+                }
                 return@withContext Result.failure(
                     Exception("Get details failed: ${response.code} - ${response.message}")
                 )
@@ -221,6 +227,9 @@ class ClawHubClient(private val context: Context? = null) {
             val body = response.body?.string()
 
             if (!response.isSuccessful || body == null) {
+                if (response.code == 429) {
+                    return@withContext Result.failure(ClawHubRateLimitException("ClawHub API 请求被限流 (429)"))
+                }
                 return@withContext Result.failure(
                     Exception("Get versions failed: ${response.code} - ${response.message}")
                 )
@@ -270,6 +279,9 @@ class ClawHubClient(private val context: Context? = null) {
             val response = httpClient.newCall(request).execute()
 
             if (!response.isSuccessful) {
+                if (response.code == 429) {
+                    return@withContext Result.failure(ClawHubRateLimitException("ClawHub API 请求被限流 (429)"))
+                }
                 return@withContext Result.failure(
                     Exception("Download failed: ${response.code} - ${response.message}")
                 )
@@ -314,6 +326,12 @@ class ClawHubClient(private val context: Context? = null) {
         }
     }
 }
+
+/**
+ * ClawHub 429 限流异常
+ * 当 API 返回 429 时抛出，Tool 层据此提示用户提供 token
+ */
+class ClawHubRateLimitException(message: String) : Exception(message)
 
 /**
  * Skill Search Result

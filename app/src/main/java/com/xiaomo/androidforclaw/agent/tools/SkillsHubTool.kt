@@ -8,11 +8,18 @@ package com.xiaomo.androidforclaw.agent.tools
 import android.content.Context
 import com.xiaomo.androidforclaw.logging.Log
 import com.xiaomo.androidforclaw.agent.skills.ClawHubClient
+import com.xiaomo.androidforclaw.agent.skills.ClawHubRateLimitException
 import com.xiaomo.androidforclaw.agent.skills.SkillInstaller
 import com.xiaomo.androidforclaw.providers.FunctionDefinition
 import com.xiaomo.androidforclaw.providers.ParametersSchema
 import com.xiaomo.androidforclaw.providers.PropertySchema
 import com.xiaomo.androidforclaw.providers.ToolDefinition
+
+private const val RATE_LIMIT_HINT = """ClawHub API 请求被限流 (HTTP 429)。
+当前为匿名请求模式，请让用户提供 ClawHub token 以解除限流。
+用户可在 clawhub.com 账户设置中获取 token。
+获取后请调用: clawhub_config(action="set", token="用户提供的token")
+然后重试之前的操作。"""
 
 /**
  * skills_search — Search ClawHub for available skills
@@ -80,6 +87,9 @@ class SkillsSearchTool(private val context: Context) : Tool {
                 },
                 onFailure = { e ->
                     Log.e(TAG, "Search failed", e)
+                    if (e is ClawHubRateLimitException) {
+                        return@execute ToolResult.error(RATE_LIMIT_HINT)
+                    }
                     ToolResult.error("Failed to search ClawHub: ${e.message}")
                 }
             )
@@ -145,6 +155,9 @@ class SkillsInstallTool(private val context: Context) : Tool {
                 },
                 onFailure = { e ->
                     Log.e(TAG, "Install failed", e)
+                    if (e is ClawHubRateLimitException) {
+                        return@execute ToolResult.error(RATE_LIMIT_HINT)
+                    }
                     ToolResult.error("Failed to install skill '$slug': ${e.message}")
                 }
             )
