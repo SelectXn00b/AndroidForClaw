@@ -98,6 +98,9 @@ class WeixinApi(
         return builder.build()
     }
 
+    /** 高频轮询接口，不打 request/response 日志以减少 logcat 噪音 */
+    private val QUIET_LABELS = setOf("getUpdates")
+
     private suspend fun post(
         client: OkHttpClient,
         endpoint: String,
@@ -105,7 +108,8 @@ class WeixinApi(
         label: String,
     ): String = suspendCancellableCoroutine { cont ->
         val url = "${ensureTrailingSlash(baseUrl)}$endpoint"
-        Log.d(TAG, "POST $url [$label]")
+        val quiet = label in QUIET_LABELS
+        if (!quiet) Log.d(TAG, "POST $url [$label]")
 
         val request = Request.Builder()
             .url(url)
@@ -131,7 +135,7 @@ class WeixinApi(
                         )
                     }
                 } else {
-                    Log.d(TAG, "$label OK: ${responseBody.take(200)}")
+                    if (!quiet) Log.d(TAG, "$label OK: ${responseBody.take(200)}")
                     if (cont.isActive) cont.resume(responseBody)
                 }
             }
