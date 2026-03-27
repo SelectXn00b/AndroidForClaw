@@ -253,6 +253,12 @@ object ProviderRegistry {
             group = ProviderGroup.PRIMARY, order = 60
         ),
         ProviderDefinition(
+            id = "minimax", name = "MiniMax", description = "MiniMax M2.5 系列",
+            baseUrl = "https://api.minimax.io/anthropic", api = ModelApi.ANTHROPIC_MESSAGES,
+            keyRequired = true, keyHint = "MiniMax API Key", envVarName = "MINIMAX_API_KEY",
+            group = ProviderGroup.PRIMARY, order = 55
+        ),
+        ProviderDefinition(
             id = "custom", name = "自定义 (OpenAI 兼容)", description = "自定义 API",
             baseUrl = "", api = ModelApi.OPENAI_COMPLETIONS,
             keyRequired = false, keyHint = "API Key", envVarName = "",

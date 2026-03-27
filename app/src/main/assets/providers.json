@@ -11,20 +11,97 @@
       "authHeader": true,
       "keyRequired": false,
       "keyHint": "OpenRouter API Key (sk-or-v1-...)",
-      "envVars": ["OPENROUTER_API_KEY"],
+      "envVars": [
+        "OPENROUTER_API_KEY"
+      ],
       "group": "primary",
       "order": 10,
       "supportsDiscovery": true,
       "tutorialUrl": "https://openrouter.ai/keys",
-      "tutorialSteps": ["打开 openrouter.ai/keys", "登录或注册账号", "点击 \"Create Key\"", "复制 API Key"],
+      "tutorialSteps": [
+        "打开 openrouter.ai/keys",
+        "登录或注册账号",
+        "点击 \"Create Key\"",
+        "复制 API Key"
+      ],
       "models": [
-        {"id": "auto", "name": "OpenRouter Auto", "reasoning": false, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 8192},
-        {"id": "openrouter/hunter-alpha", "name": "Hunter Alpha", "reasoning": true, "input": ["text"], "contextWindow": 1048576, "maxTokens": 65536},
-        {"id": "openrouter/healer-alpha", "name": "Healer Alpha", "reasoning": true, "input": ["text", "image"], "contextWindow": 262144, "maxTokens": 65536},
-        {"id": "deepseek/deepseek-r1:free", "name": "DeepSeek R1 (Free)", "reasoning": true, "input": ["text"], "contextWindow": 163840, "maxTokens": 8192, "free": true},
-        {"id": "google/gemini-2.5-flash-preview:thinking", "name": "Gemini 2.5 Flash (Free)", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536, "free": true},
-        {"id": "anthropic/claude-sonnet-4", "name": "Claude Sonnet 4", "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 16384},
-        {"id": "openai/gpt-4.1", "name": "GPT-4.1", "reasoning": false, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 32768}
+        {
+          "id": "auto",
+          "name": "OpenRouter Auto",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 200000,
+          "maxTokens": 8192
+        },
+        {
+          "id": "openrouter/hunter-alpha",
+          "name": "Hunter Alpha",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1048576,
+          "maxTokens": 65536
+        },
+        {
+          "id": "openrouter/healer-alpha",
+          "name": "Healer Alpha",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 262144,
+          "maxTokens": 65536
+        },
+        {
+          "id": "deepseek/deepseek-r1:free",
+          "name": "DeepSeek R1 (Free)",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 163840,
+          "maxTokens": 8192,
+          "free": true
+        },
+        {
+          "id": "google/gemini-2.5-flash-preview:thinking",
+          "name": "Gemini 2.5 Flash (Free)",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1048576,
+          "maxTokens": 65536,
+          "free": true
+        },
+        {
+          "id": "anthropic/claude-sonnet-4",
+          "name": "Claude Sonnet 4",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 200000,
+          "maxTokens": 16384
+        },
+        {
+          "id": "openai/gpt-4.1",
+          "name": "GPT-4.1",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1048576,
+          "maxTokens": 32768
+        }
       ]
     },
     {
@@ -36,18 +113,76 @@
       "authHeader": false,
       "keyRequired": true,
       "keyHint": "Anthropic API Key (sk-ant-...)",
-      "envVars": ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+      "envVars": [
+        "ANTHROPIC_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY"
+      ],
       "group": "primary",
       "order": 20,
       "supportsDiscovery": false,
       "tutorialUrl": "https://console.anthropic.com/settings/keys",
-      "tutorialSteps": ["打开 console.anthropic.com", "登录或注册账号", "进入 API Keys 页面", "点击 \"Create Key\" 并复制"],
+      "tutorialSteps": [
+        "打开 console.anthropic.com",
+        "登录或注册账号",
+        "进入 API Keys 页面",
+        "点击 \"Create Key\" 并复制"
+      ],
       "models": [
-        {"id": "claude-opus-4-6", "name": "Claude Opus 4.6", "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 32768},
-        {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6", "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 16384},
-        {"id": "claude-opus-4-5", "name": "Claude Opus 4.5", "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 32768},
-        {"id": "claude-sonnet-4-5", "name": "Claude Sonnet 4.5", "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 16384},
-        {"id": "claude-haiku-4-5", "name": "Claude Haiku 4.5", "reasoning": false, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 8192}
+        {
+          "id": "claude-opus-4-6",
+          "name": "Claude Opus 4.6",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 200000,
+          "maxTokens": 32768
+        },
+        {
+          "id": "claude-sonnet-4-6",
+          "name": "Claude Sonnet 4.6",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 200000,
+          "maxTokens": 16384
+        },
+        {
+          "id": "claude-opus-4-5",
+          "name": "Claude Opus 4.5",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 200000,
+          "maxTokens": 32768
+        },
+        {
+          "id": "claude-sonnet-4-5",
+          "name": "Claude Sonnet 4.5",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 200000,
+          "maxTokens": 16384
+        },
+        {
+          "id": "claude-haiku-4-5",
+          "name": "Claude Haiku 4.5",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 200000,
+          "maxTokens": 8192
+        }
       ]
     },
     {
@@ -59,18 +194,75 @@
       "authHeader": true,
       "keyRequired": true,
       "keyHint": "OpenAI API Key (sk-...)",
-      "envVars": ["OPENAI_API_KEY"],
+      "envVars": [
+        "OPENAI_API_KEY"
+      ],
       "group": "primary",
       "order": 30,
       "supportsDiscovery": true,
       "tutorialUrl": "https://platform.openai.com/api-keys",
-      "tutorialSteps": ["打开 platform.openai.com", "登录或注册账号", "进入 API Keys 页面", "点击 \"Create new secret key\" 并复制"],
+      "tutorialSteps": [
+        "打开 platform.openai.com",
+        "登录或注册账号",
+        "进入 API Keys 页面",
+        "点击 \"Create new secret key\" 并复制"
+      ],
       "models": [
-        {"id": "gpt-4.1", "name": "GPT-4.1", "reasoning": false, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 32768},
-        {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini", "reasoning": false, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 32768},
-        {"id": "gpt-4.1-nano", "name": "GPT-4.1 Nano", "reasoning": false, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 32768},
-        {"id": "o4-mini", "name": "o4 Mini", "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 100000},
-        {"id": "o3", "name": "o3", "reasoning": true, "input": ["text", "image"], "contextWindow": 200000, "maxTokens": 100000}
+        {
+          "id": "gpt-4.1",
+          "name": "GPT-4.1",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1048576,
+          "maxTokens": 32768
+        },
+        {
+          "id": "gpt-4.1-mini",
+          "name": "GPT-4.1 Mini",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1048576,
+          "maxTokens": 32768
+        },
+        {
+          "id": "gpt-4.1-nano",
+          "name": "GPT-4.1 Nano",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1048576,
+          "maxTokens": 32768
+        },
+        {
+          "id": "o4-mini",
+          "name": "o4 Mini",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 200000,
+          "maxTokens": 100000
+        },
+        {
+          "id": "o3",
+          "name": "o3",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 200000,
+          "maxTokens": 100000
+        }
       ]
     },
     {
@@ -82,16 +274,53 @@
       "authHeader": true,
       "keyRequired": true,
       "keyHint": "Gemini API Key",
-      "envVars": ["GEMINI_API_KEY"],
+      "envVars": [
+        "GEMINI_API_KEY"
+      ],
       "group": "primary",
       "order": 40,
       "supportsDiscovery": false,
       "tutorialUrl": "https://aistudio.google.com/apikey",
-      "tutorialSteps": ["打开 aistudio.google.com", "登录 Google 账号", "点击 \"Get API key\"", "创建或选择项目并复制 Key"],
+      "tutorialSteps": [
+        "打开 aistudio.google.com",
+        "登录 Google 账号",
+        "点击 \"Get API key\"",
+        "创建或选择项目并复制 Key"
+      ],
       "models": [
-        {"id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536},
-        {"id": "gemini-2.5-pro", "name": "Gemini 2.5 Pro", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536},
-        {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536}
+        {
+          "id": "gemini-3.1-pro-preview",
+          "name": "Gemini 3.1 Pro",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1048576,
+          "maxTokens": 65536
+        },
+        {
+          "id": "gemini-2.5-pro",
+          "name": "Gemini 2.5 Pro",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1048576,
+          "maxTokens": 65536
+        },
+        {
+          "id": "gemini-2.5-flash",
+          "name": "Gemini 2.5 Flash",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1048576,
+          "maxTokens": 65536
+        }
       ]
     },
     {
@@ -103,15 +332,40 @@
       "authHeader": true,
       "keyRequired": true,
       "keyHint": "DeepSeek API Key",
-      "envVars": ["DEEPSEEK_API_KEY"],
+      "envVars": [
+        "DEEPSEEK_API_KEY"
+      ],
       "group": "primary",
       "order": 50,
       "supportsDiscovery": true,
       "tutorialUrl": "https://platform.deepseek.com/api_keys",
-      "tutorialSteps": ["打开 platform.deepseek.com", "登录或注册账号", "进入 API Keys 页面", "创建并复制 API Key"],
+      "tutorialSteps": [
+        "打开 platform.deepseek.com",
+        "登录或注册账号",
+        "进入 API Keys 页面",
+        "创建并复制 API Key"
+      ],
       "models": [
-        {"id": "deepseek-chat", "name": "DeepSeek V3", "reasoning": false, "input": ["text"], "contextWindow": 65536, "maxTokens": 8192},
-        {"id": "deepseek-reasoner", "name": "DeepSeek R1", "reasoning": true, "input": ["text"], "contextWindow": 65536, "maxTokens": 8192}
+        {
+          "id": "deepseek-chat",
+          "name": "DeepSeek V3",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 65536,
+          "maxTokens": 8192
+        },
+        {
+          "id": "deepseek-reasoner",
+          "name": "DeepSeek R1",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 65536,
+          "maxTokens": 8192
+        }
       ]
     },
     {
@@ -123,17 +377,59 @@
       "authHeader": true,
       "keyRequired": true,
       "keyHint": "xAI API Key",
-      "envVars": ["XAI_API_KEY"],
+      "envVars": [
+        "XAI_API_KEY"
+      ],
       "group": "primary",
       "order": 60,
       "supportsDiscovery": true,
       "tutorialUrl": "https://console.x.ai/",
-      "tutorialSteps": ["打开 console.x.ai", "登录 X/xAI 账号", "创建 API Key 并复制"],
+      "tutorialSteps": [
+        "打开 console.x.ai",
+        "登录 X/xAI 账号",
+        "创建 API Key 并复制"
+      ],
       "models": [
-        {"id": "grok-4", "name": "Grok 4", "reasoning": false, "input": ["text"], "contextWindow": 131072, "maxTokens": 8192},
-        {"id": "grok-4-fast-reasoning", "name": "Grok 4 Fast (Reasoning)", "reasoning": true, "input": ["text"], "contextWindow": 2000000, "maxTokens": 8192},
-        {"id": "grok-4-fast-non-reasoning", "name": "Grok 4 Fast", "reasoning": false, "input": ["text"], "contextWindow": 2000000, "maxTokens": 8192},
-        {"id": "grok-code-fast-1", "name": "Grok Code Fast 1", "reasoning": true, "input": ["text"], "contextWindow": 256000, "maxTokens": 8192}
+        {
+          "id": "grok-4",
+          "name": "Grok 4",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 131072,
+          "maxTokens": 8192
+        },
+        {
+          "id": "grok-4-fast-reasoning",
+          "name": "Grok 4 Fast (Reasoning)",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 2000000,
+          "maxTokens": 8192
+        },
+        {
+          "id": "grok-4-fast-non-reasoning",
+          "name": "Grok 4 Fast",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 2000000,
+          "maxTokens": 8192
+        },
+        {
+          "id": "grok-code-fast-1",
+          "name": "Grok Code Fast 1",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 256000,
+          "maxTokens": 8192
+        }
       ]
     },
     {
@@ -145,13 +441,20 @@
       "authHeader": true,
       "keyRequired": false,
       "keyHint": "API Key (可选)",
-      "envVars": ["OLLAMA_API_KEY"],
+      "envVars": [
+        "OLLAMA_API_KEY"
+      ],
       "group": "primary",
       "order": 70,
       "supportsDiscovery": true,
       "discoveryEndpoint": "/api/tags",
       "tutorialUrl": "https://ollama.com/download",
-      "tutorialSteps": ["安装 Ollama: ollama.com/download", "运行模型: ollama run qwen2.5:7b", "确保 Ollama 在同一局域网内运行", "如在其他设备上运行，修改 Base URL"],
+      "tutorialSteps": [
+        "安装 Ollama: ollama.com/download",
+        "运行模型: ollama run qwen2.5:7b",
+        "确保 Ollama 在同一局域网内运行",
+        "如在其他设备上运行，修改 Base URL"
+      ],
       "models": []
     },
     {
@@ -163,14 +466,29 @@
       "authHeader": true,
       "keyRequired": true,
       "keyHint": "火山引擎 API Key",
-      "envVars": ["VOLCANO_ENGINE_API_KEY"],
+      "envVars": [
+        "VOLCANO_ENGINE_API_KEY"
+      ],
       "group": "more",
       "order": 110,
       "supportsDiscovery": true,
       "tutorialUrl": "https://console.volcengine.com/ark",
-      "tutorialSteps": ["打开 console.volcengine.com", "进入 AI 大模型平台", "创建 API Key 并复制"],
+      "tutorialSteps": [
+        "打开 console.volcengine.com",
+        "进入 AI 大模型平台",
+        "创建 API Key 并复制"
+      ],
       "models": [
-        {"id": "doubao-1.5-pro-256k", "name": "豆包 1.5 Pro", "reasoning": false, "input": ["text"], "contextWindow": 262144, "maxTokens": 12288}
+        {
+          "id": "doubao-1.5-pro-256k",
+          "name": "豆包 1.5 Pro",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 262144,
+          "maxTokens": 12288
+        }
       ]
     },
     {
@@ -182,14 +500,31 @@
       "authHeader": true,
       "keyRequired": true,
       "keyHint": "Moonshot API Key",
-      "envVars": ["MOONSHOT_API_KEY"],
+      "envVars": [
+        "MOONSHOT_API_KEY"
+      ],
       "group": "more",
       "order": 120,
       "supportsDiscovery": true,
       "tutorialUrl": "https://platform.moonshot.cn/console/api-keys",
-      "tutorialSteps": ["打开 platform.moonshot.cn", "登录或注册账号", "进入 API 管理页面", "创建并复制 API Key"],
+      "tutorialSteps": [
+        "打开 platform.moonshot.cn",
+        "登录或注册账号",
+        "进入 API 管理页面",
+        "创建并复制 API Key"
+      ],
       "models": [
-        {"id": "kimi-k2.5", "name": "Kimi K2.5", "reasoning": false, "input": ["text", "image"], "contextWindow": 256000, "maxTokens": 8192}
+        {
+          "id": "kimi-k2.5",
+          "name": "Kimi K2.5",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 256000,
+          "maxTokens": 8192
+        }
       ]
     },
     {
@@ -201,15 +536,33 @@
       "authHeader": true,
       "keyRequired": true,
       "keyHint": "Kimi API Key",
-      "envVars": ["KIMI_API_KEY"],
-      "headers": {"User-Agent": "claude-code/0.1.0"},
+      "envVars": [
+        "KIMI_API_KEY"
+      ],
+      "headers": {
+        "User-Agent": "claude-code/0.1.0"
+      },
       "group": "more",
       "order": 125,
       "supportsDiscovery": false,
       "tutorialUrl": "https://kimi.com/coding",
-      "tutorialSteps": ["打开 kimi.com/coding", "注册或登录 Kimi Coding 账号", "获取 API Key"],
+      "tutorialSteps": [
+        "打开 kimi.com/coding",
+        "注册或登录 Kimi Coding 账号",
+        "获取 API Key"
+      ],
       "models": [
-        {"id": "kimi-code", "name": "Kimi Code", "reasoning": true, "input": ["text", "image"], "contextWindow": 262144, "maxTokens": 32768}
+        {
+          "id": "kimi-code",
+          "name": "Kimi Code",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 262144,
+          "maxTokens": 32768
+        }
       ]
     },
     {
@@ -221,15 +574,41 @@
       "authHeader": true,
       "keyRequired": true,
       "keyHint": "千帆 API Key",
-      "envVars": ["QIANFAN_API_KEY"],
+      "envVars": [
+        "QIANFAN_API_KEY"
+      ],
       "group": "more",
       "order": 130,
       "supportsDiscovery": true,
       "tutorialUrl": "https://qianfan.cloud.baidu.com/",
-      "tutorialSteps": ["打开 qianfan.cloud.baidu.com", "登录百度账号", "进入 API Key 管理", "创建并复制 API Key"],
+      "tutorialSteps": [
+        "打开 qianfan.cloud.baidu.com",
+        "登录百度账号",
+        "进入 API Key 管理",
+        "创建并复制 API Key"
+      ],
       "models": [
-        {"id": "deepseek-v3.2", "name": "DeepSeek V3.2", "reasoning": true, "input": ["text"], "contextWindow": 98304, "maxTokens": 32768},
-        {"id": "ernie-5.0-thinking-preview", "name": "ERNIE 5.0 Thinking", "reasoning": true, "input": ["text", "image"], "contextWindow": 119000, "maxTokens": 64000}
+        {
+          "id": "deepseek-v3.2",
+          "name": "DeepSeek V3.2",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 98304,
+          "maxTokens": 32768
+        },
+        {
+          "id": "ernie-5.0-thinking-preview",
+          "name": "ERNIE 5.0 Thinking",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 119000,
+          "maxTokens": 64000
+        }
       ]
     },
     {
@@ -241,16 +620,50 @@
       "authHeader": true,
       "keyRequired": true,
       "keyHint": "小米 API Key",
-      "envVars": ["XIAOMI_API_KEY"],
+      "envVars": [
+        "XIAOMI_API_KEY"
+      ],
       "group": "more",
       "order": 140,
       "supportsDiscovery": false,
       "tutorialUrl": "https://api.xiaomimimo.com/",
-      "tutorialSteps": ["打开 api.xiaomimimo.com", "登录小米账号", "获取 API Key"],
+      "tutorialSteps": [
+        "打开 api.xiaomimimo.com",
+        "登录小米账号",
+        "获取 API Key"
+      ],
       "models": [
-        {"id": "mimo-v2-flash", "name": "MiMo V2 Flash", "reasoning": false, "input": ["text"], "contextWindow": 262144, "maxTokens": 8192},
-        {"id": "mimo-v2-pro", "name": "MiMo V2 Pro", "reasoning": true, "input": ["text"], "contextWindow": 1048576, "maxTokens": 32000},
-        {"id": "mimo-v2-omni", "name": "MiMo V2 Omni", "reasoning": true, "input": ["text", "image"], "contextWindow": 262144, "maxTokens": 32000}
+        {
+          "id": "mimo-v2-flash",
+          "name": "MiMo V2 Flash",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 262144,
+          "maxTokens": 8192
+        },
+        {
+          "id": "mimo-v2-pro",
+          "name": "MiMo V2 Pro",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1048576,
+          "maxTokens": 32000
+        },
+        {
+          "id": "mimo-v2-omni",
+          "name": "MiMo V2 Omni",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 262144,
+          "maxTokens": 32000
+        }
       ]
     },
     {
@@ -262,14 +675,31 @@
       "authHeader": true,
       "keyRequired": true,
       "keyHint": "Mistral API Key",
-      "envVars": ["MISTRAL_API_KEY"],
+      "envVars": [
+        "MISTRAL_API_KEY"
+      ],
       "group": "more",
       "order": 150,
       "supportsDiscovery": true,
       "tutorialUrl": "https://console.mistral.ai/api-keys",
-      "tutorialSteps": ["打开 console.mistral.ai", "登录或注册账号", "进入 API Keys 页面", "创建并复制 API Key"],
+      "tutorialSteps": [
+        "打开 console.mistral.ai",
+        "登录或注册账号",
+        "进入 API Keys 页面",
+        "创建并复制 API Key"
+      ],
       "models": [
-        {"id": "mistral-large-latest", "name": "Mistral Large", "reasoning": false, "input": ["text", "image"], "contextWindow": 131072, "maxTokens": 8192}
+        {
+          "id": "mistral-large-latest",
+          "name": "Mistral Large",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 131072,
+          "maxTokens": 8192
+        }
       ]
     },
     {
@@ -281,12 +711,19 @@
       "authHeader": true,
       "keyRequired": true,
       "keyHint": "Together API Key",
-      "envVars": ["TOGETHER_API_KEY"],
+      "envVars": [
+        "TOGETHER_API_KEY"
+      ],
       "group": "more",
       "order": 160,
       "supportsDiscovery": true,
       "tutorialUrl": "https://api.together.ai/settings/api-keys",
-      "tutorialSteps": ["打开 api.together.ai", "登录或注册账号", "进入 Settings → API Keys", "复制 API Key"],
+      "tutorialSteps": [
+        "打开 api.together.ai",
+        "登录或注册账号",
+        "进入 Settings → API Keys",
+        "复制 API Key"
+      ],
       "models": []
     },
     {
@@ -298,12 +735,19 @@
       "authHeader": true,
       "keyRequired": true,
       "keyHint": "Hugging Face Token (hf_...)",
-      "envVars": ["HF_TOKEN"],
+      "envVars": [
+        "HF_TOKEN"
+      ],
       "group": "more",
       "order": 170,
       "supportsDiscovery": true,
       "tutorialUrl": "https://huggingface.co/settings/tokens",
-      "tutorialSteps": ["打开 huggingface.co/settings/tokens", "登录或注册账号", "创建 Access Token (Read scope)", "复制 Token"],
+      "tutorialSteps": [
+        "打开 huggingface.co/settings/tokens",
+        "登录或注册账号",
+        "创建 Access Token (Read scope)",
+        "复制 Token"
+      ],
       "models": []
     },
     {
@@ -315,15 +759,39 @@
       "authHeader": true,
       "keyRequired": true,
       "keyHint": "NVIDIA API Key",
-      "envVars": ["NVIDIA_API_KEY"],
+      "envVars": [
+        "NVIDIA_API_KEY"
+      ],
       "group": "more",
       "order": 180,
       "supportsDiscovery": true,
       "tutorialUrl": "https://build.nvidia.com/",
-      "tutorialSteps": ["打开 build.nvidia.com", "登录 NVIDIA 账号", "获取 API Key"],
+      "tutorialSteps": [
+        "打开 build.nvidia.com",
+        "登录 NVIDIA 账号",
+        "获取 API Key"
+      ],
       "models": [
-        {"id": "nvidia/llama-3.1-nemotron-70b-instruct", "name": "Llama 3.1 Nemotron 70B", "reasoning": false, "input": ["text"], "contextWindow": 131072, "maxTokens": 4096},
-        {"id": "meta/llama-3.3-70b-instruct", "name": "Llama 3.3 70B", "reasoning": false, "input": ["text"], "contextWindow": 131072, "maxTokens": 4096}
+        {
+          "id": "nvidia/llama-3.1-nemotron-70b-instruct",
+          "name": "Llama 3.1 Nemotron 70B",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 131072,
+          "maxTokens": 4096
+        },
+        {
+          "id": "meta/llama-3.3-70b-instruct",
+          "name": "Llama 3.3 70B",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 131072,
+          "maxTokens": 4096
+        }
       ]
     },
     {
@@ -335,12 +803,18 @@
       "authHeader": true,
       "keyRequired": true,
       "keyHint": "BytePlus API Key",
-      "envVars": ["BYTEPLUS_API_KEY"],
+      "envVars": [
+        "BYTEPLUS_API_KEY"
+      ],
       "group": "more",
       "order": 185,
       "supportsDiscovery": true,
       "tutorialUrl": "https://console.byteplus.com/",
-      "tutorialSteps": ["打开 console.byteplus.com", "登录账号", "获取 API Key"],
+      "tutorialSteps": [
+        "打开 console.byteplus.com",
+        "登录账号",
+        "获取 API Key"
+      ],
       "models": []
     },
     {
@@ -352,12 +826,18 @@
       "authHeader": true,
       "keyRequired": true,
       "keyHint": "Venice API Key",
-      "envVars": ["VENICE_API_KEY"],
+      "envVars": [
+        "VENICE_API_KEY"
+      ],
       "group": "more",
       "order": 195,
       "supportsDiscovery": true,
       "tutorialUrl": "https://venice.ai/",
-      "tutorialSteps": ["打开 venice.ai", "注册或登录", "获取 API Key"],
+      "tutorialSteps": [
+        "打开 venice.ai",
+        "注册或登录",
+        "获取 API Key"
+      ],
       "models": []
     },
     {
@@ -369,12 +849,18 @@
       "authHeader": false,
       "keyRequired": true,
       "keyHint": "Synthetic API Key",
-      "envVars": ["SYNTHETIC_API_KEY"],
+      "envVars": [
+        "SYNTHETIC_API_KEY"
+      ],
       "group": "more",
       "order": 200,
       "supportsDiscovery": false,
       "tutorialUrl": "https://synthetic.new/",
-      "tutorialSteps": ["打开 synthetic.new", "注册或登录", "获取 API Key"],
+      "tutorialSteps": [
+        "打开 synthetic.new",
+        "注册或登录",
+        "获取 API Key"
+      ],
       "models": []
     },
     {
@@ -390,8 +876,58 @@
       "group": "custom",
       "order": 999,
       "supportsDiscovery": true,
-      "tutorialSteps": ["填入你的 API Base URL", "输入 API Key（如需要）", "手动填入模型 ID", "选择 API 类型"],
+      "tutorialSteps": [
+        "填入你的 API Base URL",
+        "输入 API Key（如需要）",
+        "手动填入模型 ID",
+        "选择 API 类型"
+      ],
       "models": []
+    },
+    {
+      "id": "minimax",
+      "name": "MiniMax",
+      "description": "MiniMax M2.5 系列",
+      "baseUrl": "https://api.minimax.io/anthropic",
+      "api": "anthropic-messages",
+      "authHeader": true,
+      "keyRequired": true,
+      "keyHint": "MiniMax API Key",
+      "envVars": [
+        "MINIMAX_API_KEY"
+      ],
+      "group": "primary",
+      "order": 55,
+      "supportsDiscovery": false,
+      "tutorialUrl": "https://platform.minimax.io",
+      "tutorialSteps": [
+        "打开 platform.minimax.io",
+        "登录或注册账号",
+        "进入 API Keys 页面",
+        "创建并复制 API Key"
+      ],
+      "models": [
+        {
+          "id": "MiniMax-M2.5",
+          "name": "MiniMax M2.5",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 200000,
+          "maxTokens": 8192
+        },
+        {
+          "id": "MiniMax-M2.5-highspeed",
+          "name": "MiniMax M2.5 Highspeed",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 200000,
+          "maxTokens": 8192
+        }
+      ]
     }
   ]
 }
