@@ -328,6 +328,10 @@ class NodeRuntime(
     localChatChannel?.setEventListener { event, payloadJson ->
       handleGatewayEvent(event, payloadJson)
     }
+    // 本地 channel 始终视为已连接，否则 MicCaptureManager 的消息队列永远不会发送
+    if (localChatChannel != null) {
+      scope.launch { micCapture.onGatewayConnectionChanged(true) }
+    }
   }
 
   private val chat: ChatController =
