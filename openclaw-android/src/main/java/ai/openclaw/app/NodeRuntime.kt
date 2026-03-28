@@ -970,6 +970,13 @@ class NodeRuntime(
 
   fun setChatThinkingLevel(level: String) {
     chat.setThinkingLevel(level)
+    // Persist immediately so cold starts restore the last selection
+    scope.launch {
+      try {
+        val session = localChatChannel ?: operatorSession
+        session.request("chat.setThinkingLevel", """{"level":"$level"}""")
+      } catch (_: Throwable) { /* best-effort */ }
+    }
   }
 
   fun switchChatSession(sessionKey: String) {

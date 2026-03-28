@@ -389,6 +389,15 @@ class GatewayController(
                     )
                 }
 
+                // chat.setThinkingLevel: persist the thinking level immediately on change.
+                registerMethod("chat.setThinkingLevel") { params ->
+                    @Suppress("UNCHECKED_CAST")
+                    val p = params as? Map<String, Any?> ?: emptyMap()
+                    val level = p["level"] as? String ?: "off"
+                    SPHelper.getInstance(context).saveData(PREF_THINKING_LEVEL, level)
+                    mapOf("ok" to true)
+                }
+
                 // chat.health: returns current session health for the chat tab.
                 registerMethod("chat.health") { _ ->
                     mapOf("ok" to true, "agentBusy" to false)

@@ -10,6 +10,7 @@ import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import ai.openclaw.app.ui.chat.ChatMarkdown
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -376,11 +377,16 @@ private fun VoiceTurnBubble(entry: VoiceConversationEntry) {
           style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp),
           color = if (isUser) mobileAccent else mobileTextSecondary,
         )
-        Text(
-          if (entry.isStreaming && entry.text.isBlank()) stringResource(R.string.voice_listening_response) else entry.text,
-          style = mobileCallout,
-          color = mobileText,
-        )
+        if (isUser) {
+          Text(
+            entry.text,
+            style = mobileCallout,
+            color = mobileText,
+          )
+        } else {
+          val displayText = if (entry.isStreaming && entry.text.isBlank()) stringResource(R.string.voice_listening_response) else entry.text
+          ChatMarkdown(text = displayText, textColor = mobileText)
+        }
       }
     }
   }
