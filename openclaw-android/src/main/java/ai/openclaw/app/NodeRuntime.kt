@@ -1083,7 +1083,7 @@ class NodeRuntime(
         HomeCanvasPayload(
           gatewayState = "connected",
           eyebrow = "Connected to $gatewayLabel",
-          title = "Your agents are ready",
+          title = "你的 Agent 已就绪",
           subtitle =
             "This phone stays dormant until the gateway needs it, then wakes, syncs, and goes back to sleep.",
           gatewayLabel = gatewayLabel,
@@ -1098,7 +1098,7 @@ class NodeRuntime(
         HomeCanvasPayload(
           gatewayState = "connecting",
           eyebrow = "Reconnecting",
-          title = "OpenClaw is syncing back up",
+          title = "OpenClaw 正在同步",
           subtitle =
             "The gateway session is coming back online. Agent shortcuts should settle automatically in a moment.",
           gatewayLabel = gatewayLabel,
@@ -1113,7 +1113,7 @@ class NodeRuntime(
         HomeCanvasPayload(
           gatewayState = if (state == HomeCanvasGatewayState.Error) "error" else "offline",
           eyebrow = "Welcome to OpenClaw",
-          title = "Your phone stays quiet until it is needed",
+          title = "你的手机在需要之前保持安静",
           subtitle =
             "Pair this device to your gateway to wake it only for real work, keep a live agent overview handy, and avoid battery-draining background loops.",
           gatewayLabel = gatewayLabel,

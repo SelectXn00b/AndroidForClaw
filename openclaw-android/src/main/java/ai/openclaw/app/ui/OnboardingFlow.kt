@@ -972,26 +972,26 @@ private fun WelcomeStep() {
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     FeatureCard(
       icon = Icons.Default.Wifi,
-      title = "Connect to your gateway",
-      subtitle = "Scan a QR code or enter your host manually",
+      title = "连接到你的网关",
+      subtitle = "扫描二维码或手动输入主机地址",
       accentColor = onboardingAccent,
     )
     FeatureCard(
       icon = Icons.Default.Tune,
-      title = "Choose your permissions",
-      subtitle = "Enable only what you need, change anytime",
+      title = "选择你的权限",
+      subtitle = "只启用你需要的，随时可更改",
       accentColor = Color(0xFF7C5AC7),
     )
     FeatureCard(
       icon = Icons.Default.ChatBubble,
-      title = "Chat, voice, and screen",
-      subtitle = "Full operator control from your phone",
+      title = "对话、语音和屏幕",
+      subtitle = "从手机完全掌控",
       accentColor = onboardingSuccess,
     )
     FeatureCard(
       icon = Icons.Default.CheckCircle,
-      title = "Verify your connection",
-      subtitle = "Live check before you enter the app",
+      title = "验证你的连接",
+      subtitle = "进入应用前的实时检查",
       accentColor = Color(0xFFC8841A),
     )
   }
@@ -1021,7 +1021,7 @@ private fun GatewayStep(
   val resolvedEndpoint = remember(setupCode) { decodeGatewaySetupCode(setupCode)?.url?.let { parseGatewayEndpoint(it)?.displayUrl } }
   val manualResolvedEndpoint = remember(manualHost, manualPort, manualTls) { composeGatewayManualUrl(manualHost, manualPort, manualTls)?.let { parseGatewayEndpoint(it)?.displayUrl } }
 
-  StepShell(title = "Gateway Connection") {
+  StepShell(title = "网关连接") {
     Text(
       "Run `openclaw qr` on your gateway host, then scan the code with this device.",
       style = onboardingCalloutStyle,
@@ -1208,13 +1208,13 @@ private fun GatewayModeToggle(
 ) {
   Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
     GatewayModeChip(
-      label = "Setup Code",
+      label = "配对码",
       active = inputMode == GatewayInputMode.SetupCode,
       onClick = { onInputModeChange(GatewayInputMode.SetupCode) },
       modifier = Modifier.weight(1f),
     )
     GatewayModeChip(
-      label = "Manual",
+      label = "手动",
       active = inputMode == GatewayInputMode.Manual,
       onClick = { onInputModeChange(GatewayInputMode.Manual) },
       modifier = Modifier.weight(1f),
@@ -1359,7 +1359,7 @@ private fun PermissionsStep(
     }
   val notificationListenerGranted = isNotificationListenerEnabled(context)
 
-  StepShell(title = "Permissions") {
+  StepShell(title = "权限") {
     Text(
       "Enable only what you need. You can change these anytime in Settings.",
       style = onboardingCalloutStyle,
@@ -1368,16 +1368,16 @@ private fun PermissionsStep(
 
     PermissionSectionHeader("System")
     PermissionToggleRow(
-      title = "Gateway discovery",
-      subtitle = "Find gateways on your local network",
+      title = "网关发现",
+      subtitle = "在局域网中发现网关",
       checked = enableDiscovery,
       granted = isPermissionGranted(context, discoveryPermission),
       onCheckedChange = onDiscoveryChange,
     )
     InlineDivider()
     PermissionToggleRow(
-      title = "Location",
-      subtitle = "Share device location while app is open",
+      title = "位置",
+      subtitle = "应用运行时共享设备位置",
       checked = enableLocation,
       granted = locationGranted,
       onCheckedChange = onLocationChange,
@@ -1385,8 +1385,8 @@ private fun PermissionsStep(
     InlineDivider()
     if (Build.VERSION.SDK_INT >= 33) {
       PermissionToggleRow(
-        title = "Notifications",
-        subtitle = "Alerts and foreground service notices",
+        title = "通知",
+        subtitle = "提醒和前台服务通知",
         checked = enableNotifications,
         granted = isPermissionGranted(context, Manifest.permission.POST_NOTIFICATIONS),
         onCheckedChange = onNotificationsChange,
@@ -1394,8 +1394,8 @@ private fun PermissionsStep(
       InlineDivider()
     }
     PermissionToggleRow(
-      title = "Notification listener",
-      subtitle = "Read and act on your notifications",
+      title = "通知监听",
+      subtitle = "读取和处理你的通知",
       checked = enableNotificationListener,
       granted = notificationListenerGranted,
       onCheckedChange = onNotificationListenerChange,
@@ -1403,24 +1403,24 @@ private fun PermissionsStep(
 
     PermissionSectionHeader("Media")
     PermissionToggleRow(
-      title = "Microphone",
-      subtitle = "Voice transcription in the Voice tab",
+      title = "麦克风",
+      subtitle = "在语音标签页中转录音频",
       checked = enableMicrophone,
       granted = isPermissionGranted(context, Manifest.permission.RECORD_AUDIO),
       onCheckedChange = onMicrophoneChange,
     )
     InlineDivider()
     PermissionToggleRow(
-      title = "Camera",
-      subtitle = "Take photos and short video clips",
+      title = "相机",
+      subtitle = "拍照和短视频",
       checked = enableCamera,
       granted = isPermissionGranted(context, Manifest.permission.CAMERA),
       onCheckedChange = onCameraChange,
     )
     InlineDivider()
     PermissionToggleRow(
-      title = "Photos",
-      subtitle = "Access your recent photos",
+      title = "照片",
+      subtitle = "访问最近的照片",
       checked = enablePhotos,
       granted = isPermissionGranted(context, photosPermission),
       onCheckedChange = onPhotosChange,
@@ -1428,24 +1428,24 @@ private fun PermissionsStep(
 
     PermissionSectionHeader("Personal Data")
     PermissionToggleRow(
-      title = "Contacts",
-      subtitle = "Search and add contacts",
+      title = "联系人",
+      subtitle = "搜索和添加联系人",
       checked = enableContacts,
       granted = contactsGranted,
       onCheckedChange = onContactsChange,
     )
     InlineDivider()
     PermissionToggleRow(
-      title = "Calendar",
-      subtitle = "Read and create calendar events",
+      title = "日历",
+      subtitle = "读取和创建日历事件",
       checked = enableCalendar,
       granted = calendarGranted,
       onCheckedChange = onCalendarChange,
     )
     InlineDivider()
     PermissionToggleRow(
-      title = "Motion",
-      subtitle = "Activity and step tracking",
+      title = "运动",
+      subtitle = "活动和步数追踪",
       checked = enableMotion,
       granted = motionGranted,
       onCheckedChange = onMotionChange,
@@ -1455,8 +1455,8 @@ private fun PermissionsStep(
     if (smsAvailable) {
       InlineDivider()
       PermissionToggleRow(
-        title = "SMS",
-        subtitle = "Send and search text messages via the gateway",
+        title = "短信",
+        subtitle = "通过网关发送和搜索短信",
         checked = enableSms,
         granted =
           isPermissionGranted(context, Manifest.permission.SEND_SMS) &&
@@ -1467,7 +1467,7 @@ private fun PermissionsStep(
     if (callLogAvailable) {
       InlineDivider()
       PermissionToggleRow(
-        title = "Call Log",
+        title = "通话记录",
         subtitle = "callLog.search",
         checked = enableCallLog,
         granted = isPermissionGranted(context, Manifest.permission.READ_CALL_LOG),
@@ -1545,19 +1545,19 @@ private fun FinalStep(
 
     SummaryCard(
       icon = Icons.Default.Link,
-      label = "Method",
+      label = "方式",
       value = methodLabel,
       accentColor = onboardingAccent,
     )
     SummaryCard(
       icon = Icons.Default.Cloud,
-      label = "Gateway",
+      label = "网关",
       value = gatewayAddress,
       accentColor = Color(0xFF7C5AC7),
     )
     SummaryCard(
       icon = Icons.Default.Security,
-      label = "Permissions",
+      label = "权限",
       value = enabledPermissions,
       accentColor = onboardingSuccess,
     )

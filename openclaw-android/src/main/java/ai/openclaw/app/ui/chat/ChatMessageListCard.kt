@@ -101,7 +101,7 @@ private fun EmptyChatHint(modifier: Modifier = Modifier, healthOk: Boolean) {
       modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
       verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-      Text("No messages yet", style = mobileHeadline, color = mobileText)
+      Text("暂无消息", style = mobileHeadline, color = mobileText)
       Text(
         text =
           if (healthOk) {
