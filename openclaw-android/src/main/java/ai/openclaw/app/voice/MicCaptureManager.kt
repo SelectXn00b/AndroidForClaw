@@ -319,7 +319,7 @@ class MicCaptureManager(
         if (runId == null) {
           pendingRunTimeoutJob?.cancel()
           pendingRunTimeoutJob = null
-          messageQueue.removeFirst()
+          messageQueue.removeAt(0)
           publishQueue()
           _isSending.value = false
           pendingAssistantEntryId = null
@@ -366,7 +366,7 @@ class MicCaptureManager(
     pendingRunTimeoutJob?.cancel()
     pendingRunTimeoutJob = null
     if (messageQueue.isNotEmpty()) {
-      messageQueue.removeFirst()
+      messageQueue.removeAt(0)
       publishQueue()
     }
     pendingRunId = null
