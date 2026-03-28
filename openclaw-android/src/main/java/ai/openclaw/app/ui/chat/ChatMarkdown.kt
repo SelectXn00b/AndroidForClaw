@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -23,8 +24,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.UrlAnnotation
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -231,10 +235,16 @@ private fun RenderParagraph(
     return
   }
 
-  Text(
+  val uriHandler = LocalUriHandler.current
+  @OptIn(ExperimentalTextApi::class)
+  ClickableText(
     text = annotated,
-    style = inlineStyles.baseCallout,
-    color = textColor,
+    style = inlineStyles.baseCallout.copy(color = textColor),
+    onClick = { offset: Int ->
+      annotated.getUrlAnnotations(offset, offset).firstOrNull()?.let {
+        uriHandler.openUri(it.item.url)
+      }
+    },
   )
 }
 
@@ -424,6 +434,7 @@ private fun buildInlineMarkdown(start: Node?, inlineStyles: InlineStyles): Annot
   }
 }
 
+@OptIn(ExperimentalTextApi::class)
 private fun AnnotatedString.Builder.appendInlineNode(
   node: Node?,
   inlineCodeBg: Color,
@@ -463,13 +474,28 @@ private fun AnnotatedString.Builder.appendInlineNode(
         }
       }
       is Link -> {
-        withStyle(
-          SpanStyle(
-            color = linkColor,
-            textDecoration = TextDecoration.Underline,
-          ),
-        ) {
-          appendInlineNode(current.firstChild, inlineCodeBg = inlineCodeBg, inlineCodeColor = inlineCodeColor, linkColor = linkColor)
+        val link = current
+        val url = link.destination.orEmpty()
+        if (url.isNotEmpty()) {
+          pushUrlAnnotation(UrlAnnotation(url))
+          withStyle(
+            SpanStyle(
+              color = linkColor,
+              textDecoration = TextDecoration.Underline,
+            ),
+          ) {
+            appendInlineNode(link.firstChild, inlineCodeBg = inlineCodeBg, inlineCodeColor = inlineCodeColor, linkColor = linkColor)
+          }
+          pop()
+        } else {
+          withStyle(
+            SpanStyle(
+              color = linkColor,
+              textDecoration = TextDecoration.Underline,
+            ),
+          ) {
+            appendInlineNode(link.firstChild, inlineCodeBg = inlineCodeBg, inlineCodeColor = inlineCodeColor, linkColor = linkColor)
+          }
         }
       }
       is MarkdownImage -> {
