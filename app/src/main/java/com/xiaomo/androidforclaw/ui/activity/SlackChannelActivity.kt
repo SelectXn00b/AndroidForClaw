@@ -63,7 +63,7 @@ fun SlackChannelScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Slack 频道") },
+                title = { Text("Slack Channel") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Filled.ArrowBack, "返回")
@@ -170,7 +170,7 @@ fun SlackChannelScreen(
             Divider()
 
             // ── DM Policy ──
-            Text("私聊策略", style = MaterialTheme.typography.titleSmall)
+            Text("DM Policy", style = MaterialTheme.typography.titleSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("open", "pairing", "allowlist").forEach { policy ->
                     FilterChip(
@@ -182,7 +182,7 @@ fun SlackChannelScreen(
             }
 
             // ── Group Policy ──
-            Text("群聊策略", style = MaterialTheme.typography.titleSmall)
+            Text("Group Policy", style = MaterialTheme.typography.titleSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("open", "allowlist", "disabled").forEach { policy ->
                     FilterChip(

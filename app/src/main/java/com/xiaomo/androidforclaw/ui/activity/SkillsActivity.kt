@@ -64,7 +64,7 @@ class SkillsActivity : AppCompatActivity() {
 
         supportActionBar?.apply {
             setDisplayHomeAsUpEnabled(true)
-            title = "技能管理"
+            title = "Skills 管理"
         }
 
         skillsLoader = SkillsLoader(this)
@@ -192,7 +192,7 @@ class SkillsActivity : AppCompatActivity() {
         }
 
         AlertDialog.Builder(this)
-            .setTitle("技能详情")
+            .setTitle("Skill 详情")
             .setView(scrollView)
             .setPositiveButton("查看内容") { _, _ ->
                 showSkillContent(doc)
