@@ -49,6 +49,8 @@ import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
 import ai.openclaw.app.ui.mobileWarning
 import ai.openclaw.app.ui.mobileWarningSoft
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 private data class ChatBubbleStyle(
@@ -74,7 +76,7 @@ fun ChatMessageBubble(message: ChatMessage) {
 
   if (displayableContent.isEmpty()) return
 
-  ChatBubbleContainer(style = style, roleLabel = roleLabel(role)) {
+  ChatBubbleContainer(style = style, roleLabel = roleLabel(role), timestampMs = message.timestampMs) {
     ChatMessageBody(content = displayableContent, textColor = mobileText)
   }
 }
@@ -83,6 +85,7 @@ fun ChatMessageBubble(message: ChatMessage) {
 private fun ChatBubbleContainer(
   style: ChatBubbleStyle,
   roleLabel: String,
+  timestampMs: Long? = null,
   modifier: Modifier = Modifier,
   content: @Composable () -> Unit,
 ) {
@@ -102,11 +105,25 @@ private fun ChatBubbleContainer(
         modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
       ) {
-        Text(
-          text = roleLabel,
-          style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp),
-          color = style.roleColor,
-        )
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            text = roleLabel,
+            style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp),
+            color = style.roleColor,
+          )
+          if (timestampMs != null) {
+            val timeFormatter = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+            Text(
+              text = timeFormatter.format(Date(timestampMs)),
+              style = mobileCaption2,
+              color = style.roleColor.copy(alpha = 0.6f),
+            )
+          }
+        }
         content()
       }
     }
