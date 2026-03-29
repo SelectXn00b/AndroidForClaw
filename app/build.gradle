@@ -67,16 +67,6 @@ android {
         abortOnError false
     }
 
-    flavorDimensions += "store"
-    productFlavors {
-        play {
-            dimension "store"
-        }
-        thirdParty {
-            dimension "store"
-        }
-    }
-
     buildTypes {
         release {
             signingConfig signingConfigs.release
