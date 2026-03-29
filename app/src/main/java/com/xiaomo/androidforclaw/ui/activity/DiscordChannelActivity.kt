@@ -63,7 +63,7 @@ fun DiscordChannelScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Discord Channel") },
+                title = { Text("Discord 频道") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Filled.ArrowBack, "返回")

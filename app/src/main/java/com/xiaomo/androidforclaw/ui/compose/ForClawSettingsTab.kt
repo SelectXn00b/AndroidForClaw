@@ -148,7 +148,7 @@ fun ForClawSettingsTab() {
         }
         val clipboardUrl = if (localIp.contains(".")) "http://$localIp:19789/clipboard" else localIp
         StatusCard(
-            title = "Web Clipboard",
+            title = "网页剪切板",
             icon = Icons.Default.ContentPaste,
             rows = listOf(
                 StatusRow("地址", clipboardUrl),
@@ -565,7 +565,7 @@ private fun AboutSection() {
     val packageInfo = remember {
         try { context.packageManager.getPackageInfo(context.packageName, 0) } catch (_: Exception) { null }
     }
-    val versionName = packageInfo?.versionName ?: "Unknown"
+    val versionName = packageInfo?.versionName ?: "未知"
 
     Surface(
         modifier = Modifier.fillMaxWidth(),

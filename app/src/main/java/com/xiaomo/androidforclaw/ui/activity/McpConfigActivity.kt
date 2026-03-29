@@ -83,7 +83,7 @@ private fun McpConfigScreen(onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("MCP Server") },
+                title = { Text("MCP 服务") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Filled.ArrowBack, "返回")

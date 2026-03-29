@@ -210,7 +210,7 @@
     <string name="settings_model_config_desc">API Key 和模型参数</string>
     <string name="settings_channels">Channels</string>
     <string name="settings_channels_desc">飞书、Discord 等多渠道接入</string>
-    <string name="settings_skills">Skills</string>
+    <string name="settings_skills">技能</string>
     <string name="settings_skills_desc">管理 Agent Skills</string>
     <string name="settings_termux">Termux 配置</string>
     <string name="settings_termux_desc">配置 Termux SSH 连接</string>
@@ -246,7 +246,7 @@
     <string name="settings_github">GitHub 仓库</string>
     <string name="settings_github_desc">查看源码 / 提交 Issue</string>
     <string name="settings_copyright">© 2024–2025 小龙虾</string>
-    <string name="settings_inspired">Inspired by OpenClaw</string>
+    <string name="settings_inspired">灵感来自 OpenClaw</string>
     <string name="settings_copied">已复制</string>
     <string name="settings_cannot_open_link">无法打开链接</string>
 
@@ -270,7 +270,7 @@
     <string name="connect_weixin">微信</string>
     <string name="connect_enabled">已启用</string>
     <string name="connect_manage">管理</string>
-    <string name="connect_skills">Skills</string>
+    <string name="connect_skills">技能</string>
     <string name="connect_skills_loaded">%d 个</string>
     <string name="connect_mcp_server">MCP Server</string>
     <string name="connect_mcp_stopped">已停止</string>

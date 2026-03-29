@@ -71,7 +71,7 @@ fun FeishuChannelScreen(onBack: () -> Unit, context: android.content.Context = a
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Feishu Channel") },
+                title = { Text("飞书频道") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Filled.ArrowBack, "返回")
