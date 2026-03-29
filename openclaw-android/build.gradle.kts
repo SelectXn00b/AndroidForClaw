@@ -17,12 +17,23 @@ android {
 
     defaultConfig {
         minSdk = 26
-        // SMS and call log enabled by default (sideloaded, not Play Store)
-        buildConfigField("boolean", "OPENCLAW_ENABLE_SMS", "true")
-        buildConfigField("boolean", "OPENCLAW_ENABLE_CALL_LOG", "true")
         // Version info (from OpenClaw 2026.3.20)
         buildConfigField("String", "VERSION_NAME", "\"2026.3.20\"")
         buildConfigField("int", "VERSION_CODE", "2026032000")
+    }
+
+    flavorDimensions += "store"
+    productFlavors {
+        create("play") {
+            dimension = "store"
+            buildConfigField("boolean", "OPENCLAW_ENABLE_SMS", "false")
+            buildConfigField("boolean", "OPENCLAW_ENABLE_CALL_LOG", "false")
+        }
+        create("thirdParty") {
+            dimension = "store"
+            buildConfigField("boolean", "OPENCLAW_ENABLE_SMS", "true")
+            buildConfigField("boolean", "OPENCLAW_ENABLE_CALL_LOG", "true")
+        }
     }
 
     buildTypes {
