@@ -144,17 +144,19 @@ class ToolRegistry(
     /**
      * Get all tools description (for building system prompt)
      */
-    fun getToolsDescription(): String {
+    fun getToolsDescription(excludeTools: Set<String> = emptySet()): String {
         return buildString {
             appendLine("## Universal Tools")
             appendLine()
             appendLine("跨平台通用工具，来自 Pi Coding Agent 和 OpenClaw：")
             appendLine()
-            tools.values.forEach { tool ->
-                appendLine("### ${tool.name}")
-                appendLine(tool.description)
-                appendLine()
-            }
+            tools.values
+                .filter { it.name !in excludeTools }
+                .forEach { tool ->
+                    appendLine("### ${tool.name}")
+                    appendLine(tool.description)
+                    appendLine()
+                }
         }
     }
 
