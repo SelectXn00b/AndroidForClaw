@@ -97,7 +97,7 @@ object SafeRegex {
                 c == ')' -> {
                     if (stack.size <= 1) { i++; continue }
 
-                    val closed = stack.removeLast()
+                    val closed = stack.removeAt(stack.lastIndex)
                     val parent = stack.last()
 
                     // Finalize alternation for the closed group
