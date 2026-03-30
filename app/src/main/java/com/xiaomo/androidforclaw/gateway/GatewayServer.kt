@@ -538,6 +538,10 @@ loadHistory();
                         Log.d(TAG, "📡 [Gateway] Handling channel.status...")
                         handleChannelStatus()
                     }
+                    "channel.restart" -> {
+                        Log.d(TAG, "📡 [Gateway] Handling channel.restart...")
+                        handleChannelRestart()
+                    }
                     "sessions.list" -> {
                         Log.d(TAG, "📋 [Gateway] Handling sessions.list...")
                         handleSessionsList()
@@ -618,6 +622,21 @@ loadHistory();
                         put("deviceModel", account.deviceModel)
                     }
                 })
+            }
+        }
+
+        private fun handleChannelRestart(): JSONObject {
+            val app = context.applicationContext as? com.xiaomo.androidforclaw.core.MyApplication
+            if (app != null) {
+                app.startAllChannels()
+                return JSONObject().apply {
+                    put("ok", true)
+                    put("message", "Channel restart triggered")
+                }
+            }
+            return JSONObject().apply {
+                put("ok", false)
+                put("message", "MyApplication not available")
             }
         }
 
