@@ -116,15 +116,17 @@ object MainEntryNew {
      * Initialize - Must be called before use
      */
     fun initialize(app: Application) {
-        if (::application.isInitialized) {
+        // Use sessionManager (the last critical component) as the initialization gate,
+        // not application. Prevents partial-init → early-return → permanent null state.
+        if (::sessionManager.isInitialized) {
             Log.w(TAG, "Already initialized")
             return
         }
 
-        application = app
         Log.d(TAG, "Initializing MainEntryNew...")
 
         try {
+            application = app
             // 0. Initialize ConfigLoader
             configLoader = ConfigLoader(application)
             Log.d(TAG, "✓ ConfigLoader initialized")
