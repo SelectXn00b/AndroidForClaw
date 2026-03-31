@@ -73,6 +73,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   val manualTls by viewModel.manualTls.collectAsState()
   val manualEnabled by viewModel.manualEnabled.collectAsState()
   val gatewayToken by viewModel.gatewayToken.collectAsState()
+  val gatewayBootstrapToken by viewModel.gatewayBootstrapToken.collectAsState()
   val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
 
   var advancedOpen by rememberSaveable { mutableStateOf(false) }
@@ -246,6 +247,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
               manualHost = manualHostInput,
               manualPort = manualPortInput,
               manualTls = manualTlsInput,
+              fallbackBootstrapToken = gatewayBootstrapToken,
               fallbackToken = gatewayToken,
               fallbackPassword = passwordInput,
             )
