@@ -49,11 +49,15 @@ data class CronJobState(
     var lastRunAtMs: Long? = null,
     var lastRunStatus: RunStatus? = null,
     var lastError: String? = null,
+    /** Classified reason for the last error (when available). */
+    var lastErrorReason: String? = null,
     var lastDurationMs: Long? = null,
     var consecutiveErrors: Int = 0,
     var lastFailureAlertAtMs: Long? = null,
     var scheduleErrorCount: Int = 0,
     var lastDeliveryStatus: DeliveryStatus? = null,
+    /** Delivery-specific error text when available. */
+    var lastDeliveryError: String? = null,
     var lastDelivered: Boolean? = null
 )
 
@@ -63,6 +67,7 @@ data class CronDelivery(
     val channel: String? = null,
     val to: String? = null,
     val accountId: String? = null,
+    val bestEffort: Boolean? = null,
     val failureDestination: CronFailureDestination? = null
 )
 
@@ -75,14 +80,21 @@ data class CronFailureDestination(
 
 // Failure Alert
 data class CronFailureAlert(
-    val after: Int,
-    val cooldownMs: Long,
-    val channel: String? = null
+    val after: Int? = null,
+    val cooldownMs: Long? = null,
+    val channel: String? = null,
+    val to: String? = null,
+    /** Delivery mode: announce (via messaging channels) or webhook (HTTP POST). */
+    val mode: String? = null,
+    /** Account ID for multi-account channel configurations. */
+    val accountId: String? = null
 )
 
 // Cron Job
 data class CronJob(
     val id: String,
+    val agentId: String? = null,
+    val sessionKey: String? = null,
     val name: String,
     val description: String? = null,
     val schedule: CronSchedule,
@@ -140,6 +152,45 @@ data class CronRunResult(
     val deliveryError: String? = null,
     val model: String? = null
 )
+
+// Patch type for creating/updating jobs
+data class CronJobPatch(
+    val name: String? = null,
+    val description: String? = null,
+    val schedule: CronSchedule? = null,
+    val sessionTarget: SessionTarget? = null,
+    val wakeMode: WakeMode? = null,
+    val payload: CronPayload? = null,
+    val delivery: CronDelivery? = null,
+    val failureAlert: CronFailureAlert? = null,
+    val enabled: Boolean? = null,
+    val deleteAfterRun: Boolean? = null,
+    val state: CronJobState? = null
+)
+
+// Run outcome (aligned with OpenClaw CronRunOutcome)
+data class CronRunOutcome(
+    val status: RunStatus,
+    val error: String? = null,
+    /** Optional classifier for execution errors to guide fallback behavior. */
+    val errorKind: String? = null,
+    val summary: String? = null,
+    val sessionId: String? = null,
+    val sessionKey: String? = null
+)
+
+data class CronRunTelemetry(
+    val model: String? = null,
+    val provider: String? = null,
+    val usage: CronUsageSummary? = null
+)
+
+data class CronUsageSummary(
+    val inputTokens: Long? = null,
+    val outputTokens: Long? = null,
+    val totalTokens: Long? = null
+)
+
 
 // Run Log Entry
 data class CronRunLogEntry(
