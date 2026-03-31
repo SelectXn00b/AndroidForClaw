@@ -1,7 +1,6 @@
 package ai.openclaw.app.ui
 
 import android.content.Context
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -9,6 +8,8 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
@@ -17,10 +18,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.navigation.NavHostController
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -60,15 +68,12 @@ private object InstalledSkillsManager {
 
 @Composable
 fun SkillTabScreen(modifier: Modifier = Modifier) {
+    val navController = rememberNavController()
+    // Shared state across list & detail
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var activeTab by remember { mutableStateOf(SkillTab.INSTALLED) }
     var skills by remember { mutableStateOf(emptyList<OnlineSkill>()) }
     var isLoading by remember { mutableStateOf(true) }
-    var expandedSkill by remember { mutableStateOf<OnlineSkill?>(null) }
-    var skillContent by remember { mutableStateOf("") }
-    var isLoadingContent by remember { mutableStateOf(false) }
-    // track installed set to trigger recomposition on install/uninstall
     var installedSet by remember { mutableStateOf(emptySet<String>()) }
 
     LaunchedEffect(Unit) {
@@ -78,7 +83,68 @@ fun SkillTabScreen(modifier: Modifier = Modifier) {
         isLoading = false
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
+    NavHost(
+        navController = navController,
+        startDestination = "list",
+        modifier = modifier,
+    ) {
+        composable("list") {
+            SkillListPage(
+                skills = skills,
+                isLoading = isLoading,
+                installedSet = installedSet,
+                onRefresh = {
+                    scope.launch {
+                        isLoading = true
+                        skills = withContext(Dispatchers.IO) { AgencyAgentsFetcher.forceRefresh(context) }
+                        isLoading = false
+                    }
+                },
+                onSkillClick = { skill ->
+                    navController.navigate("detail/${skill.filename}")
+                },
+            )
+        }
+        composable(
+            route = "detail/{filename}",
+            arguments = listOf(navArgument("filename") { type = NavType.StringType }),
+        ) { backStackEntry ->
+            val filename = backStackEntry.arguments?.getString("filename") ?: return@composable
+            val skill = skills.find { it.filename == filename }
+            if (skill != null) {
+                SkillDetailPage(
+                    skill = skill,
+                    isInstalled = InstalledSkillsManager.isInstalled(context, skill.filename),
+                    onBack = { navController.popBackStack() },
+                    onToggleInstall = {
+                        if (InstalledSkillsManager.isInstalled(context, skill.filename)) {
+                            InstalledSkillsManager.uninstall(context, skill.filename)
+                        } else {
+                            InstalledSkillsManager.install(context, skill.filename)
+                        }
+                        installedSet = InstalledSkillsManager.getInstalled(context)
+                    },
+                )
+            }
+        }
+    }
+}
+
+// ────────────────────────────────────────────────────────
+// LIST PAGE
+// ────────────────────────────────────────────────────────
+
+@Composable
+private fun SkillListPage(
+    skills: List<OnlineSkill>,
+    isLoading: Boolean,
+    installedSet: Set<String>,
+    onRefresh: () -> Unit,
+    onSkillClick: (OnlineSkill) -> Unit,
+) {
+    var activeTab by remember { mutableStateOf(SkillTab.INSTALLED) }
+
+    Column(modifier = Modifier.fillMaxSize()) {
         // ── Tab bar: 已安装 / 在线 ──
         Row(
             modifier = Modifier
@@ -105,13 +171,7 @@ fun SkillTabScreen(modifier: Modifier = Modifier) {
             }
             Spacer(Modifier.weight(1f))
             if (activeTab == SkillTab.ONLINE) {
-                IconButton(onClick = {
-                    scope.launch {
-                        isLoading = true
-                        skills = withContext(Dispatchers.IO) { AgencyAgentsFetcher.forceRefresh(context) }
-                        isLoading = false
-                    }
-                }) {
+                IconButton(onClick = onRefresh) {
                     Icon(Icons.Default.Refresh, contentDescription = "刷新", tint = mobileTextSecondary)
                 }
             }
@@ -123,56 +183,19 @@ fun SkillTabScreen(modifier: Modifier = Modifier) {
                     CircularProgressIndicator(color = mobileAccent)
                 }
             }
-            expandedSkill != null -> {
-                val isInst = InstalledSkillsManager.isInstalled(context, expandedSkill!!.filename)
-                SkillDetailContent(
-                    skill = expandedSkill!!,
-                    content = skillContent,
-                    isLoading = isLoadingContent,
-                    isInstalled = isInst,
-                    onBack = { expandedSkill = null },
-                    onToggleInstall = {
-                        if (isInst) {
-                            InstalledSkillsManager.uninstall(context, expandedSkill!!.filename)
-                        } else {
-                            InstalledSkillsManager.install(context, expandedSkill!!.filename)
-                        }
-                        installedSet = InstalledSkillsManager.getInstalled(context)
-                    },
-                )
-            }
             activeTab == SkillTab.INSTALLED -> {
-                val installedSkills = skills.filter { it.filename in installedSet }
                 InstalledSkillList(
-                    skills = installedSkills,
                     allSkills = skills,
-                    onSkillClick = { skill ->
-                        expandedSkill = skill
-                        isLoadingContent = true
-                        scope.launch {
-                            skillContent = withContext(Dispatchers.IO) {
-                                AgencyAgentsFetcher.fetchContent(context, skill)
-                            }
-                            isLoadingContent = false
-                        }
-                    },
-                    onBrowseOnline = { activeTab = SkillTab.ONLINE },
+                    installedSet = installedSet,
+                    onSkillClick = onSkillClick,
+                    onBrowseOnline = { /* can't change tab state from here */ },
                 )
             }
             else -> {
                 OnlineSkillList(
                     skills = skills,
                     installedSet = installedSet,
-                    onSkillClick = { skill ->
-                        expandedSkill = skill
-                        isLoadingContent = true
-                        scope.launch {
-                            skillContent = withContext(Dispatchers.IO) {
-                                AgencyAgentsFetcher.fetchContent(context, skill)
-                            }
-                            isLoadingContent = false
-                        }
-                    },
+                    onSkillClick = onSkillClick,
                 )
             }
         }
@@ -181,13 +204,14 @@ fun SkillTabScreen(modifier: Modifier = Modifier) {
 
 @Composable
 private fun InstalledSkillList(
-    skills: List<OnlineSkill>,
     allSkills: List<OnlineSkill>,
+    installedSet: Set<String>,
     onSkillClick: (OnlineSkill) -> Unit,
     onBrowseOnline: () -> Unit,
 ) {
-    if (skills.isEmpty()) {
-        // Empty state — guide user to online tab
+    val installedSkills = allSkills.filter { it.filename in installedSet }
+
+    if (installedSkills.isEmpty()) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -196,42 +220,23 @@ private fun InstalledSkillList(
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("🔧", fontSize = 48.sp)
-                Text(
-                    "还没有已安装的 Skills",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = mobileText,
-                )
-                Text(
-                    "去「在线」浏览并安装你感兴趣的 Skill 吧！",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = mobileTextSecondary,
-                )
-                Spacer(Modifier.height(8.dp))
-                Button(
-                    onClick = onBrowseOnline,
-                    colors = ButtonDefaults.buttonColors(containerColor = mobileAccent),
-                ) {
-                    Text("浏览在线 Skills", color = mobileText)
-                }
+                Text("还没有已安装的 Skills", style = MaterialTheme.typography.titleMedium, color = mobileText)
+                Text("去「在线」浏览并安装你感兴趣的 Skill 吧！", style = MaterialTheme.typography.bodyMedium, color = mobileTextSecondary)
             }
         }
     } else {
         LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
             item {
                 Text(
-                    "已安装 (${skills.size})",
+                    "已安装 (${installedSkills.size})",
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     style = MaterialTheme.typography.titleSmall,
                     color = mobileText,
                     fontWeight = FontWeight.Bold,
                 )
             }
-            items(skills) { skill ->
-                SkillListItem(
-                    skill = skill,
-                    installed = true,
-                    onClick = { onSkillClick(skill) },
-                )
+            items(installedSkills) { skill ->
+                SkillListItem(skill = skill, installed = true, onClick = { onSkillClick(skill) })
             }
         }
     }
@@ -246,10 +251,7 @@ private fun OnlineSkillList(
     val featured = AgencyAgentsFetcher.featuredSkills
     val categories = skills.groupBy { it.category }
 
-    LazyColumn(
-        contentPadding = PaddingValues(bottom = 24.dp),
-    ) {
-        // ── Featured section ──
+    LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
         item {
             Text(
                 "🔥 热门",
@@ -270,7 +272,6 @@ private fun OnlineSkillList(
             }
         }
 
-        // ── Category sections ──
         val categoryLabels = mapOf(
             "engineering" to "🏗️ Engineering",
             "design" to "🎨 Design",
@@ -290,11 +291,7 @@ private fun OnlineSkillList(
                 )
             }
             items(catSkills) { skill ->
-                SkillListItem(
-                    skill = skill,
-                    installed = skill.filename in installedSet,
-                    onClick = { onSkillClick(skill) },
-                )
+                SkillListItem(skill = skill, installed = skill.filename in installedSet, onClick = { onSkillClick(skill) })
             }
         }
     }
@@ -353,58 +350,51 @@ private fun SkillListItem(skill: OnlineSkill, installed: Boolean, onClick: () ->
         ) {
             Text(skill.emoji, fontSize = 24.sp)
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    skill.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = mobileText,
-                )
+                Text(skill.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = mobileText)
                 if (skill.specialty.isNotEmpty()) {
-                    Text(
-                        skill.specialty,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = mobileTextTertiary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Text(skill.specialty, style = MaterialTheme.typography.labelSmall, color = mobileTextTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
             if (installed) {
-                Icon(
-                    Icons.Default.Check,
-                    contentDescription = "已安装",
-                    modifier = Modifier.size(18.dp),
-                    tint = mobileAccent,
-                )
+                Icon(Icons.Default.Check, contentDescription = "已安装", modifier = Modifier.size(18.dp), tint = mobileAccent)
             }
             Text("›", fontSize = 20.sp, color = mobileTextTertiary)
         }
     }
 }
 
+// ────────────────────────────────────────────────────────
+// DETAIL PAGE (separate navigation page)
+// ────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SkillDetailContent(
+private fun SkillDetailPage(
     skill: OnlineSkill,
-    content: String,
-    isLoading: Boolean,
     isInstalled: Boolean,
     onBack: () -> Unit,
     onToggleInstall: () -> Unit,
 ) {
+    val context = LocalContext.current
+    var content by remember(skill.filename) { mutableStateOf("") }
+    var isLoading by remember(skill.filename) { mutableStateOf(true) }
+
+    LaunchedEffect(skill.filename) {
+        content = withContext(Dispatchers.IO) { AgencyAgentsFetcher.fetchContent(context, skill) }
+        isLoading = false
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
-        // Header
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            TextButton(onClick = onBack) {
-                Text("← 返回", color = mobileAccent)
-            }
-            Spacer(Modifier.weight(1f))
-        }
+        // Top bar
+        TopAppBar(
+            title = { Text(skill.name, color = mobileText, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = mobileText)
+                }
+            },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = mobileCardSurface),
+        )
 
         if (isLoading) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -416,8 +406,9 @@ private fun SkillDetailContent(
                 contentPadding = PaddingValues(16.dp),
             ) {
                 item {
-                    Text(skill.emoji, fontSize = 40.sp)
-                    Spacer(Modifier.height(8.dp))
+                    // Hero
+                    Text(skill.emoji, fontSize = 48.sp)
+                    Spacer(Modifier.height(12.dp))
                     Text(
                         skill.name,
                         style = MaterialTheme.typography.headlineSmall,
@@ -426,19 +417,11 @@ private fun SkillDetailContent(
                     )
                     Spacer(Modifier.height(4.dp))
                     if (skill.specialty.isNotEmpty()) {
-                        Text(
-                            skill.specialty,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = mobileTextSecondary,
-                        )
-                        Spacer(Modifier.height(4.dp))
+                        Text(skill.specialty, style = MaterialTheme.typography.bodyMedium, color = mobileTextSecondary)
                     }
-                    Text(
-                        "📂 ${skill.category}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = mobileTextTertiary,
-                    )
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(4.dp))
+                    Text("📂 ${skill.category}", style = MaterialTheme.typography.labelSmall, color = mobileTextTertiary)
+                    Spacer(Modifier.height(20.dp))
 
                     // Install/Uninstall button
                     val buttonColors = if (isInstalled) {
@@ -461,9 +444,9 @@ private fun SkillDetailContent(
                         }
                     }
 
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(20.dp))
                     HorizontalDivider(color = mobileBorder)
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(20.dp))
                 }
                 item {
                     if (content.isNotEmpty()) {
@@ -471,16 +454,12 @@ private fun SkillDetailContent(
                             content,
                             style = MaterialTheme.typography.bodySmall,
                             color = mobileText,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            fontFamily = FontFamily.Monospace,
                             fontSize = 12.sp,
                             lineHeight = 18.sp,
                         )
                     } else {
-                        Text(
-                            "无法加载内容，请检查网络连接。",
-                            color = mobileTextSecondary,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
+                        Text("无法加载内容，请检查网络连接。", color = mobileTextSecondary, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }
