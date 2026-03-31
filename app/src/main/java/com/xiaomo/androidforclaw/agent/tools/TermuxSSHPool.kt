@@ -131,18 +131,71 @@ object TermuxSSHPool {
                 command
             }
             val cmd = session.exec(fullCommand)
-            cmd.join(timeoutS.toLong(), TimeUnit.SECONDS)
 
-            // If command didn't finish, close to prevent readText() from blocking forever
-            if (!cmd.isEOF) {
-                Log.w(TAG, "Command timed out after ${timeoutS}s, force closing: ${command.take(80)}")
-                try { cmd.close() } catch (_: Exception) {}
-                return ExecResult(false, "", "Command timed out after ${timeoutS}s", -1)
+            // Activity-based timeout: as long as stdout/stderr produce output,
+            // the inactivity timer resets. SSHJ's available() is unreliable for
+            // SSH channels, so we use blocking reads in background threads and
+            // track their progress via an atomic timestamp.
+            val stdoutBuf = StringBuilder()
+            val stderrBuf = StringBuilder()
+            val lastActivityTime = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+            val deadlineMs = timeoutS * 1000L
+
+            // Background threads for blocking reads
+            val stdoutThread = Thread({
+                try {
+                    val buf = ByteArray(4096)
+                    val stream = cmd.inputStream
+                    while (true) {
+                        val n = stream.read(buf)
+                        if (n < 0) break
+                        if (n > 0) {
+                            synchronized(stdoutBuf) { stdoutBuf.append(String(buf, 0, n)) }
+                            lastActivityTime.set(System.currentTimeMillis())
+                        }
+                    }
+                } catch (_: Exception) {}
+            }, "ssh-stdout-reader")
+
+            val stderrThread = Thread({
+                try {
+                    val buf = ByteArray(4096)
+                    val stream = cmd.errorStream
+                    while (true) {
+                        val n = stream.read(buf)
+                        if (n < 0) break
+                        if (n > 0) {
+                            synchronized(stderrBuf) { stderrBuf.append(String(buf, 0, n)) }
+                            lastActivityTime.set(System.currentTimeMillis())
+                        }
+                    }
+                } catch (_: Exception) {}
+            }, "ssh-stderr-reader")
+
+            stdoutThread.start()
+            stderrThread.start()
+
+            // Poll for completion or inactivity timeout
+            while (stdoutThread.isAlive || stderrThread.isAlive) {
+                if (System.currentTimeMillis() - lastActivityTime.get() > deadlineMs) {
+                    Log.w(TAG, "Command inactive for ${timeoutS}s, force closing: ${command.take(80)}")
+                    try { cmd.close() } catch (_: Exception) {}
+                    stdoutThread.join(2000)
+                    stderrThread.join(2000)
+                    val partialOut = synchronized(stdoutBuf) { stdoutBuf.toString() }
+                    val partialErr = synchronized(stderrBuf) { stderrBuf.toString() }
+                    return ExecResult(false, partialOut, "${partialErr}\nCommand timed out after ${timeoutS}s of inactivity", -1)
+                }
+                delay(500)
             }
 
-            val stdout = cmd.inputStream.bufferedReader().readText()
-            val stderr = cmd.errorStream.bufferedReader().readText()
+            stdoutThread.join(2000)
+            stderrThread.join(2000)
+
+            cmd.join(5, TimeUnit.SECONDS)
             val exitCode = cmd.exitStatus ?: -1
+            val stdout = synchronized(stdoutBuf) { stdoutBuf.toString() }
+            val stderr = synchronized(stderrBuf) { stderrBuf.toString() }
             return ExecResult(exitCode == 0, stdout, stderr, exitCode)
         } finally {
             try { session.close() } catch (_: Exception) {}

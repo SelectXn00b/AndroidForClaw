@@ -497,7 +497,11 @@ class TermuxBridgeTool(private val context: Context) : Tool {
         // Execute via SSH pool
         return withContext(Dispatchers.IO) {
             try {
-                withTimeout(timeout * 1000L + 5000L) {
+                // Outer timeout is a safety net only. The real timeout is the
+                // activity-based inactivity timeout inside TermuxSSHPool.execOnce().
+                // Allow up to 3x the requested timeout for long-running commands
+                // that continuously produce output (e.g., pkg install).
+                withTimeout(timeout * 3000L + 10000L) {
                     val result = TermuxSSHPool.exec(resolvedCommand, cwd, timeout)
                     Log.d(TAG, "Exec completed: exitCode=${result.exitCode}, stdout=${result.stdout.length} chars")
 
