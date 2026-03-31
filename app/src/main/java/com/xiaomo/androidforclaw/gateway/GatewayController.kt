@@ -82,6 +82,10 @@ class GatewayController(
 
     // Active agent runs: runId -> coroutine Job (for abort support)
     private val activeJobs = ConcurrentHashMap<String, Job>()
+    // Per-session AgentLoop instances (so sessions don't share shouldStop flag)
+    private val sessionAgentLoops = ConcurrentHashMap<String, AgentLoop>()
+    // Map runId -> sessionKey for abort routing
+    private val runToSession = ConcurrentHashMap<String, String>()
 
     private lateinit var agentMethods: AgentMethods
     private lateinit var sessionMethods: SessionMethods
@@ -234,13 +238,27 @@ class GatewayController(
                     // Build context history from session messages
                     val contextHistory = session.messages.dropLast(1).map { it.toNewMessage() }
 
-                    // Cancel any previously active run to avoid single agentLoop contention
-                    if (activeJobs.isNotEmpty()) {
-                        Log.w(TAG, "🛑 [chat.send] Cancelling ${activeJobs.size} previous run(s)")
-                        agentLoop.stop()
-                        activeJobs.values.forEach { it.cancel() }
-                        activeJobs.clear()
+                    // Cancel previous run for the SAME session only
+                    // Find runIds belonging to this session and cancel them
+                    runToSession.entries.filter { it.value == sessionKey }.forEach { (oldRunId, _) ->
+                        Log.w(TAG, "🛑 [chat.send] Cancelling previous run $oldRunId for session $sessionKey")
+                        sessionAgentLoops[sessionKey]?.stop()
+                        activeJobs[oldRunId]?.cancel()
+                        activeJobs.remove(oldRunId)
+                        runToSession.remove(oldRunId)
                     }
+
+                    // Create a per-session AgentLoop so sessions don't share shouldStop flag
+                    val llmProvider = com.xiaomo.androidforclaw.providers.UnifiedLLMProvider(context)
+                    val perSessionLoop = AgentLoop(
+                        llmProvider = llmProvider,
+                        toolRegistry = toolRegistry,
+                        androidToolRegistry = androidToolRegistry
+                    )
+                    // Copy extra tools from the shared agentLoop if any
+                    perSessionLoop.extraTools = agentLoop.extraTools
+                    sessionAgentLoops[sessionKey] = perSessionLoop
+                    runToSession[runId] = sessionKey
 
                     val job = serviceScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                         // Track tool call IDs for correlating start/result pairs
@@ -248,7 +266,7 @@ class GatewayController(
 
                         // Collect streaming progress events in parallel
                         val streamJob = launch {
-                            agentLoop.progressFlow.collect { update ->
+                            perSessionLoop.progressFlow.collect { update ->
                                 when (update) {
                                     is ProgressUpdate.BlockReply -> {
                                         broadcastEvent(EventFrame(event = "agent", payload = mapOf(
@@ -297,7 +315,7 @@ class GatewayController(
                             )
                             Log.d(TAG, "✅ Gateway system prompt built (${systemPrompt.length} chars)")
 
-                            val result = agentLoop.run(
+                            val result = perSessionLoop.run(
                                 systemPrompt = systemPrompt,
                                 userMessage = userMsg,
                                 contextHistory = contextHistory,
@@ -357,6 +375,8 @@ class GatewayController(
                             )))
                         } finally {
                             activeJobs.remove(runId)
+                            runToSession.remove(runId)
+                            sessionAgentLoops.remove(sessionKey)
                         }
                     }
                     activeJobs[runId] = job
@@ -409,15 +429,19 @@ class GatewayController(
                     val p = params as? Map<String, Any?> ?: emptyMap()
                     val runId = p["runId"] as? String
                     if (runId != null) {
-                        agentLoop.stop()
+                        val sk = runToSession[runId]
+                        if (sk != null) sessionAgentLoops[sk]?.stop()
                         activeJobs[runId]?.cancel()
                         activeJobs.remove(runId)
+                        runToSession.remove(runId)
                         Log.i(TAG, "Aborted run: $runId")
                     } else {
                         // Abort all active runs
-                        agentLoop.stop()
+                        sessionAgentLoops.values.forEach { it.stop() }
+                        sessionAgentLoops.clear()
                         activeJobs.values.forEach { it.cancel() }
                         activeJobs.clear()
+                        runToSession.clear()
                         Log.i(TAG, "Aborted all active runs")
                     }
                     mapOf("aborted" to true)

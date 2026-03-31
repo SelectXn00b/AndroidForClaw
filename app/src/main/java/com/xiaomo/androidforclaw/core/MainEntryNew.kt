@@ -308,7 +308,8 @@ object MainEntryNew {
         sessionJobs[effectiveSessionId]?.let { oldJob ->
             if (oldJob.isActive) {
                 Log.w(TAG, "🛑 [Session] Cancelling previous run for session $effectiveSessionId")
-                agentLoop.stop()
+                // Only cancel the coroutine job — do NOT call agentLoop.stop() here,
+                // because agentLoop is shared and stop() would kill ALL sessions' loops.
                 oldJob.cancel()
             }
         }
@@ -486,7 +487,6 @@ object MainEntryNew {
         sessionJobs[localSessionKey]?.let { oldJob ->
             if (oldJob.isActive) {
                 Log.w(TAG, "🛑 Cancelling previous local task")
-                agentLoop.stop()
                 oldJob.cancel()
             }
         }
