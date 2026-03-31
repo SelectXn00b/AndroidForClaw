@@ -35,10 +35,10 @@ suspend fun uploadImageToDocx(
 ): String {
     val result = client.uploadMedia(
         fileName = fileName,
+        fileBytes = imageBytes,
         parentType = "docx_image",
         parentNode = blockId,
-        data = imageBytes,
-        extra = docToken?.let { """{"drive_route_token":"$it"}""" }
+        extra = docToken?.let { mapOf("drive_route_token" to it) }
     )
 
     if (result.isFailure) {

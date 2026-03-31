@@ -172,12 +172,14 @@ class FeishuClient(private val config: FeishuConfig) {
 
     /**
      * 发送 API 请求
+     * @param headers 额外的请求头（可选），用于如 X-Chat-Custom-Header 等场景
      */
     suspend fun apiRequest(
         method: String,
         path: String,
         body: Any? = null,
-        requireAuth: Boolean = true
+        requireAuth: Boolean = true,
+        headers: Map<String, String>? = null
     ): Result<JsonObject> = withContext(Dispatchers.IO) {
         try {
             val url = "$baseUrl$path"
@@ -191,6 +193,11 @@ class FeishuClient(private val config: FeishuConfig) {
                     return@withContext Result.failure(tokenResult.exceptionOrNull()!!)
                 }
                 requestBuilder.addHeader("Authorization", "Bearer ${tokenResult.getOrNull()}")
+            }
+
+            // 添加额外请求头
+            headers?.forEach { (key, value) ->
+                requestBuilder.addHeader(key, value)
             }
 
             // 添加请求体
@@ -255,12 +262,14 @@ class FeishuClient(private val config: FeishuConfig) {
     /**
      * GET 请求
      */
-    suspend fun get(path: String): Result<JsonObject> = apiRequest("GET", path)
+    suspend fun get(path: String, headers: Map<String, String>? = null): Result<JsonObject> =
+        apiRequest("GET", path, headers = headers)
 
     /**
      * POST 请求
      */
-    suspend fun post(path: String, body: Any): Result<JsonObject> = apiRequest("POST", path, body)
+    suspend fun post(path: String, body: Any, headers: Map<String, String>? = null): Result<JsonObject> =
+        apiRequest("POST", path, body, headers = headers)
 
     /**
      * PUT 请求
@@ -276,6 +285,146 @@ class FeishuClient(private val config: FeishuConfig) {
      * PATCH 请求
      */
     suspend fun patch(path: String, body: Any): Result<JsonObject> = apiRequest("PATCH", path, body)
+
+    /**
+     * 上传文件到云空间 (upload_all，小文件 <=15MB)
+     * @aligned openclaw-lark v2026.3.30 — line-by-line
+     */
+    suspend fun uploadFile(
+        fileName: String,
+        parentType: String,
+        parentNode: String,
+        size: Int,
+        data: ByteArray
+    ): Result<JsonObject> = withContext(Dispatchers.IO) {
+        try {
+            val token = getTenantAccessToken().getOrThrow()
+            val url = "$baseUrl/open-apis/drive/v1/files/upload_all"
+
+            val bodyBuilder = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("file_name", fileName)
+                .addFormDataPart("parent_type", parentType)
+                .addFormDataPart("parent_node", parentNode)
+                .addFormDataPart("size", size.toString())
+                .addFormDataPart(
+                    "file", fileName,
+                    data.toRequestBody("application/octet-stream".toMediaType())
+                )
+
+            val request = Request.Builder()
+                .url(url)
+                .post(bodyBuilder.build())
+                .addHeader("Authorization", "Bearer $token")
+                .build()
+
+            val response = mediaHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: "{}"
+
+            if (!response.isSuccessful) {
+                Log.e(TAG, "Upload file failed: HTTP ${response.code} - $responseBody")
+                return@withContext Result.failure(Exception("HTTP ${response.code}"))
+            }
+
+            val json = gson.fromJson(responseBody, JsonObject::class.java)
+            val code = json.get("code")?.asInt ?: 0
+            if (code != 0) {
+                val msg = json.get("msg")?.asString ?: "Unknown error"
+                return@withContext Result.failure(Exception("$msg (code=$code)"))
+            }
+
+            Result.success(json)
+        } catch (e: Exception) {
+            Log.e(TAG, "Upload file failed", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * 分片上传 - 预上传 (uploadPrepare)
+     * @aligned openclaw-lark v2026.3.30 — line-by-line
+     */
+    suspend fun uploadPrepare(
+        fileName: String,
+        parentType: String,
+        parentNode: String,
+        size: Int
+    ): Result<JsonObject> {
+        val body = mapOf(
+            "file_name" to fileName,
+            "parent_type" to parentType,
+            "parent_node" to parentNode,
+            "size" to size
+        )
+        return post("/open-apis/drive/v1/files/upload_prepare", body)
+    }
+
+    /**
+     * 分片上传 - 上传分片 (uploadPart)
+     * @aligned openclaw-lark v2026.3.30 — line-by-line
+     */
+    suspend fun uploadPart(
+        uploadId: String,
+        seq: Int,
+        size: Int,
+        data: ByteArray
+    ): Result<JsonObject> = withContext(Dispatchers.IO) {
+        try {
+            val token = getTenantAccessToken().getOrThrow()
+            val url = "$baseUrl/open-apis/drive/v1/files/upload_part"
+
+            val bodyBuilder = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("upload_id", uploadId)
+                .addFormDataPart("seq", seq.toString())
+                .addFormDataPart("size", size.toString())
+                .addFormDataPart(
+                    "file", "chunk_$seq",
+                    data.toRequestBody("application/octet-stream".toMediaType())
+                )
+
+            val request = Request.Builder()
+                .url(url)
+                .post(bodyBuilder.build())
+                .addHeader("Authorization", "Bearer $token")
+                .build()
+
+            val response = mediaHttpClient.newCall(request).execute()
+            val responseBody = response.body?.string() ?: "{}"
+
+            if (!response.isSuccessful) {
+                Log.e(TAG, "Upload part failed: HTTP ${response.code} - $responseBody")
+                return@withContext Result.failure(Exception("HTTP ${response.code}"))
+            }
+
+            val json = gson.fromJson(responseBody, JsonObject::class.java)
+            val code = json.get("code")?.asInt ?: 0
+            if (code != 0) {
+                val msg = json.get("msg")?.asString ?: "Unknown error"
+                return@withContext Result.failure(Exception("$msg (code=$code)"))
+            }
+
+            Result.success(json)
+        } catch (e: Exception) {
+            Log.e(TAG, "Upload part failed", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * 分片上传 - 完成上传 (uploadFinish)
+     * @aligned openclaw-lark v2026.3.30 — line-by-line
+     */
+    suspend fun uploadFinish(
+        uploadId: String,
+        blockNum: Int
+    ): Result<JsonObject> {
+        val body = mapOf(
+            "upload_id" to uploadId,
+            "block_num" to blockNum
+        )
+        return post("/open-apis/drive/v1/files/upload_finish", body)
+    }
 
     /**
      * 下载二进制数据（用于媒体文件下载）
@@ -313,11 +462,11 @@ class FeishuClient(private val config: FeishuConfig) {
     }
 
     /**
-     * Download binary data with Content-Type header.
+     * Download binary data with headers.
      * @aligned openclaw-lark v2026.3.30
-     * Returns Pair(bytes, contentType) where contentType may be empty.
+     * Returns Pair(bytes, headers) where headers is a map of response headers.
      */
-    suspend fun downloadRawWithHeaders(path: String): Result<Pair<ByteArray, String>> = withContext(Dispatchers.IO) {
+    suspend fun downloadRawWithHeaders(path: String): Result<Pair<ByteArray, Map<String, String>>> = withContext(Dispatchers.IO) {
         try {
             val url = "$baseUrl$path"
             val token = getTenantAccessToken().getOrThrow()
@@ -339,10 +488,13 @@ class FeishuClient(private val config: FeishuConfig) {
             val bytes = response.body?.bytes()
                 ?: return@withContext Result.failure(Exception("Empty response body"))
 
-            val contentType = response.header("Content-Type") ?: ""
+            val headers = mutableMapOf<String, String>()
+            response.headers.forEach { (name, value) ->
+                headers[name.lowercase()] = value
+            }
 
-            Log.d(TAG, "Downloaded ${bytes.size} bytes from $path, content-type=$contentType")
-            Result.success(bytes to contentType)
+            Log.d(TAG, "Downloaded ${bytes.size} bytes from $path, content-type=${headers["content-type"]}")
+            Result.success(bytes to headers)
 
         } catch (e: Exception) {
             Log.e(TAG, "Download failed: $path", e)
@@ -355,17 +507,17 @@ class FeishuClient(private val config: FeishuConfig) {
      * Aligned with @larksuite/openclaw-lark doc-media insert flow.
      *
      * @param fileName File name
+     * @param fileBytes File bytes
      * @param parentType Parent type: docx_image, docx_file, etc.
      * @param parentNode Parent block ID
-     * @param data File bytes
-     * @param extra Optional extra JSON string (e.g. drive_route_token)
+     * @param extra Optional extra data map (e.g. drive_route_token)
      */
     suspend fun uploadMedia(
         fileName: String,
+        fileBytes: ByteArray,
         parentType: String,
         parentNode: String,
-        data: ByteArray,
-        extra: String? = null
+        extra: Map<String, Any?>? = null
     ): Result<JsonObject> = withContext(Dispatchers.IO) {
         try {
             val token = getTenantAccessToken().getOrThrow()
@@ -376,14 +528,14 @@ class FeishuClient(private val config: FeishuConfig) {
                 .addFormDataPart("file_name", fileName)
                 .addFormDataPart("parent_type", parentType)
                 .addFormDataPart("parent_node", parentNode)
-                .addFormDataPart("size", data.size.toString())
+                .addFormDataPart("size", fileBytes.size.toString())
                 .addFormDataPart(
                     "file", fileName,
-                    data.toRequestBody("application/octet-stream".toMediaType())
+                    fileBytes.toRequestBody("application/octet-stream".toMediaType())
                 )
 
             if (extra != null) {
-                bodyBuilder.addFormDataPart("extra", extra)
+                bodyBuilder.addFormDataPart("extra", gson.toJson(extra))
             }
 
             val request = Request.Builder()

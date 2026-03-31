@@ -1,8 +1,10 @@
 package com.xiaomo.feishu.tools.doc
 
-// @aligned openclaw-lark v2026.3.30
+// @aligned openclaw-lark v2026.3.30 — line-by-line translation
 /**
- * Aligned with ByteDance official @larksuite/openclaw-lark feishu_doc_comments OAPI tool.
+ * Line-by-line translation of official @larksuite/openclaw-lark feishu_doc_comments OAPI tool.
+ * Official JS source: /tools/oapi/drive/doc-comments.js
+ *
  * Actions: list (get comments with replies), create (whole-doc comment), patch (resolve/restore).
  */
 
@@ -19,6 +21,7 @@ private const val TAG = "FeishuDocComments"
 
 class FeishuDocCommentsTool(config: FeishuConfig, client: FeishuClient) : FeishuToolBase(config, client) {
     override val name = "feishu_doc_comments"
+    // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official description)
     override val description = "【以用户身份】管理云文档评论。支持: " +
         "(1) list - 获取评论列表(含完整回复); " +
         "(2) create - 添加全文评论(支持文本、@用户、超链接); " +
@@ -27,17 +30,53 @@ class FeishuDocCommentsTool(config: FeishuConfig, client: FeishuClient) : Feishu
 
     override fun isEnabled() = config.enableDocTools
 
-    // @aligned openclaw-lark v2026.3.30
+    // @aligned openclaw-lark v2026.3.30 — line-by-line
     override suspend fun execute(args: Map<String, Any?>): ToolResult = withContext(Dispatchers.IO) {
         try {
             val action = args["action"] as? String
                 ?: return@withContext ToolResult.error("Missing required parameter: action")
 
+            // Matching official: extract parameters
+            val fileToken = args["file_token"] as? String
+                ?: return@withContext ToolResult.error("Missing required parameter: file_token")
+            val fileType = args["file_type"] as? String
+                ?: return@withContext ToolResult.error("Missing required parameter: file_type")
+            val userIdType = args["user_id_type"] as? String ?: "open_id"
+
+            // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official wiki token conversion)
+            var actualFileToken = fileToken
+            var actualFileType = fileType
+            if (fileType == "wiki") {
+                Log.i(TAG, "doc_comments: detected wiki token=\"$fileToken\", converting to obj_token...")
+                try {
+                    val wikiNodeRes = client.get("/open-apis/wiki/v2/spaces/get_node?token=$fileToken&obj_type=wiki")
+                    if (wikiNodeRes.isFailure) {
+                        return@withContext ToolResult.error("failed to resolve wiki token \"$fileToken\": ${wikiNodeRes.exceptionOrNull()?.message}")
+                    }
+
+                    val node = wikiNodeRes.getOrNull()?.getAsJsonObject("data")?.getAsJsonObject("node")
+                    val objToken = node?.get("obj_token")?.asString
+                    val objType = node?.get("obj_type")?.asString
+
+                    if (objToken == null || objType == null) {
+                        return@withContext ToolResult.error("failed to resolve wiki token \"$fileToken\" to document object (may be a folder node rather than a document)")
+                    }
+
+                    actualFileToken = objToken
+                    actualFileType = objType
+                    Log.i(TAG, "doc_comments: wiki token converted: obj_token=\"$actualFileToken\", obj_type=\"$actualFileType\"")
+                } catch (err: Exception) {
+                    Log.e(TAG, "doc_comments: failed to convert wiki token", err)
+                    return@withContext ToolResult.error("failed to resolve wiki token \"$fileToken\": ${err.message}")
+                }
+            }
+
+            // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official action dispatch)
             when (action) {
-                "list" -> doList(args)
-                "create" -> doCreate(args)
-                "patch" -> doPatch(args)
-                else -> ToolResult.error("Invalid action: $action. Must be 'list', 'create', or 'patch'")
+                "list" -> doList(args, actualFileToken, actualFileType, userIdType)
+                "create" -> doCreate(args, actualFileToken, actualFileType, userIdType)
+                "patch" -> doPatch(args, actualFileToken, actualFileType)
+                else -> ToolResult.error("未知的 action: $action")
             }
         } catch (e: Exception) {
             Log.e(TAG, "feishu_doc_comments failed", e)
@@ -45,31 +84,23 @@ class FeishuDocCommentsTool(config: FeishuConfig, client: FeishuClient) : Feishu
         }
     }
 
-    // @aligned openclaw-lark v2026.3.30
-    /**
-     * List comments with complete replies.
-     * Fetches complete reply lists via fileCommentReply.list pagination loop
-     * (matching official assembleCommentsWithReplies).
-     * Default page_size: 50 (matching official).
-     * Returns structured data: { items, has_more, page_token }.
-     */
-    private suspend fun doList(args: Map<String, Any?>): ToolResult {
-        val fileToken = args["file_token"] as? String
-            ?: return ToolResult.error("Missing file_token")
-        val fileType = args["file_type"] as? String
-            ?: return ToolResult.error("Missing file_type")
+    // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official list action)
+    private suspend fun doList(
+        args: Map<String, Any?>,
+        actualFileToken: String,
+        actualFileType: String,
+        userIdType: String
+    ): ToolResult {
         val isWhole = args["is_whole"] as? Boolean
         val isSolved = args["is_solved"] as? Boolean
-        // @aligned openclaw-lark v2026.3.30 - default page_size 50
-        val pageSize = (args["page_size"] as? Number)?.toInt() ?: 50
+        val pageSize = (args["page_size"] as? Number)?.toInt() ?: 50 // Matching official default
         val pageToken = args["page_token"] as? String
-        val userIdType = args["user_id_type"] as? String ?: "open_id"
 
-        // Resolve wiki token if needed
-        val (resolvedToken, resolvedType) = resolveWikiToken(fileToken, fileType)
+        Log.i(TAG, "doc_comments.list: file_token=\"$actualFileToken\", file_type=$actualFileType")
 
-        var path = "/open-apis/drive/v1/files/$resolvedToken/comments" +
-                "?file_type=$resolvedType&user_id_type=$userIdType&page_size=$pageSize"
+        // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official API call)
+        var path = "/open-apis/drive/v1/files/$actualFileToken/comments" +
+                "?file_type=$actualFileType&user_id_type=$userIdType&page_size=$pageSize"
         if (isWhole != null) path += "&is_whole=$isWhole"
         if (isSolved != null) path += "&is_solved=$isSolved"
         if (pageToken != null) path += "&page_token=$pageToken"
@@ -84,16 +115,16 @@ class FeishuDocCommentsTool(config: FeishuConfig, client: FeishuClient) : Feishu
         val hasMore = data?.get("has_more")?.asBoolean ?: false
         val nextPageToken = data?.get("page_token")?.asString
 
-        Log.d(TAG, "doc_comments.list: found ${items.size()} comments")
+        Log.i(TAG, "doc_comments.list: found ${items.size()} comments")
 
-        // @aligned openclaw-lark v2026.3.30 - assemble complete replies
+        // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official assembleCommentsWithReplies)
         val assembledItems = assembleCommentsWithReplies(
-            client, resolvedToken, resolvedType, items, userIdType
+            client, actualFileToken, actualFileType, items, userIdType
         )
 
-        // @aligned openclaw-lark v2026.3.30 - return structured data matching official format
+        // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official return format)
         val resultMap = mutableMapOf<String, Any?>(
-            "items" to assembledItems.toString(),
+            "items" to assembledItems,
             "has_more" to hasMore
         )
         if (nextPageToken != null) resultMap["page_token"] = nextPageToken
@@ -101,7 +132,114 @@ class FeishuDocCommentsTool(config: FeishuConfig, client: FeishuClient) : Feishu
         return ToolResult.success(resultMap)
     }
 
-    // @aligned openclaw-lark v2026.3.30
+    // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official create action)
+    private suspend fun doCreate(
+        args: Map<String, Any?>,
+        actualFileToken: String,
+        actualFileType: String,
+        userIdType: String
+    ): ToolResult {
+        @Suppress("UNCHECKED_CAST")
+        val elements = args["elements"] as? List<Map<String, Any?>>
+
+        // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official validation)
+        if (elements == null || elements.isEmpty()) {
+            return ToolResult.error("elements 参数必填且不能为空")
+        }
+
+        Log.i(TAG, "doc_comments.create: file_token=\"$actualFileToken\", elements=${elements.size}")
+
+        // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official convertElementsToSDKFormat)
+        val sdkElements = convertElementsToSDKFormat(elements)
+
+        // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official API call)
+        val body = mapOf(
+            "reply_list" to mapOf(
+                "replies" to listOf(
+                    mapOf("content" to mapOf("elements" to sdkElements))
+                )
+            )
+        )
+
+        val result = client.post(
+            "/open-apis/drive/v1/files/$actualFileToken/comments?file_type=$actualFileType&user_id_type=$userIdType",
+            body
+        )
+
+        if (result.isFailure) {
+            return ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to create comment")
+        }
+
+        val data = result.getOrNull()?.getAsJsonObject("data")
+        val commentId = data?.get("comment_id")?.asString
+
+        Log.i(TAG, "doc_comments.create: created comment $commentId")
+
+        return ToolResult.success(data ?: JsonObject())
+    }
+
+    // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official patch action)
+    private suspend fun doPatch(
+        args: Map<String, Any?>,
+        actualFileToken: String,
+        actualFileType: String
+    ): ToolResult {
+        val commentId = args["comment_id"] as? String
+
+        // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official validation)
+        if (commentId == null) {
+            return ToolResult.error("comment_id 参数必填")
+        }
+
+        val isSolvedValue = args["is_solved_value"] as? Boolean
+        if (isSolvedValue == null) {
+            return ToolResult.error("is_solved_value 参数必填")
+        }
+
+        Log.i(TAG, "doc_comments.patch: comment_id=\"$commentId\", is_solved=$isSolvedValue")
+
+        // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official API call)
+        val body = mapOf("is_solved" to isSolvedValue)
+        val result = client.patch(
+            "/open-apis/drive/v1/files/$actualFileToken/comments/$commentId?file_type=$actualFileType",
+            body
+        )
+
+        if (result.isFailure) {
+            return ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to patch comment")
+        }
+
+        Log.i(TAG, "doc_comments.patch: success")
+
+        return ToolResult.success(mapOf("success" to true))
+    }
+
+    // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official convertElementsToSDKFormat)
+    private fun convertElementsToSDKFormat(elements: List<Map<String, Any?>>): List<Map<String, Any?>> {
+        return elements.map { el ->
+            val type = el["type"] as? String
+            when (type) {
+                "text" -> mapOf(
+                    "type" to "text_run",
+                    "text_run" to mapOf("text" to (el["text"] ?: ""))
+                )
+                "mention" -> mapOf(
+                    "type" to "person",
+                    "person" to mapOf("user_id" to (el["open_id"] ?: ""))
+                )
+                "link" -> mapOf(
+                    "type" to "docs_link",
+                    "docs_link" to mapOf("url" to (el["url"] ?: ""))
+                )
+                else -> mapOf(
+                    "type" to "text_run",
+                    "text_run" to mapOf("text" to "")
+                )
+            }
+        }
+    }
+
+    // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official assembleCommentsWithReplies)
     /**
      * Assemble comments with complete reply lists.
      * For each comment that has replies, fetches the full reply list
@@ -120,34 +258,34 @@ class FeishuDocCommentsTool(config: FeishuConfig, client: FeishuClient) : Feishu
             val comment = comments[i].asJsonObject.deepCopy()
             val commentId = comment.get("comment_id")?.asString
 
-            // Check if comment has replies that may be incomplete
+            // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official condition check)
             val replyList = comment.getAsJsonObject("reply_list")
-            val hasReplies = replyList?.getAsJsonArray("replies")?.size()?.let { it > 0 } ?: false
+            val replies = replyList?.getAsJsonArray("replies")
+            val hasReplies = replies?.size()?.let { it > 0 } ?: false
+            val hasMore = comment.get("has_more")?.asBoolean ?: false
 
-            if (commentId != null && hasReplies) {
+            // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official reply fetching logic)
+            if (commentId != null && (hasReplies || hasMore)) {
                 try {
                     val allReplies = JsonArray()
                     var replyPageToken: String? = null
                     var replyHasMore = true
 
+                    // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official pagination loop)
                     while (replyHasMore) {
                         var replyPath = "/open-apis/drive/v1/files/$fileToken/comments/$commentId/replies" +
-                            "?file_type=$fileType&page_size=50&user_id_type=$userIdType"
+                                "?file_type=$fileType&page_size=50&user_id_type=$userIdType"
                         if (replyPageToken != null) replyPath += "&page_token=$replyPageToken"
 
-                        val replyResult = client.get(replyPath)
-                        if (replyResult.isFailure) break
+                        val replyRes = client.get(replyPath)
+                        if (replyRes.isFailure) break
 
-                        val replyJson = replyResult.getOrNull()
-                        val replyCode = replyJson?.get("code")?.asInt ?: -1
-                        val replyData = replyJson?.getAsJsonObject("data")
+                        val replyData = replyRes.getOrNull()?.getAsJsonObject("data")
+                        val replyItems = replyData?.getAsJsonArray("items")
 
-                        if (replyCode == 0 && replyData != null) {
-                            val replyItems = replyData.getAsJsonArray("items")
-                            if (replyItems != null) {
-                                for (j in 0 until replyItems.size()) {
-                                    allReplies.add(replyItems[j])
-                                }
+                        if (replyItems != null && replyItems.size() > 0) {
+                            for (j in 0 until replyItems.size()) {
+                                allReplies.add(replyItems[j])
                             }
                             replyHasMore = replyData.get("has_more")?.asBoolean ?: false
                             replyPageToken = replyData.get("page_token")?.asString
@@ -156,13 +294,15 @@ class FeishuDocCommentsTool(config: FeishuConfig, client: FeishuClient) : Feishu
                         }
                     }
 
-                    // Replace with complete replies
-                    comment.add("reply_list", JsonObject().apply {
-                        add("replies", allReplies)
-                    })
+                    // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official reply_list update)
+                    val newReplyList = JsonObject()
+                    newReplyList.add("replies", allReplies)
+                    comment.add("reply_list", newReplyList)
+
                     Log.d(TAG, "Assembled ${allReplies.size()} replies for comment $commentId")
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to fetch replies for comment $commentId: ${e.message}")
+                } catch (err: Exception) {
+                    // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official error handling)
+                    Log.w(TAG, "Failed to fetch replies for comment $commentId: ${err.message}")
                     // Keep original reply data
                 }
             }
@@ -171,138 +311,7 @@ class FeishuDocCommentsTool(config: FeishuConfig, client: FeishuClient) : Feishu
         return result
     }
 
-    // @aligned openclaw-lark v2026.3.30
-    /**
-     * Create a whole-document comment.
-     * Element type mapping: mention -> person, link -> docs_link (matching official).
-     * Does NOT send is_whole: true (omitted, matching official which doesn't set it).
-     */
-    private suspend fun doCreate(args: Map<String, Any?>): ToolResult {
-        val fileToken = args["file_token"] as? String
-            ?: return ToolResult.error("Missing file_token")
-        val fileType = args["file_type"] as? String
-            ?: return ToolResult.error("Missing file_type")
-        val userIdType = args["user_id_type"] as? String ?: "open_id"
-
-        @Suppress("UNCHECKED_CAST")
-        val elements = args["elements"] as? List<Map<String, Any?>>
-            ?: return ToolResult.error("elements 参数必填且不能为空")
-
-        if (elements.isEmpty()) {
-            return ToolResult.error("elements 参数必填且不能为空")
-        }
-
-        val (resolvedToken, resolvedType) = resolveWikiToken(fileToken, fileType)
-
-        // @aligned openclaw-lark v2026.3.30 - correct element type mapping
-        val richTextElements = JsonArray()
-        for (element in elements) {
-            val type = element["type"] as? String ?: continue
-            val jsonElement = JsonObject()
-
-            when (type) {
-                "text" -> {
-                    jsonElement.addProperty("type", "text_run")
-                    jsonElement.add("text_run", JsonObject().apply {
-                        addProperty("text", element["text"] as? String ?: "")
-                    })
-                }
-                // @aligned openclaw-lark v2026.3.30 - mention -> person (NOT mention_user)
-                "mention" -> {
-                    jsonElement.addProperty("type", "person")
-                    jsonElement.add("person", JsonObject().apply {
-                        addProperty("user_id", element["open_id"] as? String ?: "")
-                    })
-                }
-                // @aligned openclaw-lark v2026.3.30 - link -> docs_link (NOT link)
-                "link" -> {
-                    jsonElement.addProperty("type", "docs_link")
-                    jsonElement.add("docs_link", JsonObject().apply {
-                        addProperty("url", element["url"] as? String ?: "")
-                    })
-                }
-            }
-            richTextElements.add(jsonElement)
-        }
-
-        // @aligned openclaw-lark v2026.3.30 - no is_whole in body
-        val body = JsonObject().apply {
-            add("reply_list", JsonObject().apply {
-                val replies = JsonArray()
-                replies.add(JsonObject().apply {
-                    add("content", JsonObject().apply {
-                        add("elements", richTextElements)
-                    })
-                })
-                add("replies", replies)
-            })
-        }
-
-        val path = "/open-apis/drive/v1/files/$resolvedToken/comments" +
-                "?file_type=$resolvedType&user_id_type=$userIdType"
-
-        val result = client.post(path, body)
-        if (result.isFailure) {
-            return ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to create comment")
-        }
-
-        val responseData = result.getOrNull()?.getAsJsonObject("data")
-        val commentId = responseData?.get("comment_id")?.asString
-
-        Log.d(TAG, "doc_comments.create: created comment $commentId")
-        return ToolResult.success(responseData?.toString() ?: mapOf("comment_id" to commentId))
-    }
-
-    // @aligned openclaw-lark v2026.3.30
-    /**
-     * Patch: resolve or restore a comment.
-     */
-    private suspend fun doPatch(args: Map<String, Any?>): ToolResult {
-        val fileToken = args["file_token"] as? String
-            ?: return ToolResult.error("Missing file_token")
-        val fileType = args["file_type"] as? String
-            ?: return ToolResult.error("Missing file_type")
-        val commentId = args["comment_id"] as? String
-            ?: return ToolResult.error("comment_id 参数必填")
-        val isSolved = args["is_solved_value"] as? Boolean
-            ?: return ToolResult.error("is_solved_value 参数必填")
-
-        val (resolvedToken, resolvedType) = resolveWikiToken(fileToken, fileType)
-
-        val body = JsonObject().apply {
-            addProperty("is_solved", isSolved)
-        }
-
-        val path = "/open-apis/drive/v1/files/$resolvedToken/comments/$commentId" +
-                "?file_type=$resolvedType"
-
-        val result = client.patch(path, body)
-        if (result.isFailure) {
-            return ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to patch comment")
-        }
-
-        Log.d(TAG, "doc_comments.patch: success")
-        return ToolResult.success(mapOf("success" to true))
-    }
-
-    // @aligned openclaw-lark v2026.3.30
-    /**
-     * Resolve wiki token to actual obj_token and obj_type.
-     */
-    private suspend fun resolveWikiToken(fileToken: String, fileType: String): Pair<String, String> {
-        if (fileType != "wiki") return fileToken to fileType
-
-        val result = client.get("/open-apis/wiki/v2/spaces/get_node?token=$fileToken")
-        if (result.isFailure) return fileToken to fileType
-
-        val node = result.getOrNull()?.getAsJsonObject("data")?.getAsJsonObject("node")
-        val objToken = node?.get("obj_token")?.asString ?: fileToken
-        val objType = node?.get("obj_type")?.asString ?: "docx"
-
-        return objToken to objType
-    }
-
-    // @aligned openclaw-lark v2026.3.30
+    // @aligned openclaw-lark v2026.3.30 — line-by-line (matching official DocCommentsSchema)
     override fun getToolDefinition() = ToolDefinition(
         function = FunctionDefinition(
             name = name,

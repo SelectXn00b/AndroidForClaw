@@ -2,7 +2,7 @@ package com.xiaomo.feishu.tools.calendar
 
 /**
  * Feishu Calendar tool set.
- * Aligned with ByteDance official @larksuite/openclaw-lark plugin.
+ * Line-by-line translation from @larksuite/openclaw-lark JS source.
  * - feishu_calendar_calendar: calendar management (list, get, primary)
  * - feishu_calendar_event: event management (create, list, get, patch, delete, search, reply, instances, instance_view)
  * - feishu_calendar_event_attendee: attendee management (create, list)
@@ -10,189 +10,265 @@ package com.xiaomo.feishu.tools.calendar
  */
 
 import android.util.Log
+import com.google.gson.JsonArray
+import com.google.gson.JsonElement
+import com.google.gson.JsonObject
 import com.xiaomo.feishu.FeishuClient
 import com.xiaomo.feishu.FeishuConfig
 import com.xiaomo.feishu.tools.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
-import java.util.Locale
-import java.util.TimeZone
 
 private const val TAG = "FeishuCalendarTools"
 
 // ---------------------------------------------------------------------------
-// Time parsing helpers
+// Time helpers — translated from helpers.js
 // ---------------------------------------------------------------------------
 
+private const val SHANGHAI_UTC_OFFSET_HOURS = 8
+private const val SHANGHAI_OFFSET_SUFFIX = "+08:00"
+
+// @aligned openclaw-lark v2026.3.30 — line-by-line
+private fun pad2(value: Int): String = value.toString().padStart(2, '0')
+
 /**
- * Parse ISO 8601 / RFC 3339 time string to Unix timestamp (seconds as string).
- * Supports formats like '2024-01-01T00:00:00+08:00', '2026-02-25 14:00:00'.
- * Returns null if parsing fails.
+ * Convert a Unix timestamp (seconds or milliseconds) to ISO 8601 string
+ * in the Asia/Shanghai timezone.
+ * Auto-detects seconds vs milliseconds based on magnitude.
+ * @aligned openclaw-lark v2026.3.30 — line-by-line
  */
-// @aligned openclaw-lark v2026.3.30
-private fun parseTimeToTimestamp(timeStr: String): String? {
+private fun unixTimestampToISO8601(raw: Any?): String? {
+    if (raw == null) return null
+    val text = when (raw) {
+        is Number -> raw.toLong().toString()
+        else -> raw.toString().trim()
+    }
+    if (!Regex("^-?\\d+$").matches(text)) return null
+    val num = text.toLongOrNull() ?: return null
+
+    val utcMs = if (kotlin.math.abs(num) >= 1_000_000_000_000L) num else num * 1000L
+
+    val beijingMs = utcMs + SHANGHAI_UTC_OFFSET_HOURS * 60L * 60L * 1000L
+    val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+    cal.timeInMillis = beijingMs
+
+    val year = cal.get(java.util.Calendar.YEAR)
+    val month = pad2(cal.get(java.util.Calendar.MONTH) + 1)
+    val day = pad2(cal.get(java.util.Calendar.DAY_OF_MONTH))
+    val hour = pad2(cal.get(java.util.Calendar.HOUR_OF_DAY))
+    val minute = pad2(cal.get(java.util.Calendar.MINUTE))
+    val second = pad2(cal.get(java.util.Calendar.SECOND))
+
+    return "$year-$month-${day}T$hour:$minute:$second$SHANGHAI_OFFSET_SUFFIX"
+}
+
+/**
+ * Parse ISO 8601 / bare datetime -> Unix seconds string.
+ * Supports: '2024-01-01T00:00:00+08:00', '2026-02-25 14:30', '2026-02-25T14:30:00'
+ * No timezone => treat as Beijing time (UTC+8).
+ * @aligned openclaw-lark v2026.3.30 — line-by-line
+ */
+private fun parseTimeToTimestamp(input: String): String? {
     return try {
-        // Try ISO 8601 with timezone offset
-        val formats = listOf(
-            "yyyy-MM-dd'T'HH:mm:ssXXX",
-            "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
-            "yyyy-MM-dd'T'HH:mm:ssZ",
-            "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
-            "yyyy-MM-dd HH:mm:ss",
-            "yyyy-MM-dd HH:mm",
-            "yyyy-MM-dd"
-        )
-        for (format in formats) {
-            try {
-                val sdf = SimpleDateFormat(format, Locale.US)
-                if (!format.contains("X") && !format.contains("Z") && format.contains("HH")) {
-                    // For formats without explicit timezone, use system default
-                    sdf.timeZone = TimeZone.getDefault()
-                }
-                val date = sdf.parse(timeStr) ?: continue
-                return (date.time / 1000).toString()
-            } catch (_: Exception) {
-                continue
-            }
+        val trimmed = input.trim()
+        // Check if has timezone info (Z or +/- offset)
+        val hasTimezone = Regex("[Zz]$|[+-]\\d{2}:\\d{2}$").containsMatchIn(trimmed)
+        if (hasTimezone) {
+            // Has timezone, parse directly
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.US)
+            val date = try { sdf.parse(trimmed) } catch (_: Exception) { null }
+            if (date == null) return null
+            return (date.time / 1000).toString()
         }
-        // Check if already a timestamp
-        val num = timeStr.toLongOrNull()
-        if (num != null) {
-            // If it looks like milliseconds, convert to seconds
-            if (num > 1_000_000_000_000L) return (num / 1000).toString()
-            return num.toString()
+        // No timezone, treat as Beijing time
+        // Support: YYYY-MM-DD HH:mm or YYYY-MM-DD HH:mm:ss or YYYY-MM-DDTHH:mm:ss
+        val normalized = trimmed.replace('T', ' ')
+        val match = Regex("^(\\d{4})-(\\d{2})-(\\d{2})\\s+(\\d{2}):(\\d{2})(?::(\\d{2}))?$").matchEntire(normalized)
+        if (match == null) {
+            // Try direct parse (other ISO 8601 formats)
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.US)
+            val date = try { sdf.parse(trimmed) } catch (_: Exception) { null }
+            if (date == null) return null
+            return (date.time / 1000).toString()
         }
-        null
+        val year = match.groupValues[1].toInt()
+        val month = match.groupValues[2].toInt()
+        val day = match.groupValues[3].toInt()
+        val hour = match.groupValues[4].toInt()
+        val minute = match.groupValues[5].toInt()
+        val second = if (match.groupValues[6].isNotEmpty()) match.groupValues[6].toInt() else 0
+        // Treat as Beijing time (UTC+8), convert to UTC
+        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        cal.set(year, month - 1, day, hour - 8, minute, second)
+        cal.set(java.util.Calendar.MILLISECOND, 0)
+        (cal.timeInMillis / 1000).toString()
     } catch (_: Exception) {
         null
     }
 }
 
 /**
- * Parse ISO 8601 time string to RFC 3339 format (for freebusy API).
- * Returns RFC 3339 string or null if parsing fails.
+ * Parse ISO 8601 / bare datetime -> Unix milliseconds string.
+ * @aligned openclaw-lark v2026.3.30 — line-by-line
  */
-// @aligned openclaw-lark v2026.3.30
-private fun parseTimeToRFC3339(timeStr: String): String? {
+private fun parseTimeToTimestampMs(input: String): String? {
     return try {
-        val formats = listOf(
-            "yyyy-MM-dd'T'HH:mm:ssXXX",
-            "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
-            "yyyy-MM-dd'T'HH:mm:ssZ",
-            "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
-            "yyyy-MM-dd HH:mm:ss",
-            "yyyy-MM-dd HH:mm",
-            "yyyy-MM-dd"
-        )
-        for (format in formats) {
-            try {
-                val sdf = SimpleDateFormat(format, Locale.US)
-                if (!format.contains("X") && !format.contains("Z") && format.contains("HH")) {
-                    sdf.timeZone = TimeZone.getDefault()
-                }
-                val date = sdf.parse(timeStr) ?: continue
-                // Output RFC 3339 format
-                val outFmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
-                outFmt.timeZone = TimeZone.getDefault()
-                return outFmt.format(date)
-            } catch (_: Exception) {
-                continue
-            }
+        val trimmed = input.trim()
+        val hasTimezone = Regex("[Zz]$|[+-]\\d{2}:\\d{2}$").containsMatchIn(trimmed)
+        if (hasTimezone) {
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.US)
+            val date = try { sdf.parse(trimmed) } catch (_: Exception) { null }
+            if (date == null) return null
+            return date.time.toString()
         }
-        // If already RFC 3339, return as-is
-        if (timeStr.matches(Regex("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}[+-]\\d{2}:\\d{2}"))) {
-            return timeStr
+        val normalized = trimmed.replace('T', ' ')
+        val match = Regex("^(\\d{4})-(\\d{2})-(\\d{2})\\s+(\\d{2}):(\\d{2})(?::(\\d{2}))?$").matchEntire(normalized)
+        if (match == null) {
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.US)
+            val date = try { sdf.parse(trimmed) } catch (_: Exception) { null }
+            if (date == null) return null
+            return date.time.toString()
         }
-        null
+        val year = match.groupValues[1].toInt()
+        val month = match.groupValues[2].toInt()
+        val day = match.groupValues[3].toInt()
+        val hour = match.groupValues[4].toInt()
+        val minute = match.groupValues[5].toInt()
+        val second = if (match.groupValues[6].isNotEmpty()) match.groupValues[6].toInt() else 0
+        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        cal.set(year, month - 1, day, hour - 8, minute, second)
+        cal.set(java.util.Calendar.MILLISECOND, 0)
+        cal.timeInMillis.toString()
     } catch (_: Exception) {
         null
     }
 }
 
-// ─── feishu_calendar_calendar ──────────────────────────────────────
+/**
+ * Parse ISO 8601 / bare datetime -> RFC 3339 string (for freebusy API).
+ * @aligned openclaw-lark v2026.3.30 — line-by-line
+ */
+private fun parseTimeToRFC3339(input: String): String? {
+    return try {
+        val trimmed = input.trim()
+        val hasTimezone = Regex("[Zz]$|[+-]\\d{2}:\\d{2}$").containsMatchIn(trimmed)
+        if (hasTimezone) {
+            // Has timezone, validate then return as-is
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.US)
+            val date = try { sdf.parse(trimmed) } catch (_: Exception) { null }
+            if (date == null) return null
+            return trimmed
+        }
+        // No timezone, treat as Beijing time, construct RFC 3339
+        val normalized = trimmed.replace('T', ' ')
+        val match = Regex("^(\\d{4})-(\\d{2})-(\\d{2})\\s+(\\d{2}):(\\d{2})(?::(\\d{2}))?$").matchEntire(normalized)
+        if (match == null) {
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.US)
+            val date = try { sdf.parse(trimmed) } catch (_: Exception) { null }
+            if (date == null) return null
+            return if (trimmed.contains('T')) "${trimmed}+08:00" else trimmed
+        }
+        val year = match.groupValues[1]
+        val month = match.groupValues[2]
+        val day = match.groupValues[3]
+        val hour = match.groupValues[4]
+        val minute = match.groupValues[5]
+        val sec = if (match.groupValues[6].isNotEmpty()) match.groupValues[6] else "00"
+        "$year-$month-${day}T$hour:$minute:$sec+08:00"
+    } catch (_: Exception) {
+        null
+    }
+}
 
-class FeishuCalendarCalendarTool(config: FeishuConfig, client: FeishuClient) : FeishuToolBase(config, client) {
-    override val name = "feishu_calendar_calendar"
-    override val description = "【以用户身份】飞书日历管理工具。用于查询日历列表、获取日历信息、查询主日历。" +
-        "Actions: list（查询日历列表）, get（查询指定日历信息）, primary（查询主日历信息）。"
+// ---------------------------------------------------------------------------
+// Time normalization helpers — translated from event.js
+// ---------------------------------------------------------------------------
 
-    override fun isEnabled() = config.enableCalendarTools
+// @aligned openclaw-lark v2026.3.30 — line-by-line
+private fun normalizeCalendarTimeValue(value: Any?): String? {
+    if (value == null) return null
+    if (value is String) {
+        val iso = unixTimestampToISO8601(value)
+        return iso ?: value
+    }
+    if (value !is Map<*, *>) return null
+    val timeObj = value
+    val fromTimestamp = unixTimestampToISO8601(timeObj["timestamp"])
+    if (fromTimestamp != null) return fromTimestamp
+    val dateVal = timeObj["date"]
+    if (dateVal is String) return dateVal
+    return null
+}
 
-    // @aligned openclaw-lark v2026.3.30
-    override suspend fun execute(args: Map<String, Any?>): ToolResult = withContext(Dispatchers.IO) {
-        try {
-            val action = args["action"] as? String
-                ?: return@withContext ToolResult.error("Missing required parameter: action")
+// @aligned openclaw-lark v2026.3.30 — line-by-line
+private fun normalizeEventTimeFields(event: Map<String, Any?>?): Map<String, Any?>? {
+    if (event == null) return null
+    val normalized = event.toMutableMap()
+    val startTime = normalizeCalendarTimeValue(event["start_time"])
+    if (startTime != null) normalized["start_time"] = startTime
+    val endTime = normalizeCalendarTimeValue(event["end_time"])
+    if (endTime != null) normalized["end_time"] = endTime
+    val createTime = unixTimestampToISO8601(event["create_time"])
+    if (createTime != null) normalized["create_time"] = createTime
+    return normalized
+}
 
-            when (action) {
-                // @aligned openclaw-lark v2026.3.30
-                "list" -> {
-                    val pageSize = (args["page_size"] as? Number)?.toInt() ?: 50
-                    val pageToken = args["page_token"] as? String
-                    var path = "/open-apis/calendar/v4/calendars?page_size=$pageSize"
-                    if (pageToken != null) path += "&page_token=$pageToken"
+// @aligned openclaw-lark v2026.3.30 — line-by-line
+private fun normalizeEventTimeFieldsJson(event: JsonObject?): JsonObject? {
+    if (event == null) return null
+    val normalized = event.deepCopy()
+    // start_time
+    val startTime = event.get("start_time")
+    if (startTime != null) {
+        val iso = if (startTime.isJsonPrimitive) {
+            unixTimestampToISO8601(startTime.asString)
+        } else if (startTime.isJsonObject) {
+            val ts = startTime.asJsonObject.get("timestamp")?.asString
+            if (ts != null) unixTimestampToISO8601(ts)
+            else startTime.asJsonObject.get("date")?.asString
+        } else null
+        if (iso != null) normalized.addProperty("start_time", iso)
+    }
+    // end_time
+    val endTime = event.get("end_time")
+    if (endTime != null) {
+        val iso = if (endTime.isJsonPrimitive) {
+            unixTimestampToISO8601(endTime.asString)
+        } else if (endTime.isJsonObject) {
+            val ts = endTime.asJsonObject.get("timestamp")?.asString
+            if (ts != null) unixTimestampToISO8601(ts)
+            else endTime.asJsonObject.get("date")?.asString
+        } else null
+        if (iso != null) normalized.addProperty("end_time", iso)
+    }
+    // create_time
+    val createTime = event.get("create_time")?.asString
+    if (createTime != null) {
+        val iso = unixTimestampToISO8601(createTime)
+        if (iso != null) normalized.addProperty("create_time", iso)
+    }
+    return normalized
+}
 
-                    val result = client.get(path)
-                    if (result.isFailure) {
-                        return@withContext ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to list calendars")
-                    }
-                    ToolResult.success(result.getOrNull()?.getAsJsonObject("data"))
-                }
-                // @aligned openclaw-lark v2026.3.30
-                "get" -> {
-                    val calendarId = args["calendar_id"] as? String
-                        ?: return@withContext ToolResult.error("Missing calendar_id")
-                    val result = client.get("/open-apis/calendar/v4/calendars/$calendarId")
-                    if (result.isFailure) {
-                        return@withContext ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to get calendar")
-                    }
-                    ToolResult.success(result.getOrNull()?.getAsJsonObject("data"))
-                }
-                // @aligned openclaw-lark v2026.3.30
-                "primary" -> {
-                    // Official API uses POST, not GET
-                    val result = client.post("/open-apis/calendar/v4/calendars/primary", emptyMap<String, Any>())
-                    if (result.isFailure) {
-                        return@withContext ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to get primary calendar")
-                    }
-                    ToolResult.success(result.getOrNull()?.getAsJsonObject("data"))
-                }
-                else -> ToolResult.error("Unknown action: $action. Must be one of: list, get, primary")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "feishu_calendar_calendar failed", e)
-            ToolResult.error(e.message ?: "Unknown error")
+// @aligned openclaw-lark v2026.3.30 — line-by-line
+private fun normalizeEventListTimeFieldsJson(items: JsonArray?): JsonArray? {
+    if (items == null) return null
+    val result = JsonArray()
+    for (item in items) {
+        if (item.isJsonObject) {
+            result.add(normalizeEventTimeFieldsJson(item.asJsonObject) ?: item)
+        } else {
+            result.add(item)
         }
     }
-
-    // @aligned openclaw-lark v2026.3.30
-    override fun getToolDefinition() = ToolDefinition(
-        function = FunctionDefinition(
-            name = name,
-            description = description,
-            parameters = ParametersSchema(
-                properties = mapOf(
-                    "action" to PropertySchema("string", "操作类型", enum = listOf("list", "get", "primary")),
-                    "calendar_id" to PropertySchema("string", "日历 ID（get 时必填）"),
-                    "page_size" to PropertySchema("integer", "每页数量（list 时使用，默认 50）"),
-                    "page_token" to PropertySchema("string", "分页标记（list 时使用）")
-                ),
-                required = listOf("action")
-            )
-        )
-    )
+    return result
 }
 
 // ─── Helper: resolve primary calendar_id ──────────────────────────
 
-/**
- * Resolve calendar_id: use provided value or auto-resolve to primary calendar.
- */
-// @aligned openclaw-lark v2026.3.30
+// @aligned openclaw-lark v2026.3.30 — line-by-line
 private suspend fun resolveCalendarId(calendarId: String?, client: FeishuClient): String {
     if (!calendarId.isNullOrBlank()) return calendarId
-    // Auto-resolve to primary calendar
     val result = client.post("/open-apis/calendar/v4/calendars/primary", emptyMap<String, Any>())
     if (result.isFailure) {
         throw IllegalStateException("Could not determine primary calendar: ${result.exceptionOrNull()?.message}")
@@ -211,22 +287,123 @@ private suspend fun resolveCalendarId(calendarId: String?, client: FeishuClient)
     throw IllegalStateException("Could not determine primary calendar")
 }
 
+// ─── feishu_calendar_calendar ──────────────────────────────────────
+
+// @aligned openclaw-lark v2026.3.30 — line-by-line
+class FeishuCalendarCalendarTool(config: FeishuConfig, client: FeishuClient) : FeishuToolBase(config, client) {
+    override val name = "feishu_calendar_calendar"
+    override val description = "【以用户身份】飞书日历管理工具。用于查询日历列表、获取日历信息、查询主日历。" +
+        "Actions: list（查询日历列表）, get（查询指定日历信息）, primary（查询主日历信息）。"
+
+    override fun isEnabled() = config.enableCalendarTools
+
+    // @aligned openclaw-lark v2026.3.30 — line-by-line
+    override suspend fun execute(args: Map<String, Any?>): ToolResult = withContext(Dispatchers.IO) {
+        try {
+            val action = args["action"] as? String
+                ?: return@withContext ToolResult.error("Missing required parameter: action")
+
+            when (action) {
+                // @aligned openclaw-lark v2026.3.30 — line-by-line
+                "list" -> {
+                    val pageSize = (args["page_size"] as? Number)?.toInt()
+                    val pageToken = args["page_token"] as? String
+                    Log.i(TAG, "list: page_size=${pageSize ?: 50}, page_token=${pageToken ?: "none"}")
+
+                    val params = mutableListOf<String>()
+                    if (pageSize != null) params.add("page_size=$pageSize")
+                    if (pageToken != null) params.add("page_token=$pageToken")
+                    val query = if (params.isNotEmpty()) "?${params.joinToString("&")}" else ""
+
+                    val result = client.get("/open-apis/calendar/v4/calendars$query")
+                    if (result.isFailure) {
+                        return@withContext ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to list calendars")
+                    }
+                    val data = result.getOrNull()?.getAsJsonObject("data")
+                    val calendars = data?.getAsJsonArray("calendar_list") ?: JsonArray()
+                    Log.i(TAG, "list: returned ${calendars.size()} calendars")
+                    val response = JsonObject().apply {
+                        add("calendars", calendars)
+                        addProperty("has_more", data?.get("has_more")?.asBoolean ?: false)
+                        data?.get("page_token")?.let { add("page_token", it) }
+                    }
+                    ToolResult.success(response)
+                }
+                // @aligned openclaw-lark v2026.3.30 — line-by-line
+                "get" -> {
+                    val calendarId = args["calendar_id"] as? String
+                    if (calendarId.isNullOrBlank()) {
+                        return@withContext ToolResult.error("calendar_id is required for 'get' action")
+                    }
+                    Log.i(TAG, "get: calendar_id=$calendarId")
+                    val result = client.get("/open-apis/calendar/v4/calendars/$calendarId")
+                    if (result.isFailure) {
+                        return@withContext ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to get calendar")
+                    }
+                    val data = result.getOrNull()?.getAsJsonObject("data")
+                    Log.i(TAG, "get: retrieved calendar $calendarId")
+                    val response = JsonObject().apply {
+                        add("calendar", data?.getAsJsonObject("calendar") ?: data)
+                    }
+                    ToolResult.success(response)
+                }
+                // @aligned openclaw-lark v2026.3.30 — line-by-line
+                "primary" -> {
+                    Log.i(TAG, "primary: querying primary calendar")
+                    val result = client.post("/open-apis/calendar/v4/calendars/primary", emptyMap<String, Any>())
+                    if (result.isFailure) {
+                        return@withContext ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to get primary calendar")
+                    }
+                    val data = result.getOrNull()?.getAsJsonObject("data")
+                    val calendars = data?.getAsJsonArray("calendars") ?: JsonArray()
+                    Log.i(TAG, "primary: returned ${calendars.size()} primary calendars")
+                    val response = JsonObject().apply {
+                        add("calendars", calendars)
+                    }
+                    ToolResult.success(response)
+                }
+                else -> ToolResult.error("Unknown action: $action. Must be one of: list, get, primary")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "feishu_calendar_calendar failed", e)
+            ToolResult.error(e.message ?: "Unknown error")
+        }
+    }
+
+    // @aligned openclaw-lark v2026.3.30 — line-by-line
+    override fun getToolDefinition() = ToolDefinition(
+        function = FunctionDefinition(
+            name = name,
+            description = description,
+            parameters = ParametersSchema(
+                properties = mapOf(
+                    "action" to PropertySchema("string", "操作类型", enum = listOf("list", "get", "primary")),
+                    "calendar_id" to PropertySchema("string", "Calendar ID"),
+                    "page_size" to PropertySchema("integer", "Number of calendars to return per page (default: 50, max: 1000)"),
+                    "page_token" to PropertySchema("string", "Pagination token for next page")
+                ),
+                required = listOf("action")
+            )
+        )
+    )
+}
+
 // ─── feishu_calendar_event ─────────────────────────────────────────
 
+// @aligned openclaw-lark v2026.3.30 — line-by-line
 class FeishuCalendarEventTool(config: FeishuConfig, client: FeishuClient) : FeishuToolBase(config, client) {
     override val name = "feishu_calendar_event"
     override val description = "【以用户身份】飞书日程管理工具。当用户要求查看日程、创建会议、约会议、修改日程、" +
         "删除日程、搜索日程、回复日程邀请时使用。Actions: create（创建日历事件）, list（查询时间范围内的日程，自动展开重复日程）, " +
         "get（获取日程详情）, patch（更新日程）, delete（删除日程）, search（搜索日程）, reply（回复日程邀请）, " +
-        "instances（获取重复日程的实例列表）, instance_view（查看展开后的日程列表）。" +
+        "instances（获取重复日程的实例列表，仅对重复日程有效）, instance_view（查看展开后的日程列表）。" +
         "【重要】create 时必须传 user_open_id 参数，值为消息上下文中的 SenderId（格式 ou_xxx），否则日程只在应用日历上，用户完全看不到。" +
-        "list 操作使用 instance_view 接口，会自动展开重复日程为多个实例，时间区间不能超过40天。" +
-        "时间参数使用ISO 8601 / RFC 3339 格式（包含时区），例如 '2024-01-01T00:00:00+08:00'。" +
-        "calendar_id 可选，不填时自动使用主日历。"
+        "list 操作使用 instance_view 接口，会自动展开重复日程为多个实例，时间区间不能超过40天，返回实例数量上限1000。" +
+        "时间参数使用ISO 8601 / RFC 3339 格式（包含时区），例如 '2024-01-01T00:00:00+08:00'。"
 
     override fun isEnabled() = config.enableCalendarTools
 
-    // @aligned openclaw-lark v2026.3.30
+    // @aligned openclaw-lark v2026.3.30 — line-by-line
     override suspend fun execute(args: Map<String, Any?>): ToolResult = withContext(Dispatchers.IO) {
         try {
             val action = args["action"] as? String
@@ -253,9 +430,10 @@ class FeishuCalendarEventTool(config: FeishuConfig, client: FeishuClient) : Feis
         }
     }
 
-    // @aligned openclaw-lark v2026.3.30
+    // @aligned openclaw-lark v2026.3.30 — line-by-line
     private suspend fun doCreate(calendarIdArg: String?, args: Map<String, Any?>): ToolResult {
         val summary = args["summary"] as? String
+        if (summary.isNullOrBlank()) return ToolResult.error("summary is required")
         val startTimeStr = args["start_time"] as? String
             ?: return ToolResult.error("start_time is required")
         val endTimeStr = args["end_time"] as? String
@@ -263,108 +441,154 @@ class FeishuCalendarEventTool(config: FeishuConfig, client: FeishuClient) : Feis
         val userOpenId = args["user_open_id"] as? String
 
         val startTs = parseTimeToTimestamp(startTimeStr)
-            ?: return ToolResult.error("Invalid start_time format. Must use ISO 8601 / RFC 3339 with timezone, e.g. '2024-01-01T00:00:00+08:00'")
         val endTs = parseTimeToTimestamp(endTimeStr)
-            ?: return ToolResult.error("Invalid end_time format. Must use ISO 8601 / RFC 3339 with timezone, e.g. '2024-01-01T00:00:00+08:00'")
+        if (startTs == null || endTs == null) {
+            return ToolResult.error(mapOf(
+                "error" to "Invalid time format. Must use ISO 8601 / RFC 3339 with timezone, e.g. '2024-01-01T00:00:00+08:00' or '2026-02-25 14:00:00'. Do not pass Unix timestamp numbers.",
+                "received_start" to startTimeStr,
+                "received_end" to endTimeStr
+            ).toString())
+        }
 
-        val cid = resolveCalendarId(calendarIdArg, client)
-        Log.i(TAG, "create: summary=$summary, calendar_id=$cid, start=$startTs, end=$endTs, user_open_id=${userOpenId ?: "MISSING"}")
+        Log.i(TAG, "create: summary=$summary, start_time=$startTimeStr -> ts=$startTs, end_time=$endTimeStr -> ts=$endTs, user_open_id=${userOpenId ?: "MISSING"}")
 
-        // Build event body with timestamps
+        // Resolve bot's calendar
+        val calendarId = resolveCalendarId(calendarIdArg, client)
+
         val eventData = mutableMapOf<String, Any?>(
+            "summary" to summary,
             "start_time" to mapOf("timestamp" to startTs),
             "end_time" to mapOf("timestamp" to endTs),
             "need_notification" to true,
             "attendee_ability" to (args["attendee_ability"] as? String ?: "can_modify_event")
         )
-        if (summary != null) eventData["summary"] = summary
+
         (args["description"] as? String)?.let { eventData["description"] = it }
+
+        // vchat
+        @Suppress("UNCHECKED_CAST")
+        (args["vchat"] as? Map<String, Any?>)?.let { vchat ->
+            val vchatData = mutableMapOf<String, Any?>()
+            (vchat["vc_type"] as? String)?.let { vchatData["vc_type"] = it }
+            (vchat["icon_type"] as? String)?.let { vchatData["icon_type"] = it }
+            (vchat["description"] as? String)?.let { vchatData["description"] = it }
+            (vchat["meeting_url"] as? String)?.let { vchatData["meeting_url"] = it }
+            if (vchatData.isNotEmpty()) eventData["vchat"] = vchatData
+        }
+
+        // visibility
         (args["visibility"] as? String)?.let { eventData["visibility"] = it }
+
+        // free_busy_status
         (args["free_busy_status"] as? String)?.let { eventData["free_busy_status"] = it }
+
+        // location (OBJECT with name, address, latitude, longitude)
+        @Suppress("UNCHECKED_CAST")
+        (args["location"] as? Map<String, Any?>)?.let { loc ->
+            val locationData = mutableMapOf<String, Any?>()
+            (loc["name"] as? String)?.let { locationData["name"] = it }
+            (loc["address"] as? String)?.let { locationData["address"] = it }
+            (loc["latitude"] as? Number)?.let { locationData["latitude"] = it }
+            (loc["longitude"] as? Number)?.let { locationData["longitude"] = it }
+            if (locationData.isNotEmpty()) eventData["location"] = locationData
+        }
+
+        // reminders
+        @Suppress("UNCHECKED_CAST")
+        (args["reminders"] as? List<Map<String, Any?>>)?.let { reminders ->
+            eventData["reminders"] = reminders.map { r -> mapOf("minutes" to r["minutes"]) }
+        }
+
+        // recurrence
         (args["recurrence"] as? String)?.let { eventData["recurrence"] = it }
 
-        // VChat
-        @Suppress("UNCHECKED_CAST")
-        (args["vchat"] as? Map<String, Any?>)?.let { eventData["vchat"] = it }
-
-        // Location (accept object as from schema)
-        @Suppress("UNCHECKED_CAST")
-        (args["location"] as? Map<String, Any?>)?.let { eventData["location"] = it }
-
-        // Reminders
-        @Suppress("UNCHECKED_CAST")
-        (args["reminders"] as? List<Map<String, Any?>>)?.let { eventData["reminders"] = it }
-
-        val result = client.post("/open-apis/calendar/v4/calendars/$cid/events", eventData)
+        val result = client.post("/open-apis/calendar/v4/calendars/$calendarId/events", eventData)
         if (result.isFailure) {
             return ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to create event")
         }
         val eventResult = result.getOrNull()?.getAsJsonObject("data")?.getAsJsonObject("event")
         val eventId = eventResult?.get("event_id")?.asString
+        Log.i(TAG, "event created: event_id=$eventId")
 
         // Build attendee list: merge explicit attendees + user_open_id
         @Suppress("UNCHECKED_CAST")
-        val explicitAttendees = (args["attendees"] as? List<Map<String, Any?>>)?.toMutableList() ?: mutableListOf()
+        val allAttendees = (args["attendees"] as? List<Map<String, Any?>>)?.toMutableList() ?: mutableListOf()
         if (userOpenId != null) {
-            val alreadyIncluded = explicitAttendees.any { it["type"] == "user" && it["id"] == userOpenId }
+            val alreadyIncluded = allAttendees.any { it["type"] == "user" && it["id"] == userOpenId }
             if (!alreadyIncluded) {
-                explicitAttendees.add(mapOf("type" to "user", "id" to userOpenId))
+                allAttendees.add(mapOf("type" to "user", "id" to userOpenId))
             }
         }
+        Log.i(TAG, "allAttendees=$allAttendees")
 
         var attendeeError: String? = null
-        if (explicitAttendees.isNotEmpty() && eventId != null) {
-            val operateId = userOpenId ?: explicitAttendees.firstOrNull { it["type"] == "user" }?.get("id") as? String
-            val attendeeData = explicitAttendees.map { a ->
-                val entry = mutableMapOf<String, Any?>("type" to a["type"])
-                when (a["type"]) {
-                    "user" -> entry["user_id"] = a["id"]
-                    "chat" -> entry["chat_id"] = a["id"]
-                    "resource" -> entry["room_id"] = a["id"]
-                    "third_party" -> entry["third_party_email"] = a["id"]
-                }
-                if (operateId != null) entry["operate_id"] = operateId
+        val operateId = userOpenId ?: allAttendees.firstOrNull { it["type"] == "user" }?.get("id") as? String
+
+        if (allAttendees.isNotEmpty() && eventId != null) {
+            val attendeeData = allAttendees.map { a ->
+                val entry = mutableMapOf<String, Any?>(
+                    "type" to a["type"],
+                    "user_id" to if (a["type"] == "user") a["id"] else null,
+                    "chat_id" to if (a["type"] == "chat") a["id"] else null,
+                    "room_id" to if (a["type"] == "resource") a["id"] else null,
+                    "third_party_email" to if (a["type"] == "third_party") a["id"] else null,
+                    "operate_id" to operateId
+                ).filterValues { it != null }
                 entry
             }
-            val attendeeBody = mapOf(
-                "attendees" to attendeeData,
-                "need_notification" to true
-            )
             try {
                 val attendeeResult = client.post(
-                    "/open-apis/calendar/v4/calendars/$cid/events/$eventId/attendees?user_id_type=open_id",
-                    attendeeBody
+                    "/open-apis/calendar/v4/calendars/$calendarId/events/$eventId/attendees?user_id_type=open_id",
+                    mapOf("attendees" to attendeeData, "need_notification" to true)
                 )
                 if (attendeeResult.isFailure) {
                     attendeeError = attendeeResult.exceptionOrNull()?.message ?: "Failed to add attendees"
+                    Log.i(TAG, "attendee add FAILED: $attendeeError")
+                } else {
+                    Log.i(TAG, "attendee API response: ${attendeeResult.getOrNull()?.getAsJsonObject("data")}")
                 }
             } catch (e: Exception) {
                 attendeeError = e.message
+                Log.i(TAG, "attendee add FAILED: $attendeeError")
             }
         }
 
+        // Build response
+        val appLink = eventResult?.get("app_link")?.asString
+        val safeEvent = if (eventResult != null) mapOf(
+            "event_id" to eventId,
+            "summary" to summary,
+            "app_link" to appLink,
+            "start_time" to (unixTimestampToISO8601(startTs) ?: startTimeStr),
+            "end_time" to (unixTimestampToISO8601(endTs) ?: endTimeStr)
+        ) else null
+
         val response = mutableMapOf<String, Any?>(
-            "event" to mapOf(
-                "event_id" to eventId,
-                "summary" to summary,
-                "app_link" to eventResult?.get("app_link")?.asString,
-                "start_time" to startTimeStr,
-                "end_time" to endTimeStr
-            ),
-            "attendees" to explicitAttendees.map { mapOf("type" to it["type"], "id" to it["id"]) }
+            "event" to safeEvent,
+            "attendees" to allAttendees.map { mapOf("type" to it["type"], "id" to it["id"]) },
+            "_debug" to mapOf(
+                "calendar_id" to calendarId,
+                "operate_id" to operateId,
+                "start_input" to startTimeStr,
+                "start_iso8601" to (unixTimestampToISO8601(startTs) ?: startTimeStr),
+                "end_input" to endTimeStr,
+                "end_iso8601" to (unixTimestampToISO8601(endTs) ?: endTimeStr),
+                "attendees_count" to allAttendees.size
+            )
         )
+
         if (attendeeError != null) {
             response["warning"] = "日程已创建，但添加参会人失败：$attendeeError"
-        } else if (explicitAttendees.isEmpty()) {
+        } else if (allAttendees.isEmpty()) {
             response["error"] = "日程已创建在应用日历上，但未添加任何参会人，用户看不到此日程。请重新调用时传入 user_open_id 参数。"
         } else {
-            response["note"] = "已成功添加 ${explicitAttendees.size} 位参会人，日程应出现在参会人的飞书日历中。"
+            response["note"] = "已成功添加 ${allAttendees.size} 位参会人，日程应出现在参会人的飞书日历中。"
         }
 
         return ToolResult.success(response)
     }
 
-    // @aligned openclaw-lark v2026.3.30
+    // @aligned openclaw-lark v2026.3.30 — line-by-line
     private suspend fun doList(calendarIdArg: String?, args: Map<String, Any?>): ToolResult {
         val startTimeStr = args["start_time"] as? String
             ?: return ToolResult.error("start_time is required")
@@ -372,58 +596,79 @@ class FeishuCalendarEventTool(config: FeishuConfig, client: FeishuClient) : Feis
             ?: return ToolResult.error("end_time is required")
 
         val startTs = parseTimeToTimestamp(startTimeStr)
-            ?: return ToolResult.error("Invalid start_time format. Must use ISO 8601 / RFC 3339 with timezone.")
         val endTs = parseTimeToTimestamp(endTimeStr)
-            ?: return ToolResult.error("Invalid end_time format. Must use ISO 8601 / RFC 3339 with timezone.")
+        if (startTs == null || endTs == null) {
+            return ToolResult.error(mapOf(
+                "error" to "Invalid time format. Must use ISO 8601 / RFC 3339 with timezone, e.g. '2024-01-01T00:00:00+08:00' or '2026-02-25 14:00:00'. Do not pass Unix timestamps.",
+                "received_start" to startTimeStr,
+                "received_end" to endTimeStr
+            ).toString())
+        }
 
         val cid = resolveCalendarId(calendarIdArg, client)
-        Log.i(TAG, "list: calendar_id=$cid, start=$startTs, end=$endTs (using instance_view)")
+        Log.i(TAG, "list: calendar_id=$cid, start_time=$startTs, end_time=$endTs (using instance_view)")
 
-        // Use instance_view endpoint (NOT .../events)
+        // Use instance_view endpoint (NOT /events)
         val result = client.get(
             "/open-apis/calendar/v4/calendars/$cid/events/instance_view?start_time=$startTs&end_time=$endTs&user_id_type=open_id"
         )
         if (result.isFailure) {
             return ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to list events")
         }
-        return ToolResult.success(result.getOrNull()?.getAsJsonObject("data"))
+        val data = result.getOrNull()?.getAsJsonObject("data")
+        val items = data?.getAsJsonArray("items")
+        Log.i(TAG, "list: returned ${items?.size() ?: 0} event instances")
+
+        val response = JsonObject().apply {
+            add("events", normalizeEventListTimeFieldsJson(items))
+            addProperty("has_more", data?.get("has_more")?.asBoolean ?: false)
+            data?.get("page_token")?.let { add("page_token", it) }
+        }
+        return ToolResult.success(response)
     }
 
-    // @aligned openclaw-lark v2026.3.30
+    // @aligned openclaw-lark v2026.3.30 — line-by-line
     private suspend fun doGet(calendarIdArg: String?, args: Map<String, Any?>): ToolResult {
         val eventId = args["event_id"] as? String
-            ?: return ToolResult.error("Missing event_id")
+            ?: return ToolResult.error("event_id is required")
         val cid = resolveCalendarId(calendarIdArg, client)
+        Log.i(TAG, "get: calendar_id=$cid, event_id=$eventId")
+
         val result = client.get("/open-apis/calendar/v4/calendars/$cid/events/$eventId")
         if (result.isFailure) {
             return ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to get event")
         }
-        return ToolResult.success(result.getOrNull()?.getAsJsonObject("data"))
+        Log.i(TAG, "get: retrieved event $eventId")
+        val event = result.getOrNull()?.getAsJsonObject("data")?.getAsJsonObject("event")
+        val response = JsonObject().apply {
+            add("event", normalizeEventTimeFieldsJson(event))
+        }
+        return ToolResult.success(response)
     }
 
-    // @aligned openclaw-lark v2026.3.30
+    // @aligned openclaw-lark v2026.3.30 — line-by-line
     private suspend fun doPatch(calendarIdArg: String?, args: Map<String, Any?>): ToolResult {
         val eventId = args["event_id"] as? String
-            ?: return ToolResult.error("Missing event_id")
+            ?: return ToolResult.error("event_id is required")
         val cid = resolveCalendarId(calendarIdArg, client)
 
         val updateData = mutableMapOf<String, Any?>()
-        (args["summary"] as? String)?.let { updateData["summary"] = it }
-        (args["description"] as? String)?.let { updateData["description"] = it }
 
-        // Handle time conversion
+        // Handle time conversion if provided
         (args["start_time"] as? String)?.let { timeStr ->
-            val ts = parseTimeToTimestamp(timeStr)
-                ?: return ToolResult.error("start_time 格式错误！必须使用ISO 8601 / RFC 3339 格式（包含时区）")
-            updateData["start_time"] = mapOf("timestamp" to ts)
+            val startTs = parseTimeToTimestamp(timeStr)
+                ?: return ToolResult.error("start_time 格式错误！必须使用ISO 8601 / RFC 3339 格式（包含时区），例如 '2024-01-01T00:00:00+08:00'")
+            updateData["start_time"] = mapOf("timestamp" to startTs)
         }
         (args["end_time"] as? String)?.let { timeStr ->
-            val ts = parseTimeToTimestamp(timeStr)
-                ?: return ToolResult.error("end_time 格式错误！必须使用ISO 8601 / RFC 3339 格式（包含时区）")
-            updateData["end_time"] = mapOf("timestamp" to ts)
+            val endTs = parseTimeToTimestamp(timeStr)
+                ?: return ToolResult.error("end_time 格式错误！必须使用ISO 8601 / RFC 3339 格式（包含时区），例如 '2024-01-01T00:00:00+08:00'")
+            updateData["end_time"] = mapOf("timestamp" to endTs)
         }
 
-        // Location: accept plain string, wrap as {name: string} internally
+        (args["summary"] as? String)?.let { updateData["summary"] = it }
+        (args["description"] as? String)?.let { updateData["description"] = it }
+        // Location in patch is STRING, wrapped as {name: string}
         (args["location"] as? String)?.let { updateData["location"] = mapOf("name" to it) }
 
         Log.i(TAG, "patch: calendar_id=$cid, event_id=$eventId, fields=${updateData.keys.joinToString(",")}")
@@ -431,13 +676,18 @@ class FeishuCalendarEventTool(config: FeishuConfig, client: FeishuClient) : Feis
         if (result.isFailure) {
             return ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to patch event")
         }
-        return ToolResult.success(result.getOrNull()?.getAsJsonObject("data"))
+        Log.i(TAG, "patch: updated event $eventId")
+        val event = result.getOrNull()?.getAsJsonObject("data")?.getAsJsonObject("event")
+        val response = JsonObject().apply {
+            add("event", normalizeEventTimeFieldsJson(event))
+        }
+        return ToolResult.success(response)
     }
 
-    // @aligned openclaw-lark v2026.3.30
+    // @aligned openclaw-lark v2026.3.30 — line-by-line
     private suspend fun doDelete(calendarIdArg: String?, args: Map<String, Any?>): ToolResult {
         val eventId = args["event_id"] as? String
-            ?: return ToolResult.error("Missing event_id")
+            ?: return ToolResult.error("event_id is required")
         val cid = resolveCalendarId(calendarIdArg, client)
         val needNotification = args["need_notification"] as? Boolean ?: true
         Log.i(TAG, "delete: calendar_id=$cid, event_id=$eventId, notify=$needNotification")
@@ -446,13 +696,14 @@ class FeishuCalendarEventTool(config: FeishuConfig, client: FeishuClient) : Feis
         if (result.isFailure) {
             return ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to delete event")
         }
+        Log.i(TAG, "delete: deleted event $eventId")
         return ToolResult.success(mapOf("success" to true, "event_id" to eventId))
     }
 
-    // @aligned openclaw-lark v2026.3.30
+    // @aligned openclaw-lark v2026.3.30 — line-by-line
     private suspend fun doSearch(calendarIdArg: String?, args: Map<String, Any?>): ToolResult {
         val query = args["query"] as? String
-            ?: return ToolResult.error("Missing query")
+            ?: return ToolResult.error("query is required")
         val cid = resolveCalendarId(calendarIdArg, client)
 
         val params = mutableListOf<String>()
@@ -460,47 +711,65 @@ class FeishuCalendarEventTool(config: FeishuConfig, client: FeishuClient) : Feis
         (args["page_token"] as? String)?.let { params.add("page_token=$it") }
         val queryStr = if (params.isNotEmpty()) "?${params.joinToString("&")}" else ""
 
-        val body = mapOf("query" to query)
-        Log.i(TAG, "search: calendar_id=$cid, query=$query")
-
-        // Correct endpoint: POST /calendars/:cid/events/search
-        val result = client.post("/open-apis/calendar/v4/calendars/$cid/events/search$queryStr", body)
+        Log.i(TAG, "search: calendar_id=$cid, query=$query, page_size=${(args["page_size"] as? Number)?.toInt() ?: 50}")
+        val result = client.post("/open-apis/calendar/v4/calendars/$cid/events/search$queryStr", mapOf("query" to query))
         if (result.isFailure) {
             return ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to search events")
         }
-        return ToolResult.success(result.getOrNull()?.getAsJsonObject("data"))
+        val data = result.getOrNull()?.getAsJsonObject("data")
+        val items = data?.getAsJsonArray("items")
+        Log.i(TAG, "search: found ${items?.size() ?: 0} events")
+
+        val response = JsonObject().apply {
+            add("events", normalizeEventListTimeFieldsJson(items))
+            addProperty("has_more", data?.get("has_more")?.asBoolean ?: false)
+            data?.get("page_token")?.let { add("page_token", it) }
+        }
+        return ToolResult.success(response)
     }
 
-    // @aligned openclaw-lark v2026.3.30
+    // @aligned openclaw-lark v2026.3.30 — line-by-line
     private suspend fun doReply(calendarIdArg: String?, args: Map<String, Any?>): ToolResult {
         val eventId = args["event_id"] as? String
-            ?: return ToolResult.error("Missing event_id")
+            ?: return ToolResult.error("event_id is required")
         val rsvpStatus = args["rsvp_status"] as? String
-            ?: return ToolResult.error("Missing rsvp_status")
+            ?: return ToolResult.error("rsvp_status is required")
         val cid = resolveCalendarId(calendarIdArg, client)
-        val body = mapOf("rsvp_status" to rsvpStatus)
-        val result = client.post("/open-apis/calendar/v4/calendars/$cid/events/$eventId/reply", body)
+        Log.i(TAG, "reply: calendar_id=$cid, event_id=$eventId, rsvp=$rsvpStatus")
+
+        val result = client.post(
+            "/open-apis/calendar/v4/calendars/$cid/events/$eventId/reply",
+            mapOf("rsvp_status" to rsvpStatus)
+        )
         if (result.isFailure) {
             return ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to reply event")
         }
+        Log.i(TAG, "reply: replied to event $eventId with $rsvpStatus")
         return ToolResult.success(mapOf("success" to true, "event_id" to eventId, "rsvp_status" to rsvpStatus))
     }
 
-    // @aligned openclaw-lark v2026.3.30
+    // @aligned openclaw-lark v2026.3.30 — line-by-line
     private suspend fun doInstances(calendarIdArg: String?, args: Map<String, Any?>): ToolResult {
         val eventId = args["event_id"] as? String
-            ?: return ToolResult.error("Missing event_id")
+            ?: return ToolResult.error("event_id is required")
         val startTimeStr = args["start_time"] as? String
             ?: return ToolResult.error("start_time is required")
         val endTimeStr = args["end_time"] as? String
             ?: return ToolResult.error("end_time is required")
 
         val startTs = parseTimeToTimestamp(startTimeStr)
-            ?: return ToolResult.error("Invalid start_time format.")
         val endTs = parseTimeToTimestamp(endTimeStr)
-            ?: return ToolResult.error("Invalid end_time format.")
+        if (startTs == null || endTs == null) {
+            return ToolResult.error(mapOf(
+                "error" to "Invalid time format. Must use ISO 8601 / RFC 3339 with timezone, e.g. '2024-01-01T00:00:00+08:00'",
+                "received_start" to startTimeStr,
+                "received_end" to endTimeStr
+            ).toString())
+        }
 
         val cid = resolveCalendarId(calendarIdArg, client)
+        Log.i(TAG, "instances: calendar_id=$cid, event_id=$eventId, start=$startTs, end=$endTs")
+
         val params = mutableListOf("start_time=$startTs", "end_time=$endTs")
         (args["page_size"] as? Number)?.let { params.add("page_size=${it.toInt()}") }
         (args["page_token"] as? String)?.let { params.add("page_token=$it") }
@@ -510,10 +779,19 @@ class FeishuCalendarEventTool(config: FeishuConfig, client: FeishuClient) : Feis
         if (result.isFailure) {
             return ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to get instances")
         }
-        return ToolResult.success(result.getOrNull()?.getAsJsonObject("data"))
+        val data = result.getOrNull()?.getAsJsonObject("data")
+        val items = data?.getAsJsonArray("items")
+        Log.i(TAG, "instances: returned ${items?.size() ?: 0} instances")
+
+        val response = JsonObject().apply {
+            add("instances", normalizeEventListTimeFieldsJson(items))
+            addProperty("has_more", data?.get("has_more")?.asBoolean ?: false)
+            data?.get("page_token")?.let { add("page_token", it) }
+        }
+        return ToolResult.success(response)
     }
 
-    // @aligned openclaw-lark v2026.3.30
+    // @aligned openclaw-lark v2026.3.30 — line-by-line
     private suspend fun doInstanceView(calendarIdArg: String?, args: Map<String, Any?>): ToolResult {
         val startTimeStr = args["start_time"] as? String
             ?: return ToolResult.error("start_time is required")
@@ -521,25 +799,40 @@ class FeishuCalendarEventTool(config: FeishuConfig, client: FeishuClient) : Feis
             ?: return ToolResult.error("end_time is required")
 
         val startTs = parseTimeToTimestamp(startTimeStr)
-            ?: return ToolResult.error("Invalid start_time format.")
         val endTs = parseTimeToTimestamp(endTimeStr)
-            ?: return ToolResult.error("Invalid end_time format.")
+        if (startTs == null || endTs == null) {
+            return ToolResult.error(mapOf(
+                "error" to "Invalid time format. Must use ISO 8601 / RFC 3339 with timezone, e.g. '2024-01-01T00:00:00+08:00'",
+                "received_start" to startTimeStr,
+                "received_end" to endTimeStr
+            ).toString())
+        }
 
         val cid = resolveCalendarId(calendarIdArg, client)
+        Log.i(TAG, "instance_view: calendar_id=$cid, start=$startTs, end=$endTs")
+
         val params = mutableListOf("start_time=$startTs", "end_time=$endTs", "user_id_type=open_id")
         (args["page_size"] as? Number)?.let { params.add("page_size=${it.toInt()}") }
         (args["page_token"] as? String)?.let { params.add("page_token=$it") }
         val queryStr = params.joinToString("&")
 
-        // instance_view does NOT require event_id - it's a calendar-level endpoint
         val result = client.get("/open-apis/calendar/v4/calendars/$cid/events/instance_view?$queryStr")
         if (result.isFailure) {
             return ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to get instance view")
         }
-        return ToolResult.success(result.getOrNull()?.getAsJsonObject("data"))
+        val data = result.getOrNull()?.getAsJsonObject("data")
+        val items = data?.getAsJsonArray("items")
+        Log.i(TAG, "instance_view: returned ${items?.size() ?: 0} events")
+
+        val response = JsonObject().apply {
+            add("events", normalizeEventListTimeFieldsJson(items))
+            addProperty("has_more", data?.get("has_more")?.asBoolean ?: false)
+            data?.get("page_token")?.let { add("page_token", it) }
+        }
+        return ToolResult.success(response)
     }
 
-    // @aligned openclaw-lark v2026.3.30
+    // @aligned openclaw-lark v2026.3.30 — line-by-line
     override fun getToolDefinition() = ToolDefinition(
         function = FunctionDefinition(
             name = name,
@@ -550,23 +843,23 @@ class FeishuCalendarEventTool(config: FeishuConfig, client: FeishuClient) : Feis
                         "string", "操作类型",
                         enum = listOf("create", "list", "get", "patch", "delete", "search", "reply", "instances", "instance_view")
                     ),
-                    "calendar_id" to PropertySchema("string", "日历 ID（可选，不填时自动使用主日历）"),
-                    "event_id" to PropertySchema("string", "日程 ID（get、patch、delete、reply、instances 时必填）"),
-                    "summary" to PropertySchema("string", "日程标题（create、patch 时使用）"),
-                    "description" to PropertySchema("string", "日程描述（create、patch 时使用）"),
-                    "start_time" to PropertySchema("string", "开始时间，ISO 8601 / RFC 3339 格式（包含时区），例如 '2024-01-01T00:00:00+08:00'"),
-                    "end_time" to PropertySchema("string", "结束时间，格式同 start_time"),
-                    "user_open_id" to PropertySchema("string", "当前请求用户的 open_id（create 时强烈建议提供，格式 ou_xxx）"),
-                    "attendees" to PropertySchema("array", "参会人列表（create 时使用）。type='user' 时 id 填 open_id，type='third_party' 时 id 填邮箱。",
+                    "calendar_id" to PropertySchema("string", "Calendar ID (optional; primary calendar used if omitted)"),
+                    "event_id" to PropertySchema("string", "Event ID"),
+                    "summary" to PropertySchema("string", "日程标题（可选，但强烈建议提供）"),
+                    "description" to PropertySchema("string", "日程描述"),
+                    "start_time" to PropertySchema("string", "开始时间（必填）。ISO 8601 / RFC 3339 格式（包含时区），例如 '2024-01-01T00:00:00+08:00'"),
+                    "end_time" to PropertySchema("string", "结束时间（必填）。格式同 start_time。如果用户未指定时长，默认为开始时间后1小时。"),
+                    "user_open_id" to PropertySchema("string", "当前请求用户的 open_id（可选，但强烈建议提供）。从消息上下文的 SenderId 字段获取，格式为 ou_xxx。"),
+                    "attendees" to PropertySchema("array", "参会人列表。type='user' 时 id 填 open_id，type='third_party' 时 id 填邮箱。",
                         items = PropertySchema("object", "参会人 {type, id}")),
-                    "vchat" to PropertySchema("object", "视频会议配置（create 时使用）"),
-                    "visibility" to PropertySchema("string", "可见性（create 时使用）", enum = listOf("default", "public", "private")),
-                    "attendee_ability" to PropertySchema("string", "参与人权限（create 时使用，默认 can_modify_event）",
+                    "vchat" to PropertySchema("object", "视频会议信息"),
+                    "visibility" to PropertySchema("string", "日程公开范围", enum = listOf("default", "public", "private")),
+                    "attendee_ability" to PropertySchema("string", "参与人权限（默认 can_modify_event）",
                         enum = listOf("none", "can_see_others", "can_invite_others", "can_modify_event")),
-                    "free_busy_status" to PropertySchema("string", "忙闲状态（create 时使用）", enum = listOf("busy", "free")),
-                    "location" to PropertySchema("string", "地点（patch 时为纯字符串，内部包装为 {name: string}）"),
-                    "reminders" to PropertySchema("array", "提醒列表（create 时使用）"),
-                    "recurrence" to PropertySchema("string", "重复规则 RRULE（create 时使用）"),
+                    "free_busy_status" to PropertySchema("string", "忙闲状态", enum = listOf("busy", "free")),
+                    "location" to PropertySchema("object", "日程地点信息 {name, address, latitude, longitude}"),
+                    "reminders" to PropertySchema("array", "日程提醒列表"),
+                    "recurrence" to PropertySchema("string", "重复日程的重复性规则（RFC5545 RRULE 格式）"),
                     "need_notification" to PropertySchema("boolean", "是否通知参会人（delete 时使用，默认 true）"),
                     "query" to PropertySchema("string", "搜索关键词（search 时必填）"),
                     "rsvp_status" to PropertySchema("string", "回复状态（reply 时必填）", enum = listOf("accept", "decline", "tentative")),
@@ -581,6 +874,7 @@ class FeishuCalendarEventTool(config: FeishuConfig, client: FeishuClient) : Feis
 
 // ─── feishu_calendar_event_attendee ────────────────────────────────
 
+// @aligned openclaw-lark v2026.3.30 — line-by-line
 class FeishuCalendarEventAttendeeTool(config: FeishuConfig, client: FeishuClient) : FeishuToolBase(config, client) {
     override val name = "feishu_calendar_event_attendee"
     override val description = "飞书日程参会人管理工具。当用户要求邀请/添加参会人、查看参会人列表时使用。" +
@@ -588,7 +882,7 @@ class FeishuCalendarEventAttendeeTool(config: FeishuConfig, client: FeishuClient
 
     override fun isEnabled() = config.enableCalendarTools
 
-    // @aligned openclaw-lark v2026.3.30
+    // @aligned openclaw-lark v2026.3.30 — line-by-line
     override suspend fun execute(args: Map<String, Any?>): ToolResult = withContext(Dispatchers.IO) {
         try {
             val action = args["action"] as? String
@@ -601,30 +895,50 @@ class FeishuCalendarEventAttendeeTool(config: FeishuConfig, client: FeishuClient
             val basePath = "/open-apis/calendar/v4/calendars/$calendarId/events/$eventId/attendees"
 
             when (action) {
-                // @aligned openclaw-lark v2026.3.30
+                // @aligned openclaw-lark v2026.3.30 — line-by-line
                 "create" -> {
-                    val attendees = args["attendees"]
-                        ?: return@withContext ToolResult.error("Missing attendees")
-                    val needNotification = args["need_notification"] as? Boolean ?: true
-                    val attendeeAbility = args["attendee_ability"] as? String
+                    @Suppress("UNCHECKED_CAST")
+                    val attendees = args["attendees"] as? List<Map<String, Any?>>
+                    if (attendees.isNullOrEmpty()) {
+                        return@withContext ToolResult.error("attendees is required and cannot be empty")
+                    }
+                    Log.i(TAG, "create: calendar_id=$calendarId, event_id=$eventId, attendees_count=${attendees.size}")
 
-                    val body = mutableMapOf<String, Any?>(
-                        "attendees" to attendees,
-                        "need_notification" to needNotification
-                    )
-                    if (attendeeAbility != null) {
-                        body["attendee_ability"] = attendeeAbility
+                    // Map attendee_id to type-specific field
+                    val attendeeData = attendees.map { a ->
+                        val base = mutableMapOf<String, Any?>(
+                            "type" to a["type"],
+                            "is_optional" to false
+                        )
+                        when (a["type"]) {
+                            "user" -> base["user_id"] = a["attendee_id"]
+                            "chat" -> base["chat_id"] = a["attendee_id"]
+                            "resource" -> base["room_id"] = a["attendee_id"]
+                            "third_party" -> base["third_party_email"] = a["attendee_id"]
+                        }
+                        base
                     }
 
-                    // Add user_id_type=open_id query param
+                    val needNotification = args["need_notification"] as? Boolean ?: true
+                    val body = mapOf(
+                        "attendees" to attendeeData,
+                        "need_notification" to needNotification
+                    )
+
                     val result = client.post("$basePath?user_id_type=open_id", body)
                     if (result.isFailure) {
                         return@withContext ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to add attendees")
                     }
-                    ToolResult.success(result.getOrNull()?.getAsJsonObject("data"))
+                    Log.i(TAG, "create: added ${attendees.size} attendees to event $eventId")
+                    val response = JsonObject().apply {
+                        add("attendees", result.getOrNull()?.getAsJsonObject("data")?.getAsJsonArray("attendees"))
+                    }
+                    ToolResult.success(response)
                 }
-                // @aligned openclaw-lark v2026.3.30
+                // @aligned openclaw-lark v2026.3.30 — line-by-line
                 "list" -> {
+                    Log.i(TAG, "list: calendar_id=$calendarId, event_id=$eventId, page_size=${(args["page_size"] as? Number)?.toInt() ?: 50}")
+
                     val params = mutableListOf<String>()
                     val userIdType = args["user_id_type"] as? String ?: "open_id"
                     params.add("user_id_type=$userIdType")
@@ -636,7 +950,14 @@ class FeishuCalendarEventAttendeeTool(config: FeishuConfig, client: FeishuClient
                     if (result.isFailure) {
                         return@withContext ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to list attendees")
                     }
-                    ToolResult.success(result.getOrNull()?.getAsJsonObject("data"))
+                    val data = result.getOrNull()?.getAsJsonObject("data")
+                    Log.i(TAG, "list: returned ${data?.getAsJsonArray("items")?.size() ?: 0} attendees")
+                    val response = JsonObject().apply {
+                        add("attendees", data?.getAsJsonArray("items"))
+                        addProperty("has_more", data?.get("has_more")?.asBoolean ?: false)
+                        data?.get("page_token")?.let { add("page_token", it) }
+                    }
+                    ToolResult.success(response)
                 }
                 else -> ToolResult.error("Unknown action: $action. Must be one of: create, list")
             }
@@ -646,7 +967,7 @@ class FeishuCalendarEventAttendeeTool(config: FeishuConfig, client: FeishuClient
         }
     }
 
-    // @aligned openclaw-lark v2026.3.30
+    // @aligned openclaw-lark v2026.3.30 — line-by-line
     override fun getToolDefinition() = ToolDefinition(
         function = FunctionDefinition(
             name = name,
@@ -656,15 +977,15 @@ class FeishuCalendarEventAttendeeTool(config: FeishuConfig, client: FeishuClient
                     "action" to PropertySchema("string", "操作类型", enum = listOf("create", "list")),
                     "calendar_id" to PropertySchema("string", "日历 ID"),
                     "event_id" to PropertySchema("string", "日程 ID"),
-                    "attendees" to PropertySchema("array", "参会人列表（create 时必填）。type=user 时 attendee_id 为 open_id，type=third_party 时为邮箱。",
+                    "attendees" to PropertySchema("array", "参会人列表（create 时必填）。type=user 时 attendee_id 为 open_id，type=chat 时为 chat_id，type=resource 时为会议室 ID，type=third_party 时为邮箱地址",
                         items = PropertySchema("object", "参会人 {type, attendee_id}")),
-                    "need_notification" to PropertySchema("boolean", "是否通知参会人（create 时使用，默认 true）"),
-                    "attendee_ability" to PropertySchema("string", "参与人权限（create 时使用）",
+                    "need_notification" to PropertySchema("boolean", "是否给参会人发送通知（默认 true）"),
+                    "attendee_ability" to PropertySchema("string", "参与人权限",
                         enum = listOf("none", "can_see_others", "can_invite_others", "can_modify_event")),
                     "user_id_type" to PropertySchema("string", "用户 ID 类型（list 时使用，默认 open_id）",
                         enum = listOf("open_id", "union_id", "user_id")),
-                    "page_size" to PropertySchema("integer", "每页数量（list 时使用）"),
-                    "page_token" to PropertySchema("string", "分页标记（list 时使用）")
+                    "page_size" to PropertySchema("integer", "每页数量（默认 50，最大 500）"),
+                    "page_token" to PropertySchema("string", "分页标记")
                 ),
                 required = listOf("action", "calendar_id", "event_id")
             )
@@ -674,6 +995,7 @@ class FeishuCalendarEventAttendeeTool(config: FeishuConfig, client: FeishuClient
 
 // ─── feishu_calendar_freebusy ──────────────────────────────────────
 
+// @aligned openclaw-lark v2026.3.30 — line-by-line
 class FeishuCalendarFreebusyTool(config: FeishuConfig, client: FeishuClient) : FeishuToolBase(config, client) {
     override val name = "feishu_calendar_freebusy"
     override val description = "【以用户身份】飞书日历忙闲查询工具。当用户要求查询某时间段内某人是否空闲、" +
@@ -681,38 +1003,49 @@ class FeishuCalendarFreebusyTool(config: FeishuConfig, client: FeishuClient) : F
 
     override fun isEnabled() = config.enableCalendarTools
 
-    // @aligned openclaw-lark v2026.3.30
+    // @aligned openclaw-lark v2026.3.30 — line-by-line
     override suspend fun execute(args: Map<String, Any?>): ToolResult = withContext(Dispatchers.IO) {
         try {
             val action = args["action"] as? String ?: "list"
+            Log.i(TAG, "[FREEBUSY] Execute called with params: $args")
+
             if (action != "list") {
-                return@withContext ToolResult.error("Unknown action: $action. Only 'list' is supported.")
+                Log.w(TAG, "[FREEBUSY] Unknown action: $action")
+                return@withContext ToolResult.error("Unknown action: $action")
             }
+
+            // Validate user_ids
+            @Suppress("UNCHECKED_CAST")
+            val userIds = args["user_ids"] as? List<String>
+            if (userIds.isNullOrEmpty()) {
+                Log.w(TAG, "[FREEBUSY] user_ids is empty")
+                return@withContext ToolResult.error("user_ids is required (1-10 user IDs)")
+            }
+            if (userIds.size > 10) {
+                Log.w(TAG, "[FREEBUSY] user_ids exceeds limit: ${userIds.size}")
+                return@withContext ToolResult.error("user_ids count exceeds limit, maximum 10 users (current: ${userIds.size})")
+            }
+            Log.i(TAG, "[FREEBUSY] Validation passed, user_ids count: ${userIds.size}")
 
             val timeMinStr = args["time_min"] as? String
                 ?: return@withContext ToolResult.error("Missing required parameter: time_min")
             val timeMaxStr = args["time_max"] as? String
                 ?: return@withContext ToolResult.error("Missing required parameter: time_max")
-            @Suppress("UNCHECKED_CAST")
-            val userIds = args["user_ids"] as? List<String>
-                ?: return@withContext ToolResult.error("Missing required parameter: user_ids (flat array of open_id strings)")
-
-            if (userIds.isEmpty()) {
-                return@withContext ToolResult.error("user_ids is required (1-10 user IDs)")
-            }
-            if (userIds.size > 10) {
-                return@withContext ToolResult.error("user_ids supports at most 10 users (current: ${userIds.size})")
-            }
 
             // Convert time strings to RFC 3339 format (required by freebusy API)
             val timeMin = parseTimeToRFC3339(timeMinStr)
-                ?: return@withContext ToolResult.error("Invalid time_min format. Must use ISO 8601 / RFC 3339 with timezone.")
             val timeMax = parseTimeToRFC3339(timeMaxStr)
-                ?: return@withContext ToolResult.error("Invalid time_max format. Must use ISO 8601 / RFC 3339 with timezone.")
+            if (timeMin == null || timeMax == null) {
+                Log.w(TAG, "[FREEBUSY] Time format error: time_min=$timeMinStr, time_max=$timeMaxStr")
+                return@withContext ToolResult.error(mapOf(
+                    "error" to "Invalid time format. Must use ISO 8601 / RFC 3339 with timezone, e.g. '2024-01-01T00:00:00+08:00' or '2026-02-25 14:00:00'.",
+                    "received_time_min" to timeMinStr,
+                    "received_time_max" to timeMaxStr
+                ).toString())
+            }
 
-            Log.i(TAG, "freebusy: time_min=$timeMinStr -> $timeMin, time_max=$timeMaxStr -> $timeMax, users=${userIds.size}")
+            Log.i(TAG, "[FREEBUSY] Calling batch API: time_min=$timeMinStr -> $timeMin, time_max=$timeMaxStr -> $timeMax, user_ids=${userIds.size}")
 
-            // Correct endpoint: POST /open-apis/calendar/v4/freebusy/batch
             val body = mapOf(
                 "time_min" to timeMin,
                 "time_max" to timeMax,
@@ -725,14 +1058,29 @@ class FeishuCalendarFreebusyTool(config: FeishuConfig, client: FeishuClient) : F
             if (result.isFailure) {
                 return@withContext ToolResult.error(result.exceptionOrNull()?.message ?: "Failed to query freebusy")
             }
-            ToolResult.success(result.getOrNull()?.getAsJsonObject("data"))
+            val data = result.getOrNull()?.getAsJsonObject("data")
+            val freebusyLists = data?.getAsJsonArray("freebusy_lists") ?: JsonArray()
+            Log.i(TAG, "[FREEBUSY] Success: returned ${freebusyLists.size()} user(s) freebusy data")
+
+            val response = JsonObject().apply {
+                add("freebusy_lists", freebusyLists)
+                val debug = JsonObject().apply {
+                    addProperty("time_min_input", timeMinStr)
+                    addProperty("time_min_rfc3339", timeMin)
+                    addProperty("time_max_input", timeMaxStr)
+                    addProperty("time_max_rfc3339", timeMax)
+                    addProperty("user_count", userIds.size)
+                }
+                add("_debug", debug)
+            }
+            ToolResult.success(response)
         } catch (e: Exception) {
             Log.e(TAG, "feishu_calendar_freebusy failed", e)
             ToolResult.error(e.message ?: "Unknown error")
         }
     }
 
-    // @aligned openclaw-lark v2026.3.30
+    // @aligned openclaw-lark v2026.3.30 — line-by-line
     override fun getToolDefinition() = ToolDefinition(
         function = FunctionDefinition(
             name = name,
@@ -740,9 +1088,9 @@ class FeishuCalendarFreebusyTool(config: FeishuConfig, client: FeishuClient) : F
             parameters = ParametersSchema(
                 properties = mapOf(
                     "action" to PropertySchema("string", "操作类型", enum = listOf("list")),
-                    "time_min" to PropertySchema("string", "查询起始时间（ISO 8601 / RFC 3339 格式，例如 '2024-01-01T00:00:00+08:00'）"),
+                    "time_min" to PropertySchema("string", "查询起始时间（ISO 8601 / RFC 3339 格式（包含时区），例如 '2024-01-01T00:00:00+08:00'）"),
                     "time_max" to PropertySchema("string", "查询结束时间（ISO 8601 / RFC 3339 格式）"),
-                    "user_ids" to PropertySchema("array", "用户 open_id 列表（1-10 个），扁平字符串数组",
+                    "user_ids" to PropertySchema("array", "要查询忙闲的用户 ID 列表（1-10 个用户）",
                         items = PropertySchema("string", "用户 open_id"))
                 ),
                 required = listOf("action", "time_min", "time_max", "user_ids")
