@@ -1968,16 +1968,28 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
      * 重新启动微信通道（扫码登录成功后调用）。
      * 会先停掉旧的 channel（如有），再重新初始化并启动 monitor。
      */
+    // Track WeChat collector job to cancel on restart (prevents duplicate collectors)
+    private var weixinCollectorJob: kotlinx.coroutines.Job? = null
+
     fun restartWeixinChannel() {
         Log.i(TAG, "🔄 restartWeixinChannel() 被调用")
         weixinChannel?.stop()
         weixinChannel = null
+        weixinCollectorJob?.cancel()
+        weixinCollectorJob = null
         startWeixinChannelIfEnabled()
     }
 
     private fun startWeixinChannelIfEnabled() {
         Log.i(TAG, "⏰ startWeixinChannelIfEnabled() 被调用")
-        GlobalScope.launch(Dispatchers.IO) {
+
+        // Cancel old collector + channel to prevent duplicate processing
+        weixinCollectorJob?.cancel()
+        weixinCollectorJob = null
+        weixinChannel?.stop()
+        weixinChannel = null
+
+        weixinCollectorJob = GlobalScope.launch(Dispatchers.IO) {
             try {
                 val configLoader = ConfigLoader(this@MyApplication)
                 val openClawConfig = configLoader.loadOpenClawConfig()
