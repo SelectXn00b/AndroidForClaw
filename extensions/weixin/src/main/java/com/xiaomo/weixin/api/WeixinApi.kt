@@ -35,6 +35,31 @@ class WeixinApi(
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
         private const val DEFAULT_LONG_POLL_TIMEOUT_MS = 35_000L
         private const val DEFAULT_API_TIMEOUT_MS = 15_000L
+        private const val SENT_CLIENT_IDS_MAX_SIZE = 200
+
+        /** 追踪 bot 发出的 clientId，用于过滤服务端 echo 回来的消息 */
+        private val sentClientIds = java.util.Collections.newSetFromMap(
+            java.util.LinkedHashMap<String, Boolean>()
+        )
+        private val sentClientIdsLock = Object()
+
+        fun trackClientId(clientId: String) {
+            synchronized(sentClientIdsLock) {
+                sentClientIds.add(clientId)
+                // Evict oldest
+                while (sentClientIds.size > SENT_CLIENT_IDS_MAX_SIZE) {
+                    val iter = sentClientIds.iterator()
+                    if (iter.hasNext()) { iter.next(); iter.remove() } else break
+                }
+            }
+        }
+
+        fun isSentClientId(clientId: String?): Boolean {
+            if (clientId == null) return false
+            synchronized(sentClientIdsLock) {
+                return sentClientIds.contains(clientId)
+            }
+        }
 
         /** 创建独立 Dispatcher，避免 shutdown 影响全局共享 executor */
         private fun newIsolatedDispatcher(name: String): Dispatcher {
@@ -177,10 +202,12 @@ class WeixinApi(
 
     /** Send a text message to a user. */
     suspend fun sendText(toUserId: String, text: String, contextToken: String?) {
+        val clientId = generateClientId()
+        trackClientId(clientId)
         val msg = WeixinMessage(
             fromUserId = "",
             toUserId = toUserId,
-            clientId = generateClientId(),
+            clientId = clientId,
             contextToken = contextToken,
             messageType = MessageType.BOT,
             messageState = MessageState.FINISH,

@@ -121,11 +121,24 @@ class WeixinMonitor(
                 // Process messages
                 val msgs = resp.msgs ?: emptyList()
                 for (msg in msgs) {
-                    // Skip bot's own messages (also skip null messageType to be safe)
-                    if (msg.messageType == MessageType.BOT || msg.messageType == null) continue
+                    // Skip non-user messages:
+                    // - BOT(2): bot's own messages echoed by server
+                    // - NONE(0): unknown type, possibly bot echo
+                    // - null: missing field, possibly bot echo
+                    val msgType = msg.messageType
+                    if (msgType == MessageType.BOT || msgType == MessageType.NONE || msgType == null) {
+                        Log.d(TAG, "⏭️ Skipping non-user message (type=$msgType)")
+                        continue
+                    }
 
                     // Skip messages without fromUserId
                     val fromUser = msg.fromUserId ?: continue
+
+                    // Skip if this is a bot-sent message echoed back by server
+                    if (WeixinApi.isSentClientId(msg.clientId)) {
+                        Log.d(TAG, "⏭️ Skipping bot echo (clientId=${msg.clientId})")
+                        continue
+                    }
 
                     // Deduplicate by message ID (getUpdates may return same message across polls)
                     val msgId = msg.messageId
