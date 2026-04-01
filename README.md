@@ -93,6 +93,8 @@ AI：→ skills_search("") → 展示可用技能列表
 | **BrowserForClaw** | AI 浏览器 (网页自动化) | 可选 |
 
 > Termux 需从 [F-Droid](https://f-droid.org/packages/com.termux/) 单独安装（不要用 Play Store 版本）。
+>
+> Termux 可选：不装也能用基础 shell 命令（`ls`、`cat`、`curl`、`input` 等），装了后有完整 Linux 环境（bash、python、git、apt）。
 
 ### 3 步上手
 
@@ -104,7 +106,15 @@ AI：→ skills_search("") → 展示可用技能列表
 
 ### Termux 配置（可选）
 
-装了 Termux，AI 就能跑 Shell 命令（Python/Node.js 需额外安装）。
+App 有两层 exec 工具，按需自动路由：
+
+| 工具 | 实现 | 无需 Termux | 装了 Termux |
+|------|------|------------|-------------|
+| **内置 Shell** | `ProcessBuilder` + `sh -c` | ✅ 基础命令可用（`ls`、`cat`、`curl`、`input` 等） | ✅ |
+| **Termux SSH** | SSH 连接池 → Termux sshd | ❌ | ✅ 完整 Linux 环境（bash、python、nodejs、git、apt） |
+
+不装 Termux：基础 shell 命令正常工作，截图/点击/输入等设备操作可用。
+装了 Termux：额外获得 Python/Node.js 运行环境、包管理器、完整工具链。
 
 **设置 → Termux 配置**，按向导完成：
 
