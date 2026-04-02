@@ -58,6 +58,9 @@ class AndroidToolRegistry(
         // Replaces: screenshot, get_view_tree, tap, swipe, type, long_press, home, back, open_app, wait
         register(DeviceToolSkillAdapter(context))
 
+        // === Android System API (直接调用系统 API，替代 UI 自动化) ===
+        register(AndroidApiSkill(context))
+
         // === App management tools ===
         register(ListInstalledAppsSkill(context))  // List apps
         register(InstallAppSkill(context))         // Install APK
