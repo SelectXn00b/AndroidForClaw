@@ -80,7 +80,7 @@ class WeixinQRLogin(
         while (System.currentTimeMillis() < deadline) {
             try {
                 val status = api.pollQRStatus(currentQrcode)
-                Log.d(TAG, "QR status: ${status.status}")
+                Log.i(TAG, "QR status: ${status.status}, botToken=${status.botToken?.take(20)}, botId=${status.ilinkBotId}")
 
                 when (status.status) {
                     "wait" -> {
@@ -155,6 +155,9 @@ class WeixinQRLogin(
                             userId = status.ilinkUserId,
                             message = "✅ 与微信连接成功！"
                         )
+                    }
+                    else -> {
+                        Log.w(TAG, "Unknown QR status: '${status.status}'")
                     }
                 }
             } catch (e: Exception) {

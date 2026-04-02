@@ -324,6 +324,7 @@ class WeixinApi(
 
                 override fun onResponse(call: Call, response: Response) {
                     val body = response.body?.string() ?: ""
+                    Log.i(TAG, "pollQRStatus response [${response.code}]: ${body.take(300)}")
                     if (!response.isSuccessful) {
                         if (cont.isActive) {
                             cont.resumeWithException(
