@@ -42,16 +42,17 @@ object ApiAdapter {
         tools: List<NewToolDefinition>?,
         temperature: Double,
         maxTokens: Int?,
-        reasoningEnabled: Boolean
+        reasoningEnabled: Boolean,
+        stream: Boolean = false
     ): JSONObject {
         val api = model.api ?: provider.api
 
         return when (api) {
             ModelApi.ANTHROPIC_MESSAGES -> buildAnthropicRequest(
-                model, messages, tools, temperature, maxTokens, reasoningEnabled
+                model, messages, tools, temperature, maxTokens, reasoningEnabled, stream
             )
             ModelApi.OPENAI_COMPLETIONS -> buildOpenAIRequest(
-                model, messages, tools, temperature, maxTokens, reasoningEnabled
+                model, messages, tools, temperature, maxTokens, reasoningEnabled, stream
             )
             ModelApi.OPENAI_RESPONSES,
             ModelApi.OPENAI_CODEX_RESPONSES -> buildOpenAIResponsesRequest(
@@ -61,14 +62,14 @@ object ApiAdapter {
                 model, messages, tools, temperature, maxTokens
             )
             ModelApi.OLLAMA -> buildOllamaRequest(
-                provider, model, messages, tools, temperature, maxTokens
+                provider, model, messages, tools, temperature, maxTokens, stream
             )
             ModelApi.GITHUB_COPILOT -> buildCopilotRequest(
-                model, messages, tools, temperature, maxTokens
+                model, messages, tools, temperature, maxTokens, stream
             )
             else -> {
                 // 默认使用 OpenAI 兼容格式
-                buildOpenAIRequest(model, messages, tools, temperature, maxTokens, reasoningEnabled)
+                buildOpenAIRequest(model, messages, tools, temperature, maxTokens, reasoningEnabled, stream)
             }
         }
     }
@@ -172,13 +173,15 @@ object ApiAdapter {
         tools: List<NewToolDefinition>?,
         temperature: Double,
         maxTokens: Int?,
-        reasoningEnabled: Boolean
+        reasoningEnabled: Boolean,
+        stream: Boolean = false
     ): JSONObject {
         val json = JSONObject()
 
         json.put("model", model.id)
         json.put("max_tokens", maxTokens ?: model.maxTokens)
         json.put("temperature", temperature)
+        if (stream) json.put("stream", true)
 
         // Convert message format
         val anthropicMessages = JSONArray()
@@ -345,12 +348,17 @@ object ApiAdapter {
         tools: List<NewToolDefinition>?,
         temperature: Double,
         maxTokens: Int?,
-        reasoningEnabled: Boolean
+        reasoningEnabled: Boolean,
+        stream: Boolean = false
     ): JSONObject {
         val json = JSONObject()
 
         json.put("model", model.id)
         json.put("temperature", temperature)
+        if (stream) {
+            json.put("stream", true)
+            json.put("stream_options", JSONObject().put("include_usage", true))
+        }
 
         // maxTokens field name (based on compatibility config + safe defaults)
         val modelIdLower = model.id.lowercase()
@@ -895,12 +903,13 @@ object ApiAdapter {
         messages: List<Message>,
         tools: List<NewToolDefinition>?,
         temperature: Double,
-        maxTokens: Int?
+        maxTokens: Int?,
+        stream: Boolean = false
     ): JSONObject {
         // Ollama /api/chat uses its own format: model, messages, stream, tools, options
         val json = JSONObject()
         json.put("model", model.id)
-        json.put("stream", false)
+        json.put("stream", stream)
 
         val ollamaMessages = JSONArray()
         messages.forEach { message ->
@@ -1041,10 +1050,11 @@ object ApiAdapter {
         messages: List<Message>,
         tools: List<NewToolDefinition>?,
         temperature: Double,
-        maxTokens: Int?
+        maxTokens: Int?,
+        stream: Boolean = false
     ): JSONObject {
         // GitHub Copilot uses OpenAI compatible format
-        return buildOpenAIRequest(model, messages, tools, temperature, maxTokens, false)
+        return buildOpenAIRequest(model, messages, tools, temperature, maxTokens, false, stream)
     }
 
     /**
@@ -1110,7 +1120,190 @@ object ApiAdapter {
 
         return json
     }
+
+    // ============ SSE Streaming Parsers ============
+
+    /**
+     * Parse a single SSE data line into a StreamChunk.
+     * Anthropic SSE uses event types + JSON data; OpenAI uses data-only lines.
+     *
+     * @param api The API type (ModelApi constant)
+     * @param eventType The SSE event type (Anthropic sends this; null for OpenAI)
+     * @param dataLine The JSON string from the "data: " line
+     */
+    fun parseStreamChunk(api: String, eventType: String?, dataLine: String): StreamChunk? {
+        return when (api) {
+            ModelApi.ANTHROPIC_MESSAGES -> parseAnthropicStreamChunk(eventType, dataLine)
+            else -> parseOpenAIStreamChunk(dataLine) // OpenAI, Ollama, Copilot all use same format
+        }
+    }
+
+    private fun parseAnthropicStreamChunk(eventType: String?, dataLine: String): StreamChunk? {
+        try {
+            val json = JSONObject(dataLine)
+            val type = json.optString("type", "")
+
+            return when (type) {
+                "content_block_delta" -> {
+                    val delta = json.getJSONObject("delta")
+                    when (delta.getString("type")) {
+                        "thinking_delta" -> StreamChunk(
+                            type = ChunkType.THINKING_DELTA,
+                            text = delta.getString("thinking")
+                        )
+                        "text_delta" -> StreamChunk(
+                            type = ChunkType.TEXT_DELTA,
+                            text = delta.getString("text")
+                        )
+                        "input_json_delta" -> StreamChunk(
+                            type = ChunkType.TOOL_CALL_DELTA,
+                            toolCallArgs = delta.getString("partial_json"),
+                            toolCallIndex = json.optInt("index", 0)
+                        )
+                        else -> null
+                    }
+                }
+                "content_block_start" -> {
+                    val block = json.getJSONObject("content_block")
+                    when (block.getString("type")) {
+                        "tool_use" -> StreamChunk(
+                            type = ChunkType.TOOL_CALL_DELTA,
+                            toolCallIndex = json.optInt("index", 0),
+                            toolCallId = block.getString("id"),
+                            toolCallName = block.getString("name")
+                        )
+                        else -> null // thinking/text block starts — no content yet
+                    }
+                }
+                "message_delta" -> {
+                    val delta = json.getJSONObject("delta")
+                    val stopReason = delta.optString("stop_reason", null)
+                    val usage = json.optJSONObject("usage")?.let {
+                        Usage(
+                            promptTokens = 0,
+                            completionTokens = it.optInt("output_tokens", 0)
+                        )
+                    }
+                    StreamChunk(
+                        type = if (stopReason != null) ChunkType.DONE else ChunkType.USAGE,
+                        finishReason = stopReason,
+                        usage = usage
+                    )
+                }
+                "message_stop" -> StreamChunk(type = ChunkType.DONE)
+                "ping" -> StreamChunk(type = ChunkType.PING)
+                "message_start" -> {
+                    val usage = json.optJSONObject("message")?.optJSONObject("usage")?.let {
+                        Usage(
+                            promptTokens = it.optInt("input_tokens", 0),
+                            completionTokens = 0
+                        )
+                    }
+                    if (usage != null) StreamChunk(type = ChunkType.USAGE, usage = usage) else null
+                }
+                else -> null
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("ApiAdapter", "Failed to parse Anthropic stream chunk: ${e.message}")
+            return null
+        }
+    }
+
+    private fun parseOpenAIStreamChunk(dataLine: String): StreamChunk? {
+        try {
+            val json = JSONObject(dataLine)
+
+            // Usage-only chunk (sent at end with stream_options.include_usage)
+            val usage = json.optJSONObject("usage")
+            if (usage != null && !json.has("choices")) {
+                return StreamChunk(
+                    type = ChunkType.USAGE,
+                    usage = Usage(
+                        promptTokens = usage.optInt("prompt_tokens", 0),
+                        completionTokens = usage.optInt("completion_tokens", 0)
+                    )
+                )
+            }
+
+            val choices = json.optJSONArray("choices")
+            if (choices == null || choices.length() == 0) return null
+
+            val choice = choices.getJSONObject(0)
+            val finishReason = choice.optString("finish_reason", null)
+                ?.takeIf { it != "null" && it.isNotEmpty() }
+
+            if (finishReason != null) {
+                return StreamChunk(
+                    type = ChunkType.DONE,
+                    finishReason = finishReason,
+                    usage = usage?.let {
+                        Usage(
+                            promptTokens = it.optInt("prompt_tokens", 0),
+                            completionTokens = it.optInt("completion_tokens", 0)
+                        )
+                    }
+                )
+            }
+
+            val delta = choice.optJSONObject("delta") ?: return null
+
+            // Reasoning content (o1/o3 models)
+            val reasoning = delta.optString("reasoning_content", null)
+                ?.takeIf { it.isNotEmpty() }
+            if (reasoning != null) {
+                return StreamChunk(type = ChunkType.THINKING_DELTA, text = reasoning)
+            }
+
+            // Text content
+            val content = delta.optString("content", null)
+                ?.takeIf { it.isNotEmpty() }
+            if (content != null) {
+                return StreamChunk(type = ChunkType.TEXT_DELTA, text = content)
+            }
+
+            // Tool calls
+            val toolCalls = delta.optJSONArray("tool_calls")
+            if (toolCalls != null && toolCalls.length() > 0) {
+                val tc = toolCalls.getJSONObject(0)
+                val fn = tc.optJSONObject("function")
+                return StreamChunk(
+                    type = ChunkType.TOOL_CALL_DELTA,
+                    toolCallIndex = tc.optInt("index", 0),
+                    toolCallId = tc.optString("id", null)?.takeIf { it.isNotEmpty() },
+                    toolCallName = fn?.optString("name", null)?.takeIf { it.isNotEmpty() },
+                    toolCallArgs = fn?.optString("arguments", null)?.takeIf { it.isNotEmpty() }
+                )
+            }
+
+            return null
+        } catch (e: Exception) {
+            android.util.Log.w("ApiAdapter", "Failed to parse OpenAI stream chunk: ${e.message}")
+            return null
+        }
+    }
 }
+
+// ============ SSE Streaming Types ============
+
+enum class ChunkType {
+    THINKING_DELTA,
+    TEXT_DELTA,
+    TOOL_CALL_DELTA,
+    DONE,
+    PING,
+    USAGE
+}
+
+data class StreamChunk(
+    val type: ChunkType,
+    val text: String = "",
+    val toolCallIndex: Int? = null,
+    val toolCallId: String? = null,
+    val toolCallName: String? = null,
+    val toolCallArgs: String? = null,
+    val finishReason: String? = null,
+    val usage: Usage? = null
+)
 
 /**
  * 解析后的响应

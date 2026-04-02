@@ -226,6 +226,14 @@ class MainEntryAgentHandler(
             is ProgressUpdate.Yielded -> mapOf(
                 "type" to "yielded"
             )
+            is ProgressUpdate.ReasoningDelta -> mapOf(
+                "type" to "reasoning_delta",
+                "text" to update.text
+            )
+            is ProgressUpdate.ContentDelta -> mapOf(
+                "type" to "content_delta",
+                "text" to update.text
+            )
         }
     }
 }

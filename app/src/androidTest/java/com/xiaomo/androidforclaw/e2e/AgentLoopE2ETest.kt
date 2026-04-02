@@ -178,6 +178,8 @@ class AgentLoopE2ETest {
                         is ProgressUpdate.SubagentSpawned -> IterationLog(0, "subagent_spawned", toolResult = "${update.label} (${update.runId})")
                         is ProgressUpdate.SubagentAnnounced -> IterationLog(0, "subagent_announced", toolResult = "${update.label}: ${update.status}")
                         is ProgressUpdate.Yielded -> IterationLog(0, "yielded")
+                        is ProgressUpdate.ReasoningDelta -> IterationLog(0, "reasoning_delta", toolResult = update.text.take(200))
+                        is ProgressUpdate.ContentDelta -> IterationLog(0, "content_delta", toolResult = update.text.take(200))
                     }
                     iterationLogs.add(log)
                 }

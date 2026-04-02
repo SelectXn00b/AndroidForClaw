@@ -8,7 +8,7 @@ package com.xiaomo.androidforclaw.providers
  *
  * Note: pi-embedded-runner.ts is a barrel re-export; actual logic is in pi-embedded-runner/run/attempt.ts etc.
  *
- * AndroidForClaw adaptation: unified provider dispatch for Android (non-streaming batch calls).
+ * AndroidForClaw adaptation: unified provider dispatch for Android (batch + SSE streaming).
  */
 
 
@@ -25,6 +25,9 @@ import com.xiaomo.androidforclaw.providers.llm.ParametersSchema as NewParameters
 import com.xiaomo.androidforclaw.providers.llm.PropertySchema as NewPropertySchema
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -142,6 +145,123 @@ class UnifiedLLMProvider(private val context: Context) {
 
         return@withContext fallbackResult.result
     }
+
+    /**
+     * 流式聊天 — 返回 Flow<StreamChunk>，实时 emit SSE 增量
+     * 对齐 OpenClaw streamSimple / pi-embedded-subscribe.handlers.messages.ts
+     */
+    fun chatWithToolsStreaming(
+        messages: List<Message>,
+        tools: List<ToolDefinition>?,
+        modelRef: String? = null,
+        temperature: Double = DEFAULT_TEMPERATURE,
+        maxTokens: Int? = null,
+        reasoningEnabled: Boolean = false
+    ): Flow<StreamChunk> = flow {
+        val newTools = tools?.map { convertToolDefinition(it) }
+        val (resolvedProviderName, resolvedModelId) = parseModelRef(modelRef)
+
+        // Resolve provider/model config (same logic as performRequest)
+        val aliasResolved = configLoader.resolveModelId(resolvedModelId)
+        val normalizedModelId = ModelIdNormalization.normalizeModelId(resolvedProviderName, aliasResolved)
+        val providerRaw = configLoader.getProviderConfig(resolvedProviderName)
+            ?: throw LLMException("Provider not found: $resolvedProviderName")
+        val modelRaw = providerRaw.models.find { it.id == normalizedModelId }
+            ?: providerRaw.models.find { it.id == resolvedModelId }
+            ?: throw LLMException("Model not found: $normalizedModelId in provider: $resolvedProviderName")
+        val (provider, model) = ModelCompat.normalizeModelCompat(providerRaw, modelRaw, resolvedProviderName)
+
+        val api = model.api ?: provider.api
+
+        // Gemini/Responses APIs don't support our SSE parser — fallback to batch
+        if (api == ModelApi.GOOGLE_GENERATIVE_AI || api == ModelApi.OPENAI_RESPONSES || api == ModelApi.OPENAI_CODEX_RESPONSES) {
+            Log.d(TAG, "⚠️ API $api does not support streaming, falling back to batch")
+            val batchResponse = performRequest(messages, newTools, resolvedProviderName, resolvedModelId, temperature, maxTokens, reasoningEnabled)
+            batchResponse.thinkingContent?.let { emit(StreamChunk(type = ChunkType.THINKING_DELTA, text = it)) }
+            batchResponse.content?.let { emit(StreamChunk(type = ChunkType.TEXT_DELTA, text = it)) }
+            emit(StreamChunk(type = ChunkType.DONE, finishReason = batchResponse.finishReason))
+            return@flow
+        }
+
+        // Build streaming request
+        val apiKeys = ApiKeyRotation.splitApiKeys(provider.apiKey)
+        val activeKey = apiKeys.firstOrNull() ?: provider.apiKey
+        val activeProvider = if (activeKey != provider.apiKey) provider.copy(apiKey = activeKey) else provider
+
+        val requestBody = ApiAdapter.buildRequestBody(
+            provider = activeProvider,
+            model = model,
+            messages = messages,
+            tools = newTools,
+            temperature = temperature,
+            maxTokens = maxTokens,
+            reasoningEnabled = reasoningEnabled,
+            stream = true
+        )
+
+        val headers = ApiAdapter.buildHeaders(activeProvider, model)
+        val apiUrl = buildApiUrl(activeProvider, model)
+
+        val finalRequestBody = normalizeOpenAiTokenField(model, requestBody)
+        Log.d(TAG, "📤 Streaming request to $apiUrl")
+
+        val request = Request.Builder()
+            .url(apiUrl)
+            .headers(headers)
+            .post(finalRequestBody.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+
+        val response = httpClient.newCall(request).execute()
+
+        if (!response.isSuccessful) {
+            val errorBody = response.body?.string() ?: "Unknown error"
+            response.close()
+            throw LLMException("Streaming API request failed: ${response.code} - $errorBody")
+        }
+
+        val source = response.body?.source()
+            ?: throw LLMException("Empty streaming response body")
+
+        try {
+            var currentEventType: String? = null
+            val isAnthropic = api == ModelApi.ANTHROPIC_MESSAGES
+
+            while (!source.exhausted()) {
+                val line = source.readUtf8Line() ?: break
+
+                // SSE format: "event: <type>" followed by "data: <json>"
+                if (line.startsWith("event: ")) {
+                    currentEventType = line.removePrefix("event: ").trim()
+                    continue
+                }
+
+                if (line.startsWith("data: ")) {
+                    val data = line.removePrefix("data: ").trim()
+                    if (data == "[DONE]") {
+                        emit(StreamChunk(type = ChunkType.DONE))
+                        break
+                    }
+                    if (data.isEmpty()) continue
+
+                    val chunk = ApiAdapter.parseStreamChunk(
+                        api = api,
+                        eventType = if (isAnthropic) currentEventType else null,
+                        dataLine = data
+                    )
+                    if (chunk != null && chunk.type != ChunkType.PING) {
+                        emit(chunk)
+                    }
+                    currentEventType = null
+                    continue
+                }
+
+                // Empty line or comment — ignore
+            }
+        } finally {
+            source.close()
+            response.close()
+        }
+    }.flowOn(Dispatchers.IO)
 
     /**
      * Execute LLM request for a specific provider/model with retry and API key rotation.

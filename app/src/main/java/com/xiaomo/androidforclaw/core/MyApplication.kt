@@ -1313,7 +1313,7 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                             // Start streaming card on first Thinking event
                             update is ProgressUpdate.Thinking && streamingCard != null && !streamingFailed && streamingCard.cardId == null -> {
                                 try {
-                                    val startResult = streamingCard.start("Thinking...")
+                                    val startResult = streamingCard.start("*Thinking...*")
                                     if (startResult.isSuccess) {
                                         val cardId = startResult.getOrNull()!!
                                         val sender = feishuChannel?.sender
@@ -1350,6 +1350,20 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                             update is ProgressUpdate.ToolCall && streamingCard?.isActive() == true -> {
                                 try {
                                     streamingCard.appendText("`Using: ${update.name}...`\n\n")
+                                } catch (e: Exception) { /* ignore */ }
+                            }
+
+                            // 流式增量: reasoning token 实时追加到流式卡片
+                            update is ProgressUpdate.ReasoningDelta && streamingCard?.isActive() == true -> {
+                                try {
+                                    streamingCard.appendText(update.text)
+                                } catch (e: Exception) { /* ignore */ }
+                            }
+
+                            // 流式增量: content token 实时追加到流式卡片
+                            update is ProgressUpdate.ContentDelta && streamingCard?.isActive() == true -> {
+                                try {
+                                    streamingCard.appendText(update.text)
                                 } catch (e: Exception) { /* ignore */ }
                             }
 

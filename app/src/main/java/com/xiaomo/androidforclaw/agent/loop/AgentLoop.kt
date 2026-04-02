@@ -29,6 +29,11 @@ import com.xiaomo.androidforclaw.agent.tools.SkillResult
 import com.xiaomo.androidforclaw.agent.tools.Tool
 import com.xiaomo.androidforclaw.agent.tools.ToolCallDispatcher
 import com.xiaomo.androidforclaw.agent.tools.ToolRegistry
+import com.xiaomo.androidforclaw.providers.ChunkType
+import com.xiaomo.androidforclaw.providers.LLMResponse
+import com.xiaomo.androidforclaw.providers.LLMToolCall
+import com.xiaomo.androidforclaw.providers.LLMUsage
+import com.xiaomo.androidforclaw.providers.StreamChunk
 import com.xiaomo.androidforclaw.providers.UnifiedLLMProvider
 import com.xiaomo.androidforclaw.providers.llm.ImageBlock
 import com.xiaomo.androidforclaw.providers.llm.Message
@@ -473,7 +478,7 @@ class AgentLoop(
                     aggressiveTrimMessages(messages, budgetChars)
                 }
 
-                writeLog("📤 调用 UnifiedLLMProvider.chatWithTools...")
+                writeLog("📤 调用 UnifiedLLMProvider.chatWithToolsStreaming...")
                 writeLog("   Messages: ${messages.size}, Tools+Skills: ${allToolDefinitions.size}")
 
                 // 🔔 Send intermediate feedback: thinking step X
@@ -481,24 +486,82 @@ class AgentLoop(
 
                 val llmStartTime = System.currentTimeMillis()
 
-                // ⏱️ Add timeout protection
-                val response = try {
+                // ⏱️ SSE 流式调用 + timeout 保护
+                // 对齐 OpenClaw streamSimple → thinking_delta/text_delta 实时推送
+                val response: LLMResponse
+                try {
+                    val thinkingAccumulated = StringBuilder()
+                    val contentAccumulated = StringBuilder()
+                    data class ToolCallAccum(
+                        var id: String = "",
+                        var name: String = "",
+                        val args: StringBuilder = StringBuilder()
+                    )
+                    val toolCallsAccumulated = mutableMapOf<Int, ToolCallAccum>()
+                    var finalUsage: LLMUsage? = null
+                    var finalFinishReason: String? = null
+
                     kotlinx.coroutines.withTimeout(LLM_TIMEOUT_MS) {
-                        llmProvider.chatWithTools(
+                        llmProvider.chatWithToolsStreaming(
                             messages = messages,
                             tools = allToolDefinitions,
                             modelRef = modelRef,
                             reasoningEnabled = reasoningEnabled
-                        )
+                        ).collect { chunk ->
+                            when (chunk.type) {
+                                ChunkType.THINKING_DELTA -> {
+                                    thinkingAccumulated.append(chunk.text)
+                                    _progressFlow.emit(ProgressUpdate.ReasoningDelta(chunk.text))
+                                }
+                                ChunkType.TEXT_DELTA -> {
+                                    contentAccumulated.append(chunk.text)
+                                    _progressFlow.emit(ProgressUpdate.ContentDelta(chunk.text))
+                                }
+                                ChunkType.TOOL_CALL_DELTA -> {
+                                    val idx = chunk.toolCallIndex ?: 0
+                                    val accum = toolCallsAccumulated.getOrPut(idx) { ToolCallAccum() }
+                                    if (!chunk.toolCallId.isNullOrEmpty()) accum.id = chunk.toolCallId
+                                    if (!chunk.toolCallName.isNullOrEmpty()) accum.name = chunk.toolCallName
+                                    if (!chunk.toolCallArgs.isNullOrEmpty()) accum.args.append(chunk.toolCallArgs)
+                                }
+                                ChunkType.DONE -> {
+                                    finalFinishReason = chunk.finishReason ?: finalFinishReason
+                                    chunk.usage?.let { u ->
+                                        finalUsage = LLMUsage(u.promptTokens, u.completionTokens, u.totalTokens)
+                                    }
+                                }
+                                ChunkType.USAGE -> {
+                                    chunk.usage?.let { u ->
+                                        finalUsage = LLMUsage(u.promptTokens, u.completionTokens, u.totalTokens)
+                                    }
+                                }
+                                ChunkType.PING -> { /* ignore */ }
+                            }
+                        }
                     }
+
+                    // 组装完整 LLMResponse（与后续工具调用逻辑衔接）
+                    response = LLMResponse(
+                        content = contentAccumulated.toString().ifEmpty { null },
+                        toolCalls = if (toolCallsAccumulated.isEmpty()) null else {
+                            toolCallsAccumulated.entries.sortedBy { it.key }.map { (_, tc) ->
+                                LLMToolCall(
+                                    id = tc.id.ifEmpty { "call_${System.currentTimeMillis()}" },
+                                    name = tc.name,
+                                    arguments = tc.args.toString()
+                                )
+                            }
+                        },
+                        thinkingContent = thinkingAccumulated.toString().ifEmpty { null },
+                        usage = finalUsage,
+                        finishReason = finalFinishReason
+                    )
                 } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                     val errorMsg = "LLM 调用超时 (${LLM_TIMEOUT_MS / 1000}s)"
                     writeLog("⏰ $errorMsg")
                     Log.w(TAG, errorMsg)
 
                     // ── Timeout compaction (aligned with OpenClaw) ──
-                    // When LLM times out with high context usage, try compacting
-                    // before retrying to break the timeout death spiral.
                     val totalCharsNow = ToolResultContextGuard.estimateContextChars(messages)
                     val budgetCharsNow = (contextWindowTokens * 4 * 0.75).toInt()
                     val tokenUsedRatio = if (budgetCharsNow > 0) totalCharsNow.toFloat() / budgetCharsNow else 0f
@@ -510,7 +573,6 @@ class AgentLoop(
                         writeLog("🔄 Timeout compaction attempt $timeoutCompactionAttempts/$MAX_TIMEOUT_COMPACTION_ATTEMPTS " +
                             "(context usage: ${(tokenUsedRatio * 100).toInt()}%)")
 
-                        // Try context recovery via compaction
                         if (contextManager != null) {
                             val recoveryResult = contextManager.handleContextOverflow(
                                 error = e,
@@ -524,15 +586,12 @@ class AgentLoop(
                             }
                         }
 
-                        // Fallback: aggressive prune old tool results
                         pruneOldToolResults(messages, contextWindowTokens)
                         aggressiveTrimMessages(messages, budgetCharsNow)
                         writeLog("✅ Timeout compaction fallback: pruned context")
                         continue
                     }
 
-                    // No compaction possible — surface timeout to user
-                    // (aligned with OpenClaw: surface error when compaction exhausted)
                     writeLog("❌ LLM timeout after $timeoutCompactionAttempts compaction attempts, surfacing error")
                     finalContent = "⏰ LLM 调用超时。请简化问题或使用 /new 开始新对话。"
                     break
@@ -540,14 +599,13 @@ class AgentLoop(
 
                 val llmDuration = System.currentTimeMillis() - llmStartTime
 
-                writeLog("✅ LLM 响应已收到 [耗时: ${llmDuration}ms]")
+                writeLog("✅ LLM 流式响应完成 [耗时: ${llmDuration}ms]")
 
-                // ⚠️ Log warning if response time is too long
                 if (llmDuration > 30_000) {
                     writeLog("⚠️ LLM 响应耗时较长: ${llmDuration}ms")
                 }
 
-                // 4.2 Display reasoning thinking process
+                // 4.2 Display reasoning thinking process (完整内容，流式增量已在 collect 中发出)
                 response.thinkingContent?.let { reasoning ->
                     writeLog("🧠 Reasoning (${reasoning.length} chars):")
                     writeLog("   ${reasoning.take(500)}${if (reasoning.length > 500) "..." else ""}")
@@ -1172,4 +1230,10 @@ sealed class ProgressUpdate {
 
     /** The agent loop yielded (sessions_yield) to wait for subagent results */
     data object Yielded : ProgressUpdate()
+
+    /** Streaming: incremental reasoning/thinking token */
+    data class ReasoningDelta(val text: String) : ProgressUpdate()
+
+    /** Streaming: incremental content token */
+    data class ContentDelta(val text: String) : ProgressUpdate()
 }

@@ -724,6 +724,14 @@ object MainEntryNew {
                 )
                 emitProgressToUi("yielded", "等待子代理", "已暂停，等待子代理结果...")
             }
+
+            is ProgressUpdate.ReasoningDelta -> {
+                // 流式增量 reasoning — 不更新 float window（太频繁）
+            }
+
+            is ProgressUpdate.ContentDelta -> {
+                // 流式增量 content — 不更新 float window（太频繁）
+            }
         }
     }
 

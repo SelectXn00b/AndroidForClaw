@@ -312,6 +312,18 @@ Instructions:
                                 "runId" to runId
                             ))
                         }
+                        is ProgressUpdate.ReasoningDelta -> {
+                            broadcastEvent("agent.reasoning_delta", mapOf(
+                                "runId" to runId,
+                                "text" to progress.text
+                            ))
+                        }
+                        is ProgressUpdate.ContentDelta -> {
+                            broadcastEvent("agent.content_delta", mapOf(
+                                "runId" to runId,
+                                "text" to progress.text
+                            ))
+                        }
                     }
                 }
                 .launchIn(agentScope)
