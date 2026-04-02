@@ -270,59 +270,88 @@ class MainActivityCompose : ComponentActivity() {
     }
 
     /**
-     * Check file server for updates in background.
-     * 同一版本号每天最多弹一次更新弹窗。
+     * Check file server for updates.
+     * - 已下载：直接弹窗询问安装
+     * - 未下载：后台自动下载，下载完成弹窗
+     * - 频次限制：同版本号每天最多弹一次
      */
     fun silentUpdateCheck() {
         lifecycleScope.launch {
             try {
                 val updater = com.xiaomo.androidforclaw.updater.AppUpdater(this@MainActivityCompose)
                 val info = updater.checkForUpdate()
-                if (info.hasUpdate && info.downloadUrl != null) {
-                    // 频次限制：同版本号每天最多弹一次
-                    val prefs = getSharedPreferences("update_check", MODE_PRIVATE)
-                    val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-                    val key = "dismissed_${info.latestVersion}_$today"
-                    if (prefs.getBoolean(key, false)) return@launch
+                if (!info.hasUpdate || info.downloadUrl == null) return@launch
 
-                    val sizeStr = if (info.fileSize > 0) "%.1f MB".format(info.fileSize / 1024.0 / 1024.0) else ""
-                    val message = buildString {
-                        append("发现新版本 v${info.latestVersion}\n")
-                        append("当前版本 v${info.currentVersion}\n")
-                        if (sizeStr.isNotEmpty()) append("大小: $sizeStr\n")
-                        if (!info.releaseNotes.isNullOrEmpty()) {
-                            append("\n${info.releaseNotes.take(200)}")
-                        }
+                val prefs = getSharedPreferences("update_check", MODE_PRIVATE)
+                val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+                val key = "dismissed_${info.latestVersion}_$today"
+
+                // 频次限制：同版本号当天被关闭就不弹
+                if (prefs.getBoolean(key, false)) return@launch
+
+                // 已下载该版本 → 直接弹安装确认
+                if (updater.hasDownloadedUpdate() && updater.getDownloadedVersion() == info.latestVersion) {
+                    showInstallDialog(updater, info, prefs, key)
+                    return@launch
+                }
+
+                // 没下载过 → 后台自动下载
+                val sizeStr = if (info.fileSize > 0) "%.1f MB".format(info.fileSize / 1024.0 / 1024.0) else ""
+                val message = buildString {
+                    append("发现新版本 v${info.latestVersion}")
+                    if (sizeStr.isNotEmpty()) append("（$sizeStr）")
+                    append("\n当前版本 v${info.currentVersion}\n")
+                    if (!info.releaseNotes.isNullOrEmpty()) {
+                        append("\n${info.releaseNotes.take(200)}")
                     }
+                }
 
-                    androidx.appcompat.app.AlertDialog.Builder(this@MainActivityCompose)
-                        .setTitle("发现新版本")
-                        .setMessage(message)
-                        .setPositiveButton("立即更新") { _, _ ->
-                            lifecycleScope.launch {
-                                val success = updater.downloadAndInstall(info.downloadUrl, info.latestVersion)
-                                if (!success) {
-                                    try {
-                                        startActivity(android.content.Intent(
-                                            android.content.Intent.ACTION_VIEW,
-                                            android.net.Uri.parse(info.releaseUrl)
-                                        ))
-                                    } catch (_: Exception) {}
-                                }
+                androidx.appcompat.app.AlertDialog.Builder(this@MainActivityCompose)
+                    .setTitle("发现新版本")
+                    .setMessage(message)
+                    .setPositiveButton("后台下载") { _, _ ->
+                        // 后台下载，下载完弹安装
+                        lifecycleScope.launch {
+                            val success = updater.downloadUpdate(info.downloadUrl, info.latestVersion)
+                            if (success) {
+                                showInstallDialog(updater, info, prefs, key)
                             }
                         }
-                        .setNegativeButton("稍后再说") { _, _ ->
-                            prefs.edit().putBoolean(key, true).apply()
-                        }
-                        .setOnCancelListener {
-                            prefs.edit().putBoolean(key, true).apply()
-                        }
-                        .show()
-                }
+                    }
+                    .setNegativeButton("稍后再说") { _, _ ->
+                        prefs.edit().putBoolean(key, true).apply()
+                    }
+                    .setOnCancelListener {
+                        prefs.edit().putBoolean(key, true).apply()
+                    }
+                    .show()
             } catch (_: Exception) {
                 // Silent — don't interrupt user
             }
         }
+    }
+
+    /** 弹窗确认安装已下载的 APK */
+    private fun showInstallDialog(
+        updater: com.xiaomo.androidforclaw.updater.AppUpdater,
+        info: com.xiaomo.androidforclaw.updater.AppUpdater.UpdateInfo,
+        prefs: android.content.SharedPreferences,
+        key: String
+    ) {
+        if (isFinishing) return
+        androidx.appcompat.app.AlertDialog.Builder(this@MainActivityCompose)
+            .setTitle("更新已就绪")
+            .setMessage("v${info.latestVersion} 已下载完成，是否安装？")
+            .setPositiveButton("安装") { _, _ ->
+                updater.installUpdate()
+            }
+            .setNegativeButton("稍后") { _, _ ->
+                prefs.edit().putBoolean(key, true).apply()
+            }
+            .setOnCancelListener {
+                prefs.edit().putBoolean(key, true).apply()
+            }
+            .show()
     }
 
     override fun onPause() {

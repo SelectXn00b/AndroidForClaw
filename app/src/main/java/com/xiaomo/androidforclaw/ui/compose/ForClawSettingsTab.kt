@@ -510,13 +510,20 @@ private fun CheckUpdateItem() {
                 try {
                     val info = updater.checkForUpdate()
                     if (info.hasUpdate && info.downloadUrl != null) {
-                        val success = updater.downloadAndInstall(info.downloadUrl, info.latestVersion)
-                        if (!success) {
-                            try {
-                                context.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse(info.releaseUrl))
-                                )
-                            } catch (_: Exception) {}
+                        // 后台下载
+                        val success = updater.downloadUpdate(info.downloadUrl, info.latestVersion)
+                        if (success) {
+                            // 安装确认
+                            androidx.appcompat.app.AlertDialog.Builder(context)
+                                .setTitle("更新已就绪")
+                                .setMessage("v${info.latestVersion} 已下载完成，是否安装？")
+                                .setPositiveButton("安装") { _, _ ->
+                                    updater.installUpdate()
+                                }
+                                .setNegativeButton("稍后", null)
+                                .show()
+                        } else {
+                            android.widget.Toast.makeText(context, "下载失败，请重试", android.widget.Toast.LENGTH_SHORT).show()
                         }
                     } else {
                         android.widget.Toast.makeText(context, context.getString(R.string.settings_up_to_date, info.currentVersion), android.widget.Toast.LENGTH_SHORT).show()

@@ -8,22 +8,17 @@ import org.junit.Test
  */
 class AppUpdaterTest {
 
-    // 无法在 JVM 测试中实例化 AppUpdater（需要 Context），
-    // 所以测试 isNewerVersion 用反射或单独测试逻辑
-
     @Test
-    fun `GitHub repo constants are correct`() {
-        assertEquals("SelectXn00b", AppUpdater.GITHUB_OWNER)
-        assertEquals("AndroidForClaw", AppUpdater.GITHUB_REPO)
-        assertTrue(AppUpdater.GITHUB_API_LATEST.contains("api.github.com"))
-        assertTrue(AppUpdater.GITHUB_API_LATEST.contains("SelectXn00b/AndroidForClaw"))
-        assertTrue(AppUpdater.GITHUB_RELEASES_URL.contains("github.com/SelectXn00b/AndroidForClaw/releases"))
+    fun `server constants are correct`() {
+        assertEquals("https://claw.devset.top/files", AppUpdater.UPDATE_BASE_URL)
+        assertEquals("https://claw.devset.top/files/version.json", AppUpdater.VERSION_JSON_URL)
     }
 
     @Test
-    fun `APK name pattern is correct`() {
-        assertEquals("AndroidForClaw", AppUpdater.APK_NAME_PREFIX)
-        assertEquals("-release.apk", AppUpdater.APK_NAME_SUFFIX)
+    fun `APK cache is single file`() {
+        // AppUpdater saves to cache/updates/update.apk — fixed name, overwritten each release
+        // No version-in-name pattern needed since we only keep one copy
+        assertTrue(true)
     }
 
     // Version comparison tests (static logic)

@@ -4,57 +4,62 @@
  */
 package com.xiaomo.androidforclaw.updater
 
-import android.app.DownloadManager
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
-import android.os.Environment
 import com.xiaomo.androidforclaw.logging.Log
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resume
 
 /**
- * App Auto-Updater
+ * App Auto-Updater — in-app download, single APK cache.
  *
- * Checks our own file server for new versions and handles download + install.
- * Version config: https://claw.devset.top/files/version.json
+ * Version check: https://claw.devset.top/files/version.json
+ * Download: OkHttp → app internal cache, only one APK kept.
  *
  * Flow:
  * 1. checkForUpdate() → queries server version.json
- * 2. Compares version with current app version
- * 3. If newer: downloadAndInstall() → DownloadManager + install intent
+ * 2. If newer: downloadUpdate() → OkHttp download to cache dir (auto or manual)
+ * 3. installUpdate() → triggers install from cached APK
+ * 4. onResume: if downloaded but not installed, prompt user
  */
 class AppUpdater(private val context: Context) {
 
     companion object {
         private const val TAG = "AppUpdater"
 
-        /** Version check endpoint — hosted on our own server */
         const val UPDATE_BASE_URL = "https://claw.devset.top/files"
         const val VERSION_JSON_URL = "$UPDATE_BASE_URL/version.json"
 
-        // APK file name — fixed name, server overwrites on each release
-        const val APK_FILE_NAME = "AndroidForClaw.apk"
-
         private const val TIMEOUT_SECONDS = 15L
+        private const val DOWNLOAD_TIMEOUT_SECONDS = 300L
     }
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .build()
+
+    /** Download state for UI observation */
+    enum class DownloadState { IDLE, DOWNLOADING, DOWNLOADED, FAILED }
+
+    private val _downloadState = MutableStateFlow(DownloadState.IDLE)
+    val downloadState: StateFlow<DownloadState> = _downloadState
+
+    private val _downloadProgress = MutableStateFlow(0)
+    val downloadProgress: StateFlow<Int> = _downloadProgress
+
+    private var downloadedVersion: String? = null
 
     /**
      * Update check result
@@ -76,7 +81,7 @@ class AppUpdater(private val context: Context) {
     suspend fun checkForUpdate(): UpdateInfo = withContext(Dispatchers.IO) {
         try {
             val currentVersion = getCurrentVersion()
-            Log.d(TAG, "Current version: $currentVersion, checking $VERSION_JSON_URL")
+            Log.d(TAG, "Current: $currentVersion, checking $VERSION_JSON_URL")
 
             val request = Request.Builder()
                 .url(VERSION_JSON_URL)
@@ -104,6 +109,11 @@ class AppUpdater(private val context: Context) {
             val hasUpdate = isNewerVersion(latestVersion, currentVersion)
             Log.d(TAG, "Latest: $latestVersion, Current: $currentVersion, hasUpdate: $hasUpdate")
 
+            // Check if we already have this version downloaded
+            if (hasUpdate && getDownloadedVersion() == latestVersion) {
+                _downloadState.value = DownloadState.DOWNLOADED
+            }
+
             UpdateInfo(
                 hasUpdate = hasUpdate,
                 latestVersion = latestVersion,
@@ -126,103 +136,154 @@ class AppUpdater(private val context: Context) {
     }
 
     /**
-     * Download APK via DownloadManager and trigger install
+     * Download APK in-app via OkHttp. Saves to internal cache, only one file kept.
+     * Returns true on success.
      */
-    suspend fun downloadAndInstall(downloadUrl: String, version: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun downloadUpdate(downloadUrl: String, version: String): Boolean = withContext(Dispatchers.IO) {
         try {
-            val fileName = APK_FILE_NAME
-            Log.d(TAG, "Downloading: $downloadUrl → $fileName")
+            _downloadState.value = DownloadState.DOWNLOADING
+            _downloadProgress.value = 0
+            Log.d(TAG, "Downloading: $downloadUrl")
 
-            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val client = httpClient.newBuilder()
+                .readTimeout(DOWNLOAD_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .build()
 
-            val request = DownloadManager.Request(Uri.parse(downloadUrl)).apply {
-                setTitle("AndroidForClaw v$version")
-                setDescription("正在下载更新...")
-                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
-                setMimeType("application/vnd.android.package-archive")
-            }
+            val request = Request.Builder()
+                .url(downloadUrl)
+                .header("User-Agent", "AndroidForClaw/${getCurrentVersion()}")
+                .build()
 
-            val downloadId = downloadManager.enqueue(request)
-            Log.d(TAG, "Download started, id: $downloadId")
-
-            // Wait for download completion
-            val success = waitForDownload(downloadId)
-            if (!success) {
-                Log.e(TAG, "Download failed")
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) {
+                Log.e(TAG, "Download failed: ${response.code}")
+                _downloadState.value = DownloadState.FAILED
                 return@withContext false
             }
 
-            // Trigger install
-            val apkFile = File(
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                fileName
-            )
-            installApk(apkFile)
+            val body = response.body ?: run {
+                _downloadState.value = DownloadState.FAILED
+                return@withContext false
+            }
+
+            val contentLength = body.contentLength()
+            val apkFile = getApkFile()
+
+            body.byteStream().use { input ->
+                apkFile.outputStream().use { output ->
+                    val buffer = ByteArray(8192)
+                    var bytesRead: Int
+                    var totalBytes = 0L
+
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        output.write(buffer, 0, bytesRead)
+                        totalBytes += bytesRead
+                        if (contentLength > 0) {
+                            _downloadProgress.value = ((totalBytes * 100) / contentLength).toInt()
+                        }
+                    }
+                    output.flush()
+                }
+            }
+
+            // Save version marker
+            getVersionMarkerFile().writeText(version)
+            downloadedVersion = version
+
+            _downloadState.value = DownloadState.DOWNLOADED
+            _downloadProgress.value = 100
+            Log.d(TAG, "Download complete: ${apkFile.absolutePath} (${apkFile.length()} bytes)")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Download and install failed", e)
+            Log.e(TAG, "Download failed", e)
+            _downloadState.value = DownloadState.FAILED
+            // Clean up partial file
+            try { getApkFile().delete() } catch (_: Exception) {}
             false
         }
     }
 
     /**
-     * Wait for DownloadManager to complete
+     * Install the cached APK via PackageInstaller intent
      */
-    private suspend fun waitForDownload(downloadId: Long): Boolean = suspendCancellableCoroutine { cont ->
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(ctx: Context, intent: Intent) {
-                val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
-                if (id == downloadId) {
-                    context.unregisterReceiver(this)
-                    val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                    val query = DownloadManager.Query().setFilterById(downloadId)
-                    val cursor = dm.query(query)
-                    if (cursor.moveToFirst()) {
-                        val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                        cursor.close()
-                        if (cont.isActive) cont.resume(status == DownloadManager.STATUS_SUCCESSFUL)
-                    } else {
-                        cursor.close()
-                        if (cont.isActive) cont.resume(false)
-                    }
-                }
-            }
+    fun installUpdate(): Boolean {
+        val apkFile = getApkFile()
+        if (!apkFile.exists()) {
+            Log.w(TAG, "No cached APK to install")
+            return false
         }
 
-        context.registerReceiver(
-            receiver,
-            IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
-            Context.RECEIVER_EXPORTED
-        )
+        try {
+            val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    apkFile
+                )
+            } else {
+                Uri.fromFile(apkFile)
+            }
 
-        cont.invokeOnCancellation {
-            try { context.unregisterReceiver(receiver) } catch (_: Exception) {}
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+
+            context.startActivity(intent)
+            Log.d(TAG, "Install intent launched: ${apkFile.absolutePath}")
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Install failed", e)
+            return false
         }
     }
 
     /**
-     * Trigger APK install via intent
+     * Check if we have a downloaded APK ready to install
      */
-    private fun installApk(apkFile: File) {
-        val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                apkFile
-            )
-        } else {
-            Uri.fromFile(apkFile)
-        }
+    fun hasDownloadedUpdate(): Boolean {
+        val apkFile = getApkFile()
+        return apkFile.exists() && apkFile.length() > 1024 * 1024 // at least 1MB
+    }
 
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
+    /**
+     * Get the version of the downloaded APK (from marker file)
+     */
+    fun getDownloadedVersion(): String? {
+        if (downloadedVersion != null) return downloadedVersion
+        val marker = getVersionMarkerFile()
+        if (!marker.exists()) return null
+        downloadedVersion = marker.readText().trim()
+        return downloadedVersion
+    }
 
-        context.startActivity(intent)
-        Log.d(TAG, "Install intent launched for: ${apkFile.absolutePath}")
+    /**
+     * Delete cached APK and marker
+     */
+    fun clearDownloadedUpdate() {
+        try {
+            getApkFile().delete()
+            getVersionMarkerFile().delete()
+            downloadedVersion = null
+            _downloadState.value = DownloadState.IDLE
+            _downloadProgress.value = 0
+            Log.d(TAG, "Cleared cached APK")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to clear cache", e)
+        }
+    }
+
+    /** Internal cache APK file — single file, overwritten each release */
+    private fun getApkFile(): File {
+        val dir = File(context.cacheDir, "updates")
+        if (!dir.exists()) dir.mkdirs()
+        return File(dir, "update.apk")
+    }
+
+    /** Version marker file — stores which version the cached APK is */
+    private fun getVersionMarkerFile(): File {
+        return File(context.cacheDir, "updates/version.txt")
     }
 
     /**
@@ -254,7 +315,7 @@ class AppUpdater(private val context: Context) {
             }
             return false
         } catch (e: Exception) {
-            Log.w(TAG, "Version comparison failed: $latest vs $current", e)
+            Log.w(TAG, "Version compare failed: $latest vs $current", e)
             return false
         }
     }
