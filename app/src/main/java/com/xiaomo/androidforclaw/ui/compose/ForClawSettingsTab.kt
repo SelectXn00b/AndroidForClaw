@@ -127,15 +127,61 @@ fun ForClawSettingsTab() {
         )
 
         // Gateway
+        val mmkv = remember { MMKV.defaultMMKV() }
+        var gatewayUrl by remember {
+            mutableStateOf(mmkv.decodeString(MMKVKeys.GATEWAY_URL.key, "ws://127.0.0.1:8765") ?: "ws://127.0.0.1:8765")
+        }
+        var editingGateway by remember { mutableStateOf(false) }
+        var editGatewayUrl by remember { mutableStateOf(gatewayUrl) }
+
         StatusCard(
             title = stringResource(R.string.connect_local_gateway),
             icon = Icons.Default.Router,
             rows = listOf(
-                StatusRow(stringResource(R.string.connect_port_label), "ws://127.0.0.1:8765"),
+                StatusRow(stringResource(R.string.connect_port_label), gatewayUrl),
                 StatusRow(stringResource(R.string.connect_status_label), if (gatewayRunning) stringResource(R.string.connect_running) else stringResource(R.string.connect_not_running),
                     if (gatewayRunning) StatusLevel.Ok else StatusLevel.Neutral),
             ),
+            onClick = {
+                editGatewayUrl = gatewayUrl
+                editingGateway = true
+            },
+            clickLabel = stringResource(R.string.connect_modify_config),
         )
+
+        if (editingGateway) {
+            AlertDialog(
+                onDismissRequest = { editingGateway = false },
+                title = { Text("修改 Gateway 地址") },
+                text = {
+                    OutlinedTextField(
+                        value = editGatewayUrl,
+                        onValueChange = { editGatewayUrl = it },
+                        label = { Text("Gateway URL") },
+                        placeholder = { Text("ws://127.0.0.1:8765") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        gatewayUrl = editGatewayUrl
+                        mmkv.encode(MMKVKeys.GATEWAY_URL.key, editGatewayUrl)
+                        editingGateway = false
+                        // 需要重启应用才能生效
+                        android.widget.Toast.makeText(context,
+                            "已保存，重启应用后生效", android.widget.Toast.LENGTH_SHORT).show()
+                    }) {
+                        Text("保存")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { editingGateway = false }) {
+                        Text("取消")
+                    }
+                }
+            )
+        }
 
         // Web Clipboard
         val localIp = remember {

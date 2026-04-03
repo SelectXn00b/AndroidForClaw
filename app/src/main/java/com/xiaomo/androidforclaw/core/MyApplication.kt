@@ -533,7 +533,12 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                 modelRef = null
             )
 
-            // Create GatewayController
+            // Create GatewayController（端口可从 MMKV 配置，默认 8765）
+            val gwUrl = com.tencent.mmkv.MMKV.defaultMMKV()
+                ?.decodeString(com.xiaomo.androidforclaw.util.MMKVKeys.GATEWAY_URL.key, "ws://127.0.0.1:8765")
+                ?: "ws://127.0.0.1:8765"
+            val gwPort = try { java.net.URI(gwUrl).port.coerceAtLeast(8765) } catch (_: Exception) { 8765 }
+
             gatewayController = GatewayController(
                 context = this,
                 agentLoop = agentLoop,
@@ -541,7 +546,7 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                 toolRegistry = toolRegistry,
                 androidToolRegistry = androidToolRegistry,
                 skillsLoader = skillsLoader,
-                port = 8765,
+                port = gwPort,
                 authToken = null // Temporarily disable auth
             )
 
@@ -555,7 +560,7 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
             gatewayController?.start()
 
             Log.i(TAG, "========================================")
-            Log.i(TAG, "✅ Gateway 服务已启动: ws://0.0.0.0:8765")
+            Log.i(TAG, "✅ Gateway 服务已启动: ws://0.0.0.0:$gwPort")
             Log.i(TAG, "========================================")
 
         } catch (e: Exception) {
