@@ -544,7 +544,7 @@ class UnifiedLLMProvider(private val context: Context) {
     private fun parseModelRef(modelRef: String?): Pair<String, String> {
         // If not specified, use default model
         if (modelRef == null) {
-            val config = configLoader.loadOpenClawConfig()
+            val config = configLoader.loadOpenClawConfigFresh() // 强制从磁盘读取，避免缓存导致换模型不生效
             val defaultModel = config.resolveDefaultModel()
             // If the default model's provider exists, use it
             val parsed = tryParseModelRef(defaultModel)

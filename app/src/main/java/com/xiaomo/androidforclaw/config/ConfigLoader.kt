@@ -870,7 +870,7 @@ class ConfigLoader private constructor() {
      * 强制从磁盘读取配置，忽略缓存。
      * 用于 LLM 请求路径，确保获取最新配置（避免跨 ConfigLoader 实例的缓存不一致）。
      */
-    private fun loadOpenClawConfigFresh(): OpenClawConfig {
+    fun loadOpenClawConfigFresh(): OpenClawConfig {
         openclawConfigCacheValid = false
         return loadOpenClawConfig()
     }
