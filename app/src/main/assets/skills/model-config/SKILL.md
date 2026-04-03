@@ -11,7 +11,7 @@ For known providers (xiaomi, openrouter, deepseek, etc.), **always use the `prov
 
 ```
 provider_setup(providerId="xiaomi", apiKey="sk-xxx")
-provider_setup(providerId="openrouter", apiKey="sk-or-xxx", modelId="qwen/qwen3.6-plus-preview:free")
+provider_setup(providerId="openrouter", apiKey="sk-or-xxx", modelId="qwen/qwen3.6-plus:free")
 provider_setup(providerId="deepseek", apiKey="sk-xxx", modelId="deepseek-chat")
 ```
 
