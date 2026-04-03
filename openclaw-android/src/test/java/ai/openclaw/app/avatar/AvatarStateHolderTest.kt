@@ -5,7 +5,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Before
 import org.junit.Test
 
@@ -15,30 +14,9 @@ class AvatarStateHolderTest {
 
     @Before
     fun reset() {
-        AvatarStateHolder.setPhase(AvatarPhase.Idle)
         AvatarStateHolder.setMouthOpen(0f)
-    }
-
-    // ════════ Phase ════════
-
-    @Test
-    fun `initial phase is Idle`() {
-        assertEquals(AvatarPhase.Idle, AvatarStateHolder.phase.value)
-    }
-
-    @Test
-    fun `setPhase updates phase flow`() {
-        AvatarStateHolder.setPhase(AvatarPhase.Talking)
-        assertEquals(AvatarPhase.Talking, AvatarStateHolder.phase.value)
-
-        AvatarStateHolder.setPhase(AvatarPhase.Listening)
-        assertEquals(AvatarPhase.Listening, AvatarStateHolder.phase.value)
-
-        AvatarStateHolder.setPhase(AvatarPhase.Thinking)
-        assertEquals(AvatarPhase.Thinking, AvatarStateHolder.phase.value)
-
-        AvatarStateHolder.setPhase(AvatarPhase.Idle)
-        assertEquals(AvatarPhase.Idle, AvatarStateHolder.phase.value)
+        AvatarStateHolder.setPaused(false)
+        AvatarStateHolder.clearParamOverrides()
     }
 
     // ════════ MouthOpen ════════
@@ -63,13 +41,38 @@ class AvatarStateHolderTest {
         assertEquals(1f, AvatarStateHolder.mouthOpen.value, 0.001f)
     }
 
-    @Test
-    fun `setMouthOpen boundary values`() {
-        AvatarStateHolder.setMouthOpen(0f)
-        assertEquals(0f, AvatarStateHolder.mouthOpen.value, 0.001f)
+    // ════════ Paused ════════
 
-        AvatarStateHolder.setMouthOpen(1f)
-        assertEquals(1f, AvatarStateHolder.mouthOpen.value, 0.001f)
+    @Test
+    fun `initial paused is false`() {
+        assertEquals(false, AvatarStateHolder.paused.value)
+    }
+
+    @Test
+    fun `setPaused updates flow`() {
+        AvatarStateHolder.setPaused(true)
+        assertEquals(true, AvatarStateHolder.paused.value)
+    }
+
+    // ════════ ParamOverrides ════════
+
+    @Test
+    fun `initial paramOverrides is empty`() {
+        assertEquals(emptyMap<String, Float>(), AvatarStateHolder.paramOverrides.value)
+    }
+
+    @Test
+    fun `setParamOverrides updates flow`() {
+        val params = mapOf("ParamAngleX" to 15f, "ParamCheek" to 1f)
+        AvatarStateHolder.setParamOverrides(params)
+        assertEquals(params, AvatarStateHolder.paramOverrides.value)
+    }
+
+    @Test
+    fun `clearParamOverrides resets to empty`() {
+        AvatarStateHolder.setParamOverrides(mapOf("ParamAngleX" to 15f))
+        AvatarStateHolder.clearParamOverrides()
+        assertEquals(emptyMap<String, Float>(), AvatarStateHolder.paramOverrides.value)
     }
 
     // ════════ Triggers ════════
@@ -85,7 +88,6 @@ class AvatarStateHolderTest {
         AvatarStateHolder.fireTrigger("wave")
         AvatarStateHolder.fireTrigger("nod")
 
-        // Let the collector process
         advanceUntilIdle()
         job.cancel()
 
@@ -94,22 +96,9 @@ class AvatarStateHolderTest {
 
     @Test
     fun `fireTrigger does not block on buffered channel`() {
-        // Should not throw even without a collector
         AvatarStateHolder.fireTrigger("smile")
         AvatarStateHolder.fireTrigger("wave")
         AvatarStateHolder.fireTrigger("surprise")
         AvatarStateHolder.fireTrigger("celebrate")
-    }
-
-    // ════════ AvatarPhase enum ════════
-
-    @Test
-    fun `AvatarPhase has 4 values`() {
-        val values = AvatarPhase.entries
-        assertEquals(4, values.size)
-        assertNotNull(values.find { it == AvatarPhase.Idle })
-        assertNotNull(values.find { it == AvatarPhase.Listening })
-        assertNotNull(values.find { it == AvatarPhase.Thinking })
-        assertNotNull(values.find { it == AvatarPhase.Talking })
     }
 }

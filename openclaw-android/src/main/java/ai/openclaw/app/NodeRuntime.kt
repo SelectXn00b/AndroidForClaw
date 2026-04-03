@@ -19,7 +19,6 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.app.node.*
 import ai.openclaw.app.protocol.OpenClawCanvasA2UIAction
-import ai.openclaw.app.avatar.AvatarStateBridge
 import ai.openclaw.app.voice.MicCaptureManager
 import ai.openclaw.app.voice.TalkModeManager
 import ai.openclaw.app.voice.VoiceConversationEntry
@@ -591,26 +590,7 @@ class NodeRuntime(
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
 
-  // Avatar state bridge — maps voice/agent signals to avatar phase
-  private val _avatarSpeaking = MutableStateFlow(false)
-  private val avatarBridge = AvatarStateBridge(
-    scope = scope,
-    isSpeaking = _avatarSpeaking,
-    isListening = micCapture.isListening,
-    isSending = micCapture.isSending,
-    streamingText = chat.streamingAssistantText,
-  )
-
   init {
-    avatarBridge.start()
-
-    // Forward talkMode.isSpeaking to avatar (both talkMode and voiceReplySpeaker)
-    scope.launch {
-      talkMode.isSpeaking.collect { speaking ->
-        _avatarSpeaking.value = speaking ||
-          (voiceReplySpeakerLazy.isInitialized() && voiceReplySpeaker.isSpeaking.value)
-      }
-    }
     if (prefs.voiceWakeMode.value != VoiceWakeMode.Off) {
       prefs.setVoiceWakeMode(VoiceWakeMode.Off)
     }

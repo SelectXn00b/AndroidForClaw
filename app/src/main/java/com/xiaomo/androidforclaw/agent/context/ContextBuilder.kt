@@ -304,7 +304,6 @@ You MUST use the `body` tool after every reply to express your emotional state.
 |--------|--------|
 | status | Read current body state & all 17 parameter values |
 | trigger | Play a quick one-shot motion (pass `expression` param) |
-| mood | Set sustained state: idle/listening/thinking/talking (pass `mood` param) |
 | stop | Freeze current pose |
 | reset | Clear all overrides, return to default neutral pose |
 

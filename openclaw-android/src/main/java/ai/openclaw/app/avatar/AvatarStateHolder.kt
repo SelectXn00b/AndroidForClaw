@@ -6,17 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 
-enum class AvatarPhase {
-    Idle,
-    Listening,
-    Thinking,
-    Talking,
-}
-
 object AvatarStateHolder {
-
-    private val _phase = MutableStateFlow(AvatarPhase.Idle)
-    val phase: StateFlow<AvatarPhase> = _phase.asStateFlow()
 
     private val _triggers = Channel<String>(Channel.BUFFERED)
     val triggers = _triggers.receiveAsFlow()
@@ -32,10 +22,6 @@ object AvatarStateHolder {
 
     private val _currentParams = MutableStateFlow<Map<String, Float>>(emptyMap())
     val currentParams: StateFlow<Map<String, Float>> = _currentParams.asStateFlow()
-
-    fun setPhase(phase: AvatarPhase) {
-        _phase.value = phase
-    }
 
     fun setPaused(paused: Boolean) {
         _paused.value = paused

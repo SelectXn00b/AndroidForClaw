@@ -1,6 +1,5 @@
 package com.xiaomo.androidforclaw.agent.tools
 
-import ai.openclaw.app.avatar.AvatarPhase
 import ai.openclaw.app.avatar.AvatarStateHolder
 import ai.openclaw.app.avatar.FloatingAvatarService
 import android.util.Log
@@ -33,8 +32,8 @@ class AvatarTool : Tool {
                     properties = mapOf(
                         "action" to PropertySchema(
                             "string",
-                            "'status' read current body state before making changes, 'start' show your body on screen, 'stop' freeze in place, 'pose' control facial expression & body language, 'trigger' quick reactive motion, 'mood' sustained emotional state, 'reset' return to natural idle",
-                            enum = listOf("status", "start", "stop", "pose", "trigger", "mood", "reset")
+                            "'status' read current body state, 'start' show your body on screen, 'stop' freeze in place, 'pose' control facial expression & body language, 'trigger' quick reactive motion, 'reset' return to natural idle",
+                            enum = listOf("status", "start", "stop", "pose", "trigger", "reset")
                         ),
                         "params" to PropertySchema(
                             "object",
@@ -62,10 +61,6 @@ class AvatarTool : Tool {
                         "expression" to PropertySchema(
                             "string",
                             "Expression name for trigger action"
-                        ),
-                        "mood" to PropertySchema(
-                            "string",
-                            "Phase name for mood action: idle, listening, thinking, talking. Empty/null to clear."
                         ),
                     ),
                     required = listOf("action")
@@ -136,26 +131,9 @@ class AvatarTool : Tool {
                 AvatarStateHolder.fireTrigger(expression)
                 ToolResult.success("Avatar triggered: $expression")
             }
-            "mood" -> {
-                val mood = (args["mood"] as? String)?.lowercase()?.trim()
-                if (mood.isNullOrBlank()) {
-                    AvatarStateHolder.setPhase(AvatarPhase.Idle)
-                } else {
-                    val phase = when (mood) {
-                        "idle" -> AvatarPhase.Idle
-                        "listening" -> AvatarPhase.Listening
-                        "thinking" -> AvatarPhase.Thinking
-                        "talking" -> AvatarPhase.Talking
-                        else -> return ToolResult.error("Unknown mood: $mood (use idle/listening/thinking/talking)")
-                    }
-                    AvatarStateHolder.setPhase(phase)
-                }
-                ToolResult.success("Avatar mood set: ${mood ?: "idle"}")
-            }
             "reset" -> {
                 AvatarStateHolder.setPaused(false)
                 AvatarStateHolder.clearParamOverrides()
-                AvatarStateHolder.setPhase(AvatarPhase.Idle)
                 ToolResult.success("Avatar reset to automatic mode")
             }
             else -> ToolResult.error("Unknown action: $action")
