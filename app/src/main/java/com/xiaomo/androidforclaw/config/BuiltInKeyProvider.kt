@@ -23,7 +23,7 @@ object BuiltInKeyProvider {
 
     // AES-256-GCM encrypted, Base64 encoded
     // Format: base64(iv + ciphertext + tag)
-    private const val ENCRYPTED_KEY = "JXxc++yRb2xOYoMW3WKYsxC0FT6eDTNLet2shrCJNE0PRoZYeMlBv883GCRGAZERD1w49XyjJq2TBkFDX2B45vj+JvkLt4fUzAEAH404e/QbnVDPm7cIWNa/vb54c9tzqy3dDRY="
+    private const val ENCRYPTED_KEY = "Xt6bb+lhIo4MSkEiniC+x05qtNa6rWbxAmsel4pkUX7rNEX8OzmB1ihT5MbQwLjb+6hTTdRj59+IRHDVV3Y5UqYrRf0DOd9HleHfi0RXVLoMdE8YCeQITI4N+GxQzVrdJLGftP8="
 
     // Derived from package signature + app-specific salt (not a secret by itself,
     // security comes from the obfuscation + ProGuard + native layer)
