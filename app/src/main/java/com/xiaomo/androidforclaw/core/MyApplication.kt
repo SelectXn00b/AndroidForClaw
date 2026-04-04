@@ -1463,7 +1463,10 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                 Log.i(TAG, "   使用工具: ${result.toolsUsed.joinToString(", ")}")
 
                 // Close streaming card with final content
-                val finalContent = com.xiaomo.androidforclaw.util.ReplyTagFilter.strip(result.finalContent ?: "抱歉，我无法处理这个请求。")
+                val finalContent = com.xiaomo.androidforclaw.util.RiveEmotionDispatcher.processAndDispatch(
+                    this@MyApplication,
+                    com.xiaomo.androidforclaw.util.ReplyTagFilter.strip(result.finalContent ?: "抱歉，我无法处理这个请求。")
+                )
 
                 if (streamingCard?.isActive() == true) {
                     try {
@@ -2239,6 +2242,7 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                         .replace(Regex("(?:^|\\s+|\\*+)NO_REPLY\\s*$"), "")
                         .replace(Regex("(?:^|\\s+|\\*+)HEARTBEAT_OK\\s*$"), "")
                         .trim()
+                    sanitized = com.xiaomo.androidforclaw.util.RiveEmotionDispatcher.processAndDispatch(this@MyApplication, sanitized)
                     if (sanitized.isNotBlank()) {
                         sender?.sendText(toUser, sanitized)
                     }

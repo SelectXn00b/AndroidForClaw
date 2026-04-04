@@ -161,6 +161,8 @@ class ChannelMessageProcessor(private val app: MyApplication) {
                 replyContent = ContextSecurityGuard.redactForSharedContext(replyContent)
             }
 
+            replyContent = com.xiaomo.androidforclaw.util.RiveEmotionDispatcher.processAndDispatch(app, replyContent)
+
             val chunks = splitMessageIntoChunks(replyContent, adapter.messageCharLimit)
             for ((index, chunk) in chunks.withIndex()) {
                 adapter.sendMessageChunk(chunk, isFirstChunk = index == 0)
