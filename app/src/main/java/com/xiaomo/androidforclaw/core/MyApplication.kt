@@ -50,6 +50,21 @@ import com.xiaomo.discord.session.DiscordSessionManager
 import com.xiaomo.discord.session.DiscordHistoryManager
 import com.xiaomo.discord.session.DiscordDedup
 import com.xiaomo.discord.messaging.DiscordTyping
+import com.xiaomo.telegram.TelegramChannel
+import com.xiaomo.telegram.TelegramConfig
+import com.xiaomo.telegram.TelegramClient
+import com.xiaomo.telegram.messaging.TelegramTyping
+import com.xiaomo.telegram.messaging.TelegramSender
+import com.xiaomo.slack.SlackChannel
+import com.xiaomo.slack.SlackConfig
+import com.xiaomo.slack.SlackClient
+import com.xiaomo.slack.messaging.SlackSender
+import com.xiaomo.slack.messaging.SlackTyping as SlackTypingHelper
+import com.xiaomo.signal.SignalChannel
+import com.xiaomo.signal.SignalConfig
+import com.xiaomo.signal.SignalClient
+import com.xiaomo.signal.messaging.SignalTyping
+import com.xiaomo.signal.messaging.SignalSender
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.Job
@@ -108,6 +123,23 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
         private val discordDedup = DiscordDedup()
         private var discordTyping: DiscordTyping? = null
         private val discordProcessingJobs = mutableMapOf<String, Job>()
+
+        // Telegram Channel
+        private var telegramChannel: TelegramChannel? = null
+        private var telegramTyping: TelegramTyping? = null
+        private val telegramProcessingJobs = mutableMapOf<String, Job>()
+        private val telegramDedup = java.util.Collections.synchronizedSet(mutableSetOf<Long>())
+
+        // Signal Channel
+        private var signalChannel: SignalChannel? = null
+        private var signalTyping: SignalTyping? = null
+        private val signalProcessingJobs = mutableMapOf<String, Job>()
+        private val signalDedup = java.util.Collections.synchronizedSet(mutableSetOf<Long>())
+
+        // Slack Channel
+        private var slackChannel: SlackChannel? = null
+        private val slackProcessingJobs = mutableMapOf<String, Job>()
+        private val slackDedup = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
         // Weixin Channel
         private var weixinChannel: com.xiaomo.weixin.WeixinChannel? = null
@@ -598,6 +630,9 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
         Log.i(TAG, "🚀 startAllChannels() — 启动所有消息通道")
         startFeishuChannelIfEnabled()
         startDiscordChannelIfEnabled()
+        startTelegramChannelIfEnabled()
+        startSlackChannelIfEnabled()
+        startSignalChannelIfEnabled()
         startWeixinChannelIfEnabled()
     }
 
@@ -2428,6 +2463,744 @@ $historyContext
         """.trimIndent()
     }
 
+    // ==================== Telegram Channel ====================
+
+    private fun startTelegramChannelIfEnabled() {
+        Log.i(TAG, "startTelegramChannelIfEnabled() called")
+        GlobalScope.launch(Dispatchers.IO) {
+            try {
+                Log.i(TAG, "Checking Telegram Channel config...")
+                val configLoader = ConfigLoader(this@MyApplication)
+                val openClawConfig = configLoader.loadOpenClawConfig()
+                val telegramConfigData = openClawConfig.channels.telegram
+
+                if (telegramConfigData == null || !telegramConfigData.enabled) {
+                    Log.i(TAG, "Telegram Channel not enabled, skipping")
+                    return@launch
+                }
+
+                val token = telegramConfigData.botToken
+                if (token.isBlank()) {
+                    Log.w(TAG, "Telegram Bot Token not configured, skipping")
+                    return@launch
+                }
+
+                Log.i(TAG, "Telegram Channel enabled, starting...")
+
+                val config = TelegramConfig(
+                    enabled = true,
+                    botToken = token,
+                    dmPolicy = telegramConfigData.dmPolicy,
+                    groupPolicy = telegramConfigData.groupPolicy,
+                    requireMention = telegramConfigData.requireMention,
+                    historyLimit = telegramConfigData.historyLimit ?: 50,
+                    webhookUrl = telegramConfigData.webhookUrl,
+                    model = telegramConfigData.model
+                )
+
+                val result = TelegramChannel.start(this@MyApplication, config)
+
+                if (result.isSuccess) {
+                    telegramChannel = result.getOrNull()
+
+                    telegramChannel?.let { channel ->
+                        val client = channel.getClient()
+                        if (client != null) {
+                            telegramTyping = TelegramTyping(client)
+                        }
+                    }
+
+                    val mmkv = MMKV.defaultMMKV()
+                    mmkv?.encode("channel_telegram_enabled", true)
+
+                    Log.i(TAG, "Telegram Channel started: bot=${telegramChannel?.getBotUsername()}")
+
+                    CoroutineScope(Dispatchers.IO).launch {
+                        telegramChannel?.eventFlow?.collect { event ->
+                            handleTelegramEvent(event)
+                        }
+                    }
+                } else {
+                    val mmkv = MMKV.defaultMMKV()
+                    mmkv?.encode("channel_telegram_enabled", false)
+                    Log.e(TAG, "Telegram Channel start failed: ${result.exceptionOrNull()?.message}")
+                }
+            } catch (e: Exception) {
+                val mmkv = MMKV.defaultMMKV()
+                mmkv?.encode("channel_telegram_enabled", false)
+                Log.e(TAG, "Telegram Channel init error", e)
+            }
+        }
+    }
+
+    private suspend fun handleTelegramEvent(event: TelegramChannel.ChannelEvent) {
+        try {
+            when (event) {
+                is TelegramChannel.ChannelEvent.Connected -> {
+                    Log.i(TAG, "Telegram Connected")
+                }
+                is TelegramChannel.ChannelEvent.Message -> {
+                    Log.i(TAG, "Telegram message from ${event.senderName} in ${event.chatId}: ${event.content.take(50)}")
+                    sendTelegramReply(event)
+                }
+                is TelegramChannel.ChannelEvent.Error -> {
+                    Log.e(TAG, "Telegram Error", event.error)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Handle Telegram event failed", e)
+        }
+    }
+
+    private suspend fun sendTelegramReply(event: TelegramChannel.ChannelEvent.Message) {
+        val startTime = System.currentTimeMillis()
+        try {
+            if (!telegramDedup.add(event.messageId)) {
+                return
+            }
+            telegramProcessingJobs[event.chatId]?.cancel()
+            val job = GlobalScope.launch(Dispatchers.IO) {
+                try {
+                    processTelegramMessage(event, startTime)
+                } finally {
+                    telegramProcessingJobs.remove(event.chatId)
+                }
+            }
+            telegramProcessingJobs[event.chatId] = job
+        } catch (e: Exception) {
+            Log.e(TAG, "Send Telegram reply failed", e)
+            try {
+                telegramChannel?.setMessageReaction(event.chatId, event.messageId, "❌")
+            } catch (_: Exception) {}
+        }
+    }
+
+    private suspend fun processTelegramMessage(event: TelegramChannel.ChannelEvent.Message, startTime: Long) {
+        var thinkingReactionAdded = false
+        var typingStarted = false
+
+        try {
+            Log.i(TAG, "Processing Telegram message from ${event.senderName} (${event.senderId})")
+
+            // 1. Add thinking reaction
+            telegramChannel?.setMessageReaction(event.chatId, event.messageId, "\uD83E\uDD14")
+            thinkingReactionAdded = true
+
+            // 2. Start typing indicator
+            telegramTyping?.startContinuous(event.chatId)
+            typingStarted = true
+
+            // 3. Session
+            val sessionId = "telegram_${event.chatId}"
+            if (MainEntryNew.getSessionManager() == null) {
+                MainEntryNew.initialize(this@MyApplication)
+            }
+            val session = MainEntryNew.getSessionManager()?.getOrCreate(sessionId)
+                ?: throw Exception("Cannot create session")
+
+            val rawHistory = session.getRecentMessages(20)
+            val contextHistory = cleanupToolMessages(rawHistory)
+
+            // 4. System prompt
+            val systemPrompt = buildTelegramSystemPrompt(event)
+
+            // 5. AgentLoop
+            val llmProvider = UnifiedLLMProvider(this@MyApplication)
+            val contextManager = com.xiaomo.androidforclaw.agent.context.ContextManager(llmProvider)
+            val taskDataManager = TaskDataManager.getInstance()
+            val toolRegistry = ToolRegistry(this@MyApplication, taskDataManager)
+            val androidToolRegistry = AndroidToolRegistry(this@MyApplication, taskDataManager, cameraCaptureManager = cameraCaptureManager)
+
+            val agentLoop = AgentLoop(
+                llmProvider = llmProvider,
+                toolRegistry = toolRegistry,
+                androidToolRegistry = androidToolRegistry,
+                contextManager = contextManager,
+                maxIterations = 40,
+                modelRef = null
+            )
+
+            val result = agentLoop.run(
+                systemPrompt = systemPrompt,
+                userMessage = event.content,
+                contextHistory = contextHistory.map { it.toNewMessage() },
+                reasoningEnabled = true
+            )
+
+            // 6. Stop typing
+            if (typingStarted) {
+                telegramTyping?.stopContinuous(event.chatId)
+                typingStarted = false
+            }
+
+            // 7. Remove thinking reaction
+            if (thinkingReactionAdded) {
+                telegramChannel?.removeMessageReaction(event.chatId, event.messageId)
+                thinkingReactionAdded = false
+            }
+
+            // 8. Save session
+            result.messages.forEach { message ->
+                session.addMessage(message.toLegacyMessage())
+            }
+            MainEntryNew.getSessionManager()?.save(session)
+
+            // 9. Send reply
+            var replyContent = ReasoningTagFilter.stripReasoningTags(result.finalContent ?: "抱歉，我无法处理这个请求。")
+            if (event.chatType == "group") {
+                replyContent = com.xiaomo.androidforclaw.agent.context.ContextSecurityGuard
+                    .redactForSharedContext(replyContent)
+            }
+
+            val chunks = TelegramSender.splitMessageIntoChunks(replyContent, 4000)
+            for ((index, chunk) in chunks.withIndex()) {
+                val replyTo = if (index == 0) event.messageId else null
+                telegramChannel?.sendMessage(event.chatId, chunk, replyTo)
+            }
+
+            // 10. Add completion reaction
+            telegramChannel?.setMessageReaction(event.chatId, event.messageId, "✅")
+
+            val elapsed = System.currentTimeMillis() - startTime
+            Log.i(TAG, "Telegram message processed in ${elapsed}ms, ${result.iterations} iterations, ${replyContent.length} chars")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Telegram message processing failed", e)
+
+            if (typingStarted) {
+                telegramTyping?.stopContinuous(event.chatId)
+            }
+            if (thinkingReactionAdded) {
+                try { telegramChannel?.removeMessageReaction(event.chatId, event.messageId) } catch (_: Exception) {}
+            }
+            try {
+                telegramChannel?.setMessageReaction(event.chatId, event.messageId, "❌")
+                telegramChannel?.sendMessage(
+                    event.chatId,
+                    "抱歉，处理您的消息时遇到错误：${e.message}",
+                    event.messageId
+                )
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun buildTelegramSystemPrompt(event: TelegramChannel.ChannelEvent.Message): String {
+        val botName = telegramChannel?.getBotUsername() ?: "AndroidForClaw Bot"
+        val botId = telegramChannel?.getBotId() ?: ""
+
+        return """
+# 身份
+你是 **$botName**，一个运行在 Android 设备上的智能助手，通过 Telegram 与用户交互。
+
+# 当前上下文
+- **平台**: Telegram
+- **聊天类型**: ${event.chatType}
+- **聊天 ID**: ${event.chatId}
+- **用户**: ${event.senderName} (ID: ${event.senderId})
+- **Bot ID**: $botId
+
+# 核心能力
+你可以通过工具调用来控制 Android 设备：
+- 截图观察屏幕
+- 点击、滑动、输入
+- 导航、打开应用
+- 获取 UI 信息
+
+# 交互规则
+1. **简洁明了**: Telegram 消息尽量简洁，重要信息用 Markdown 格式化
+2. **主动截图**: 需要观察屏幕时主动使用 screenshot 工具
+3. **逐步执行**: 复杂任务分解为多个步骤
+4. **反馈进度**: 长时间操作时告知用户当前进度
+5. **错误处理**: 遇到问题时说明原因并提供建议
+
+# 响应格式
+- 使用 Telegram Markdown: *粗体*、_斜体_、`代码`、```代码块```
+- 列表使用 - 或数字编号
+
+# 注意事项
+- 不要输出过长的消息（建议 3000 字符以内）
+- 代码块使用语法高亮
+
+现在，请处理用户的消息。
+        """.trimIndent()
+    }
+
+    // ==================== Slack Channel ====================
+
+    private fun startSlackChannelIfEnabled() {
+        Log.i(TAG, "startSlackChannelIfEnabled() called")
+        GlobalScope.launch(Dispatchers.IO) {
+            try {
+                val configLoader = ConfigLoader(this@MyApplication)
+                val openClawConfig = configLoader.loadOpenClawConfig()
+                val slackConfigData = openClawConfig.channels.slack
+
+                if (slackConfigData == null || !slackConfigData.enabled) {
+                    Log.i(TAG, "Slack Channel not enabled, skipping")
+                    return@launch
+                }
+
+                val token = slackConfigData.botToken
+                if (token.isBlank()) {
+                    Log.w(TAG, "Slack Bot Token not configured, skipping")
+                    return@launch
+                }
+
+                val config = SlackConfig(
+                    enabled = true,
+                    botToken = token,
+                    appToken = slackConfigData.appToken,
+                    signingSecret = slackConfigData.signingSecret,
+                    mode = slackConfigData.mode,
+                    dmPolicy = slackConfigData.dmPolicy,
+                    groupPolicy = slackConfigData.groupPolicy,
+                    requireMention = slackConfigData.requireMention,
+                    historyLimit = slackConfigData.historyLimit ?: 50,
+                    model = slackConfigData.model
+                )
+
+                val result = SlackChannel.start(this@MyApplication, config)
+
+                if (result.isSuccess) {
+                    slackChannel = result.getOrNull()
+
+                    val mmkv = MMKV.defaultMMKV()
+                    mmkv?.encode("channel_slack_enabled", true)
+
+                    Log.i(TAG, "Slack Channel started: bot=${slackChannel?.getBotUsername()}")
+
+                    CoroutineScope(Dispatchers.IO).launch {
+                        slackChannel?.eventFlow?.collect { event ->
+                            handleSlackEvent(event)
+                        }
+                    }
+                } else {
+                    val mmkv = MMKV.defaultMMKV()
+                    mmkv?.encode("channel_slack_enabled", false)
+                    Log.e(TAG, "Slack Channel start failed: ${result.exceptionOrNull()?.message}")
+                }
+            } catch (e: Exception) {
+                val mmkv = MMKV.defaultMMKV()
+                mmkv?.encode("channel_slack_enabled", false)
+                Log.e(TAG, "Slack Channel init error", e)
+            }
+        }
+    }
+
+    private suspend fun handleSlackEvent(event: SlackChannel.ChannelEvent) {
+        try {
+            when (event) {
+                is SlackChannel.ChannelEvent.Connected -> {
+                    Log.i(TAG, "Slack Connected")
+                }
+                is SlackChannel.ChannelEvent.Message -> {
+                    Log.i(TAG, "Slack message from ${event.userId} in ${event.channelId}: ${event.text.take(50)}")
+                    sendSlackReply(event)
+                }
+                is SlackChannel.ChannelEvent.Error -> {
+                    Log.e(TAG, "Slack Error", event.error)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Handle Slack event failed", e)
+        }
+    }
+
+    private suspend fun sendSlackReply(event: SlackChannel.ChannelEvent.Message) {
+        val startTime = System.currentTimeMillis()
+        try {
+            if (!slackDedup.add(event.ts)) {
+                return
+            }
+            slackProcessingJobs[event.channelId]?.cancel()
+            val job = GlobalScope.launch(Dispatchers.IO) {
+                try {
+                    processSlackMessage(event, startTime)
+                } finally {
+                    slackProcessingJobs.remove(event.channelId)
+                }
+            }
+            slackProcessingJobs[event.channelId] = job
+        } catch (e: Exception) {
+            Log.e(TAG, "Send Slack reply failed", e)
+            try {
+                slackChannel?.addReaction(event.channelId, "x", event.ts)
+            } catch (_: Exception) {}
+        }
+    }
+
+    private suspend fun processSlackMessage(event: SlackChannel.ChannelEvent.Message, startTime: Long) {
+        var thinkingReactionAdded = false
+
+        try {
+            Log.i(TAG, "Processing Slack message from ${event.userId}")
+
+            // 1. Add thinking reaction
+            slackChannel?.addReaction(event.channelId, "thinking_face", event.ts)
+            thinkingReactionAdded = true
+
+            // 2. Session
+            val sessionId = "slack_${event.channelId}"
+            if (MainEntryNew.getSessionManager() == null) {
+                MainEntryNew.initialize(this@MyApplication)
+            }
+            val session = MainEntryNew.getSessionManager()?.getOrCreate(sessionId)
+                ?: throw Exception("Cannot create session")
+
+            val rawHistory = session.getRecentMessages(20)
+            val contextHistory = cleanupToolMessages(rawHistory)
+
+            // 3. System prompt
+            val systemPrompt = buildSlackSystemPrompt(event)
+
+            // 4. AgentLoop
+            val llmProvider = UnifiedLLMProvider(this@MyApplication)
+            val contextManager = com.xiaomo.androidforclaw.agent.context.ContextManager(llmProvider)
+            val taskDataManager = TaskDataManager.getInstance()
+            val toolRegistry = ToolRegistry(this@MyApplication, taskDataManager)
+            val androidToolRegistry = AndroidToolRegistry(this@MyApplication, taskDataManager, cameraCaptureManager = cameraCaptureManager)
+
+            val agentLoop = AgentLoop(
+                llmProvider = llmProvider,
+                toolRegistry = toolRegistry,
+                androidToolRegistry = androidToolRegistry,
+                contextManager = contextManager,
+                maxIterations = 40,
+                modelRef = null
+            )
+
+            val result = agentLoop.run(
+                systemPrompt = systemPrompt,
+                userMessage = event.text,
+                contextHistory = contextHistory.map { it.toNewMessage() },
+                reasoningEnabled = true
+            )
+
+            // 5. Remove thinking reaction
+            if (thinkingReactionAdded) {
+                slackChannel?.removeReaction(event.channelId, "thinking_face", event.ts)
+                thinkingReactionAdded = false
+            }
+
+            // 6. Save session
+            result.messages.forEach { message ->
+                session.addMessage(message.toLegacyMessage())
+            }
+            MainEntryNew.getSessionManager()?.save(session)
+
+            // 7. Send reply
+            var replyContent = ReasoningTagFilter.stripReasoningTags(result.finalContent ?: "抱歉，我无法处理这个请求。")
+            if (event.channelType == "group") {
+                replyContent = com.xiaomo.androidforclaw.agent.context.ContextSecurityGuard
+                    .redactForSharedContext(replyContent)
+            }
+
+            // Reply in thread (use message ts as thread_ts for new threads, or existing threadTs)
+            val threadTs = event.threadTs ?: event.ts
+            val chunks = SlackSender.splitMessageIntoChunks(replyContent, 3900)
+            for (chunk in chunks) {
+                slackChannel?.postMessage(event.channelId, chunk, threadTs)
+            }
+
+            // 8. Add completion reaction
+            slackChannel?.addReaction(event.channelId, "white_check_mark", event.ts)
+
+            val elapsed = System.currentTimeMillis() - startTime
+            Log.i(TAG, "Slack message processed in ${elapsed}ms, ${result.iterations} iterations")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Slack message processing failed", e)
+
+            if (thinkingReactionAdded) {
+                try { slackChannel?.removeReaction(event.channelId, "thinking_face", event.ts) } catch (_: Exception) {}
+            }
+            try {
+                slackChannel?.addReaction(event.channelId, "x", event.ts)
+                val threadTs = event.threadTs ?: event.ts
+                slackChannel?.postMessage(
+                    event.channelId,
+                    "抱歉，处理您的消息时遇到错误：${e.message}",
+                    threadTs
+                )
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun buildSlackSystemPrompt(event: SlackChannel.ChannelEvent.Message): String {
+        val botName = slackChannel?.getBotUsername() ?: "AndroidForClaw Bot"
+        val botId = slackChannel?.getBotId() ?: ""
+
+        return """
+# 身份
+你是 **$botName**，一个运行在 Android 设备上的智能助手，通过 Slack 与用户交互。
+
+# 当前上下文
+- **平台**: Slack
+- **频道类型**: ${event.channelType}
+- **频道 ID**: ${event.channelId}
+- **用户 ID**: ${event.userId}
+- **Bot ID**: $botId
+
+# 核心能力
+你可以通过工具调用来控制 Android 设备：
+- 截图观察屏幕
+- 点击、滑动、输入
+- 导航、打开应用
+- 获取 UI 信息
+
+# 交互规则
+1. **简洁明了**: Slack 消息尽量简洁，重要信息用 Markdown 格式化
+2. **主动截图**: 需要观察屏幕时主动使用 screenshot 工具
+3. **逐步执行**: 复杂任务分解为多个步骤
+4. **反馈进度**: 长时间操作时告知用户当前进度
+5. **错误处理**: 遇到问题时说明原因并提供建议
+
+# 响应格式
+- 使用 Slack mrkdwn: *粗体*、_斜体_、`代码`、```代码块```
+- 列表使用 - 或数字编号
+- 不支持标准 Markdown 链接，使用 <URL|文本> 格式
+
+# 注意事项
+- 不要输出过长的消息（建议 3000 字符以内）
+- 代码块使用语法高亮
+
+现在，请处理用户的消息。
+        """.trimIndent()
+    }
+
+    // ==================== Signal Channel ====================
+
+    private fun startSignalChannelIfEnabled() {
+        Log.i(TAG, "startSignalChannelIfEnabled() called")
+        GlobalScope.launch(Dispatchers.IO) {
+            try {
+                val configLoader = ConfigLoader(this@MyApplication)
+                val openClawConfig = configLoader.loadOpenClawConfig()
+                val signalConfigData = openClawConfig.channels.signal
+
+                if (signalConfigData == null || !signalConfigData.enabled) {
+                    Log.i(TAG, "Signal Channel not enabled, skipping")
+                    return@launch
+                }
+
+                val phoneNumber = signalConfigData.phoneNumber
+                if (phoneNumber.isBlank()) {
+                    Log.w(TAG, "Signal phone number not configured, skipping")
+                    return@launch
+                }
+
+                val config = SignalConfig(
+                    enabled = true,
+                    phoneNumber = phoneNumber,
+                    httpUrl = signalConfigData.httpUrl ?: "http://127.0.0.1",
+                    httpPort = signalConfigData.httpPort,
+                    dmPolicy = signalConfigData.dmPolicy,
+                    groupPolicy = signalConfigData.groupPolicy,
+                    requireMention = signalConfigData.requireMention,
+                    historyLimit = signalConfigData.historyLimit ?: 50,
+                    model = signalConfigData.model
+                )
+
+                val result = SignalChannel.start(this@MyApplication, config)
+
+                if (result.isSuccess) {
+                    signalChannel = result.getOrNull()
+
+                    signalChannel?.let { channel ->
+                        val client = channel.getClient()
+                        if (client != null) {
+                            signalTyping = SignalTyping(client)
+                        }
+                    }
+
+                    val mmkv = MMKV.defaultMMKV()
+                    mmkv?.encode("channel_signal_enabled", true)
+
+                    Log.i(TAG, "Signal Channel started: phone=${config.phoneNumber}")
+
+                    CoroutineScope(Dispatchers.IO).launch {
+                        signalChannel?.eventFlow?.collect { event ->
+                            handleSignalEvent(event)
+                        }
+                    }
+                } else {
+                    val mmkv = MMKV.defaultMMKV()
+                    mmkv?.encode("channel_signal_enabled", false)
+                    Log.e(TAG, "Signal Channel start failed: ${result.exceptionOrNull()?.message}")
+                }
+            } catch (e: Exception) {
+                val mmkv = MMKV.defaultMMKV()
+                mmkv?.encode("channel_signal_enabled", false)
+                Log.e(TAG, "Signal Channel init error", e)
+            }
+        }
+    }
+
+    private suspend fun handleSignalEvent(event: SignalChannel.ChannelEvent) {
+        try {
+            when (event) {
+                is SignalChannel.ChannelEvent.Connected -> {
+                    Log.i(TAG, "Signal Connected")
+                }
+                is SignalChannel.ChannelEvent.Message -> {
+                    Log.i(TAG, "Signal message from ${event.sourceName} in ${event.chatId}: ${event.text.take(50)}")
+                    sendSignalReply(event)
+                }
+                is SignalChannel.ChannelEvent.Error -> {
+                    Log.e(TAG, "Signal Error", event.error)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Handle Signal event failed", e)
+        }
+    }
+
+    private suspend fun sendSignalReply(event: SignalChannel.ChannelEvent.Message) {
+        val startTime = System.currentTimeMillis()
+        try {
+            if (!signalDedup.add(event.timestamp)) {
+                return
+            }
+            signalProcessingJobs[event.chatId]?.cancel()
+            val job = GlobalScope.launch(Dispatchers.IO) {
+                try {
+                    processSignalMessage(event, startTime)
+                } finally {
+                    signalProcessingJobs.remove(event.chatId)
+                }
+            }
+            signalProcessingJobs[event.chatId] = job
+        } catch (e: Exception) {
+            Log.e(TAG, "Send Signal reply failed", e)
+        }
+    }
+
+    private suspend fun processSignalMessage(event: SignalChannel.ChannelEvent.Message, startTime: Long) {
+        var typingStarted = false
+
+        try {
+            Log.i(TAG, "Processing Signal message from ${event.sourceName} (${event.sourceNumber})")
+
+            // 1. Start typing indicator
+            signalTyping?.startContinuous(event.chatId)
+            typingStarted = true
+
+            // 2. Session
+            val sessionId = "signal_${event.chatId}"
+            if (MainEntryNew.getSessionManager() == null) {
+                MainEntryNew.initialize(this@MyApplication)
+            }
+            val session = MainEntryNew.getSessionManager()?.getOrCreate(sessionId)
+                ?: throw Exception("Cannot create session")
+
+            val rawHistory = session.getRecentMessages(20)
+            val contextHistory = cleanupToolMessages(rawHistory)
+
+            // 3. System prompt
+            val systemPrompt = buildSignalSystemPrompt(event)
+
+            // 4. AgentLoop
+            val llmProvider = UnifiedLLMProvider(this@MyApplication)
+            val contextManager = com.xiaomo.androidforclaw.agent.context.ContextManager(llmProvider)
+            val taskDataManager = TaskDataManager.getInstance()
+            val toolRegistry = ToolRegistry(this@MyApplication, taskDataManager)
+            val androidToolRegistry = AndroidToolRegistry(this@MyApplication, taskDataManager, cameraCaptureManager = cameraCaptureManager)
+
+            val agentLoop = AgentLoop(
+                llmProvider = llmProvider,
+                toolRegistry = toolRegistry,
+                androidToolRegistry = androidToolRegistry,
+                contextManager = contextManager,
+                maxIterations = 40,
+                modelRef = null
+            )
+
+            val result = agentLoop.run(
+                systemPrompt = systemPrompt,
+                userMessage = event.text,
+                contextHistory = contextHistory.map { it.toNewMessage() },
+                reasoningEnabled = true
+            )
+
+            // 5. Stop typing
+            if (typingStarted) {
+                signalTyping?.stopContinuous(event.chatId)
+                typingStarted = false
+            }
+
+            // 6. Save session
+            result.messages.forEach { message ->
+                session.addMessage(message.toLegacyMessage())
+            }
+            MainEntryNew.getSessionManager()?.save(session)
+
+            // 7. Send reply
+            var replyContent = ReasoningTagFilter.stripReasoningTags(result.finalContent ?: "抱歉，我无法处理这个请求。")
+            if (event.chatType == "group") {
+                replyContent = com.xiaomo.androidforclaw.agent.context.ContextSecurityGuard
+                    .redactForSharedContext(replyContent)
+            }
+
+            val chunks = SignalSender.splitMessageIntoChunks(replyContent, 1900)
+            for (chunk in chunks) {
+                signalChannel?.sendMessage(event.chatId, chunk)
+            }
+
+            val elapsed = System.currentTimeMillis() - startTime
+            Log.i(TAG, "Signal message processed in ${elapsed}ms, ${result.iterations} iterations")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Signal message processing failed", e)
+
+            if (typingStarted) {
+                signalTyping?.stopContinuous(event.chatId)
+            }
+            try {
+                signalChannel?.sendMessage(
+                    event.chatId,
+                    "抱歉，处理您的消息时遇到错误：${e.message}"
+                )
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun buildSignalSystemPrompt(event: SignalChannel.ChannelEvent.Message): String {
+        val phoneNumber = signalChannel?.getPhoneNumber() ?: ""
+
+        return """
+# 身份
+你是一个运行在 Android 设备上的智能助手，通过 Signal 与用户交互。
+
+# 当前上下文
+- **平台**: Signal
+- **聊天类型**: ${event.chatType}
+- **聊天 ID**: ${event.chatId}
+- **用户**: ${event.sourceName} (${event.sourceNumber})
+- **本机号码**: $phoneNumber
+
+# 核心能力
+你可以通过工具调用来控制 Android 设备：
+- 截图观察屏幕
+- 点击、滑动、输入
+- 导航、打开应用
+- 获取 UI 信息
+
+# 交互规则
+1. **简洁明了**: Signal 消息尽量简洁
+2. **主动截图**: 需要观察屏幕时主动使用 screenshot 工具
+3. **逐步执行**: 复杂任务分解为多个步骤
+4. **反馈进度**: 长时间操作时告知用户当前进度
+5. **错误处理**: 遇到问题时说明原因并提供建议
+
+# 响应格式
+- Signal 支持有限的格式化，使用纯文本为主
+- 列表使用 - 或数字编号
+- 不要输出过长的消息（建议 1500 字符以内）
+
+现在，请处理用户的消息。
+        """.trimIndent()
+    }
+
     /**
      * Split message into multiple chunks (Discord 2000 character limit)
      */
@@ -2496,6 +3269,52 @@ $historyContext
             Log.i(TAG, "Discord 服务已停止")
         } catch (e: Exception) {
             Log.e(TAG, "停止 Discord 服务时出错", e)
+        }
+
+        // Stop Signal related services
+        try {
+            signalTyping?.cleanup()
+            signalTyping = null
+            signalProcessingJobs.values.forEach { it.cancel() }
+            signalProcessingJobs.clear()
+            signalDedup.clear()
+            SignalChannel.stop()
+            signalChannel = null
+            val mmkvSig = MMKV.defaultMMKV()
+            mmkvSig?.encode("channel_signal_enabled", false)
+            Log.i(TAG, "Signal service stopped")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping Signal service", e)
+        }
+
+        // Stop Slack related services
+        try {
+            slackProcessingJobs.values.forEach { it.cancel() }
+            slackProcessingJobs.clear()
+            slackDedup.clear()
+            SlackChannel.stop()
+            slackChannel = null
+            val mmkvSlack = MMKV.defaultMMKV()
+            mmkvSlack?.encode("channel_slack_enabled", false)
+            Log.i(TAG, "Slack service stopped")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping Slack service", e)
+        }
+
+        // Stop Telegram related services
+        try {
+            telegramTyping?.cleanup()
+            telegramTyping = null
+            telegramProcessingJobs.values.forEach { it.cancel() }
+            telegramProcessingJobs.clear()
+            telegramDedup.clear()
+            TelegramChannel.stop()
+            telegramChannel = null
+            val mmkvTg = MMKV.defaultMMKV()
+            mmkvTg?.encode("channel_telegram_enabled", false)
+            Log.i(TAG, "Telegram service stopped")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping Telegram service", e)
         }
 
         // Stop Feishu Channel

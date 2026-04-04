@@ -1,30 +1,22 @@
-/**
- * OpenClaw Source Reference:
- * - ../openclaw/src/channels/signal/(all)
- *
- * AndroidForClaw adaptation: Signal channel runtime.
- */
 package com.xiaomo.signal
 
 import android.util.Log
 
-/**
- * Signal user/group directory lookup
- */
+// signal-cli has limited directory/lookup capabilities.
+// This provides a basic interface for consistency with other channels.
 class SignalDirectory(private val client: SignalClient) {
     companion object {
         private const val TAG = "SignalDirectory"
     }
 
-    suspend fun lookupUser(userId: String): String? {
-        Log.d(TAG, "Looking up user: $userId")
-        // TODO: Implement user lookup
-        return null
+    suspend fun lookupUser(phoneNumber: String): String? {
+        // signal-cli doesn't provide contact name lookup via REST API
+        Log.d(TAG, "Looking up user: $phoneNumber")
+        return phoneNumber
     }
 
     suspend fun lookupGroup(groupId: String): String? {
         Log.d(TAG, "Looking up group: $groupId")
-        // TODO: Implement group lookup
         return null
     }
 }

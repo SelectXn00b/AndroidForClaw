@@ -1,31 +1,45 @@
-/**
- * OpenClaw Source Reference:
- * - ../openclaw/src/channels/telegram/(all)
- *
- * AndroidForClaw adaptation: Telegram channel runtime.
- */
 package com.xiaomo.telegram.policy
 
-import android.util.Log
 import com.xiaomo.telegram.TelegramConfig
 
-/**
- * Telegram DM/group access policy
- */
 class TelegramPolicy(private val config: TelegramConfig) {
-    companion object {
-        private const val TAG = "TelegramPolicy"
+
+    enum class DmPolicyType { OPEN, ALLOWLIST, DENYLIST }
+    enum class GroupPolicyType { OPEN, ALLOWLIST, DENYLIST }
+
+    fun resolveDmPolicy(): DmPolicyType {
+        return when (config.dmPolicy.lowercase()) {
+            "open" -> DmPolicyType.OPEN
+            "allowlist" -> DmPolicyType.ALLOWLIST
+            "denylist" -> DmPolicyType.DENYLIST
+            else -> DmPolicyType.OPEN
+        }
+    }
+
+    fun resolveGroupPolicy(): GroupPolicyType {
+        return when (config.groupPolicy.lowercase()) {
+            "open" -> GroupPolicyType.OPEN
+            "allowlist" -> GroupPolicyType.ALLOWLIST
+            "denylist" -> GroupPolicyType.DENYLIST
+            else -> GroupPolicyType.OPEN
+        }
     }
 
     fun isDmAllowed(senderId: String): Boolean {
-        return config.dmPolicy == "open"
+        return when (resolveDmPolicy()) {
+            DmPolicyType.OPEN -> true
+            DmPolicyType.ALLOWLIST -> false
+            DmPolicyType.DENYLIST -> true
+        }
     }
 
     fun isGroupAllowed(groupId: String): Boolean {
-        return config.groupPolicy == "open"
+        return when (resolveGroupPolicy()) {
+            GroupPolicyType.OPEN -> true
+            GroupPolicyType.ALLOWLIST -> false
+            GroupPolicyType.DENYLIST -> true
+        }
     }
 
-    fun requiresMention(): Boolean {
-        return config.requireMention
-    }
+    fun requiresMention(): Boolean = config.requireMention
 }

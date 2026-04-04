@@ -298,4 +298,73 @@ class DiscordClient(
             Result.failure(e)
         }
     }
+
+    suspend fun getUserGuilds(): Result<com.google.gson.JsonArray> = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("$BASE_URL/users/@me/guilds")
+                .header("Authorization", "Bot $token")
+                .header("User-Agent", USER_AGENT)
+                .get()
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseBody = response.body?.string()
+
+            if (response.isSuccessful && responseBody != null) {
+                val array = gson.fromJson(responseBody, com.google.gson.JsonArray::class.java)
+                Result.success(array)
+            } else {
+                Result.failure(Exception("HTTP ${response.code}: $responseBody"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun getGuildChannels(guildId: String): Result<com.google.gson.JsonArray> = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("$BASE_URL/guilds/$guildId/channels")
+                .header("Authorization", "Bot $token")
+                .header("User-Agent", USER_AGENT)
+                .get()
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseBody = response.body?.string()
+
+            if (response.isSuccessful && responseBody != null) {
+                val array = gson.fromJson(responseBody, com.google.gson.JsonArray::class.java)
+                Result.success(array)
+            } else {
+                Result.failure(Exception("HTTP ${response.code}: $responseBody"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun getApplication(): Result<JsonObject> = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url("$BASE_URL/oauth2/applications/@me")
+                .header("Authorization", "Bot $token")
+                .header("User-Agent", USER_AGENT)
+                .get()
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseBody = response.body?.string()
+
+            if (response.isSuccessful && responseBody != null) {
+                val json = gson.fromJson(responseBody, JsonObject::class.java)
+                Result.success(json)
+            } else {
+                Result.failure(Exception("HTTP ${response.code}: $responseBody"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 }

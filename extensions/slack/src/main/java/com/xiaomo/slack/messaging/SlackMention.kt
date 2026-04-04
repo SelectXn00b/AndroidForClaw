@@ -1,29 +1,20 @@
-/**
- * OpenClaw Source Reference:
- * - ../openclaw/src/channels/slack/(all)
- *
- * AndroidForClaw adaptation: Slack channel runtime.
- */
 package com.xiaomo.slack.messaging
 
-import android.util.Log
+object SlackMention {
 
-/**
- * Slack @mention handling
- */
-class SlackMention {
-    companion object {
-        private const val TAG = "SlackMention"
+    private val USER_MENTION_REGEX = Regex("<@(\\w+)>")
 
-        fun isMentioned(text: String, botId: String): Boolean {
-            Log.d(TAG, "Checking mention for bot: $botId")
-            // TODO: Implement mention detection
-            return false
-        }
-
-        fun stripMention(text: String, botId: String): String {
-            // TODO: Strip bot mention from text
-            return text
-        }
+    fun isMentioned(text: String, botId: String): Boolean {
+        return text.contains("<@$botId>")
     }
+
+    fun stripMention(text: String, botId: String): String {
+        return text.replace("<@$botId>", "").trim()
+    }
+
+    fun parseMentions(text: String): List<String> {
+        return USER_MENTION_REGEX.findAll(text).map { it.groupValues[1] }.toList()
+    }
+
+    fun formatMention(userId: String): String = "<@$userId>"
 }

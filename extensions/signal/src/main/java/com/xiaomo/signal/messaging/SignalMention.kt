@@ -1,29 +1,15 @@
-/**
- * OpenClaw Source Reference:
- * - ../openclaw/src/channels/signal/(all)
- *
- * AndroidForClaw adaptation: Signal channel runtime.
- */
 package com.xiaomo.signal.messaging
 
-import android.util.Log
+// Signal does not support bot mentions in the same way as other platforms.
+// This is a no-op placeholder to maintain the consistent channel interface.
+object SignalMention {
 
-/**
- * Signal @mention handling
- */
-class SignalMention {
-    companion object {
-        private const val TAG = "SignalMention"
+    fun isMentioned(text: String, phoneNumber: String): Boolean {
+        // Signal doesn't have @mention syntax for bots
+        return false
+    }
 
-        fun isMentioned(text: String, botId: String): Boolean {
-            Log.d(TAG, "Checking mention for bot: $botId")
-            // TODO: Implement mention detection
-            return false
-        }
-
-        fun stripMention(text: String, botId: String): String {
-            // TODO: Strip bot mention from text
-            return text
-        }
+    fun stripMention(text: String, phoneNumber: String): String {
+        return text
     }
 }

@@ -110,18 +110,11 @@ class DiscordDirectory(private val client: DiscordClient) {
      * 需要扫描最近的 DM
      */
     suspend fun listPeersLive(): List<DirectoryPeer> = withContext(Dispatchers.IO) {
-        val peers = mutableListOf<DirectoryPeer>()
-
-        try {
-            // TODO: 实现实时 DM 列表获取
-            // Discord API 不直接提供 DM 列表
-            // 可以通过 Gateway 事件收集
-            Log.d(TAG, "Live peer listing not implemented yet")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error listing peers live", e)
-        }
-
-        peers
+        // Discord Bot API does not provide a direct endpoint for listing DM peers.
+        // DM relationships are tracked via Gateway MESSAGE_CREATE events.
+        // Fall back to config-based listing.
+        Log.d(TAG, "Live peer listing: Discord Bot API does not expose DM list, use config-based listing")
+        emptyList()
     }
 
     /**
@@ -132,10 +125,45 @@ class DiscordDirectory(private val client: DiscordClient) {
         val groups = mutableListOf<DirectoryGroup>()
 
         try {
-            // TODO: 实现实时 Guild/Channel 列表获取
-            // GET /users/@me/guilds
-            // GET /guilds/{guild_id}/channels
-            Log.d(TAG, "Live group listing not implemented yet")
+            val guildsResult = client.getUserGuilds()
+            if (guildsResult.isFailure) {
+                Log.e(TAG, "Failed to get guilds: ${guildsResult.exceptionOrNull()?.message}")
+                return@withContext groups
+            }
+
+            val guilds = guildsResult.getOrNull() ?: return@withContext groups
+
+            for (guildElement in guilds) {
+                val guild = guildElement.asJsonObject
+                val guildId = guild.get("id")?.asString ?: continue
+                val guildName = guild.get("name")?.asString ?: guildId
+
+                val channelsResult = client.getGuildChannels(guildId)
+                if (channelsResult.isFailure) continue
+
+                val channels = channelsResult.getOrNull() ?: continue
+                for (channelElement in channels) {
+                    val channel = channelElement.asJsonObject
+                    val channelType = channel.get("type")?.asInt ?: continue
+                    // Only text channels (0) and announcement channels (5)
+                    if (channelType != 0 && channelType != 5) continue
+
+                    val channelId = channel.get("id")?.asString ?: continue
+                    val channelName = channel.get("name")?.asString ?: channelId
+
+                    groups.add(
+                        DirectoryGroup(
+                            id = channelId,
+                            name = "$guildName / $channelName",
+                            type = "channel",
+                            guildId = guildId,
+                            guildName = guildName
+                        )
+                    )
+                }
+            }
+
+            Log.d(TAG, "Listed ${groups.size} groups live from ${guilds.size()} guilds")
         } catch (e: Exception) {
             Log.e(TAG, "Error listing groups live", e)
         }

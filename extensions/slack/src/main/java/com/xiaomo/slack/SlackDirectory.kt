@@ -1,30 +1,35 @@
-/**
- * OpenClaw Source Reference:
- * - ../openclaw/src/channels/slack/(all)
- *
- * AndroidForClaw adaptation: Slack channel runtime.
- */
 package com.xiaomo.slack
 
 import android.util.Log
 
-/**
- * Slack user/group directory lookup
- */
 class SlackDirectory(private val client: SlackClient) {
     companion object {
         private const val TAG = "SlackDirectory"
     }
 
     suspend fun lookupUser(userId: String): String? {
-        Log.d(TAG, "Looking up user: $userId")
-        // TODO: Implement user lookup
-        return null
+        return try {
+            val result = client.usersInfo(userId)
+            result.getOrNull()?.let { user ->
+                user.getAsJsonObject("profile")?.get("display_name")?.asString?.takeIf { it.isNotBlank() }
+                    ?: user.get("real_name")?.asString
+                    ?: user.get("name")?.asString
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to lookup user $userId: ${e.message}")
+            null
+        }
     }
 
-    suspend fun lookupGroup(groupId: String): String? {
-        Log.d(TAG, "Looking up group: $groupId")
-        // TODO: Implement group lookup
-        return null
+    suspend fun lookupChannel(channelId: String): String? {
+        return try {
+            val result = client.conversationsInfo(channelId)
+            result.getOrNull()?.get("name")?.asString
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to lookup channel $channelId: ${e.message}")
+            null
+        }
     }
+
+    suspend fun lookupGroup(groupId: String): String? = lookupChannel(groupId)
 }

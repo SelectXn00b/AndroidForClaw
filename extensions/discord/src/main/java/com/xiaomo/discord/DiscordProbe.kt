@@ -102,15 +102,28 @@ object DiscordProbe {
 
             Log.i(TAG, "✅ Discord probe successful: ${botInfo.username} (${latency}ms)")
 
+            val appInfo = if (includeApplication) {
+                try {
+                    val appResult = client.getApplication()
+                    appResult.getOrNull()?.let { appData ->
+                        ApplicationInfo(
+                            id = appData.get("id")?.asString ?: "",
+                            name = appData.get("name")?.asString ?: "",
+                            verifyKey = appData.get("verify_key")?.asString,
+                            intents = null
+                        )
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to fetch application info: ${e.message}")
+                    null
+                }
+            } else null
+
             ProbeResult(
                 ok = true,
                 latencyMs = latency,
                 bot = botInfo,
-                application = if (includeApplication) {
-                    // TODO: Fetch application info from Discord API
-                    // 需要额外的 API 调用: GET /api/v10/oauth2/applications/@me
-                    null
-                } else null
+                application = appInfo
             )
 
         } catch (e: Exception) {

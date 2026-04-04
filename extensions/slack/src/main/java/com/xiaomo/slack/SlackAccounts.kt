@@ -1,24 +1,25 @@
-/**
- * OpenClaw Source Reference:
- * - ../openclaw/src/channels/slack/(all)
- *
- * AndroidForClaw adaptation: Slack channel runtime.
- */
 package com.xiaomo.slack
 
 import android.util.Log
 
-/**
- * Slack multi-account support
- */
 class SlackAccounts {
     companion object {
         private const val TAG = "SlackAccounts"
+        private const val DEFAULT_ACCOUNT_ID = "default"
     }
 
-    fun resolveAccount(accountId: String?): SlackConfig {
-        Log.d(TAG, "Resolving account: $accountId")
-        // TODO: Multi-account resolution
-        return SlackConfig()
+    data class SlackAccount(
+        val id: String,
+        val config: SlackConfig
+    )
+
+    fun resolveAccount(baseConfig: SlackConfig, accountId: String? = null): SlackAccount {
+        val id = accountId?.takeIf { it.isNotBlank() } ?: DEFAULT_ACCOUNT_ID
+        Log.d(TAG, "Resolving account: $id")
+        return SlackAccount(id = id, config = baseConfig)
+    }
+
+    fun isAccountConfigured(config: SlackConfig): Boolean {
+        return config.enabled && config.botToken.isNotBlank()
     }
 }

@@ -1,29 +1,27 @@
-/**
- * OpenClaw Source Reference:
- * - ../openclaw/src/channels/telegram/(all)
- *
- * AndroidForClaw adaptation: Telegram channel runtime.
- */
 package com.xiaomo.telegram.messaging
 
-import android.util.Log
+object TelegramMention {
 
-/**
- * Telegram @mention handling
- */
-class TelegramMention {
-    companion object {
-        private const val TAG = "TelegramMention"
-
-        fun isMentioned(text: String, botId: String): Boolean {
-            Log.d(TAG, "Checking mention for bot: $botId")
-            // TODO: Implement mention detection
-            return false
-        }
-
-        fun stripMention(text: String, botId: String): String {
-            // TODO: Strip bot mention from text
-            return text
-        }
+    fun isMentioned(mentions: List<String>, botUsername: String): Boolean {
+        return mentions.any { it.equals("@$botUsername", ignoreCase = true) }
     }
+
+    fun stripMention(text: String, botUsername: String): String {
+        return text.replace("@$botUsername", "", ignoreCase = true).trim()
+    }
+
+    fun parseMentionsFromEntities(text: String, entities: List<MentionEntity>): List<String> {
+        return entities.filter { it.type == "mention" }
+            .mapNotNull { entity ->
+                if (entity.offset + entity.length <= text.length) {
+                    text.substring(entity.offset, entity.offset + entity.length)
+                } else null
+            }
+    }
+
+    data class MentionEntity(
+        val type: String,
+        val offset: Int,
+        val length: Int
+    )
 }
