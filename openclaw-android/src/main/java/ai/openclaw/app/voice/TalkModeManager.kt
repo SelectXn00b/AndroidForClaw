@@ -22,11 +22,13 @@ import ai.openclaw.app.isCanonicalMainSessionKey
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,6 +48,8 @@ class TalkModeManager(
   private val session: com.xiaomo.base.IGatewayChannel,
   private val supportsChatSubscribe: Boolean,
   private val isConnected: () -> Boolean,
+  private val onBeforeSpeak: suspend () -> Unit = {},
+  private val onAfterSpeak: suspend () -> Unit = {},
 ) {
   companion object {
     private const val tag = "TalkMode"
@@ -103,6 +107,7 @@ class TalkModeManager(
   private val playbackGeneration = AtomicLong(0L)
 
   private var ttsJob: Job? = null
+  private val ttsJobLock = Any()
   private val playerLock = Any()
   private var player: MediaPlayer? = null
   @Volatile private var finalizeInFlight = false
@@ -164,8 +169,11 @@ class TalkModeManager(
           ?: waitForAssistantText(session, startedAt, if (ok) 12_000 else 25_000)
         if (!assistant.isNullOrBlank()) {
           val playbackToken = playbackGeneration.incrementAndGet()
+          cancelActivePlayback()
           _statusText.value = "Speaking…"
-          playAssistant(assistant, playbackToken)
+          runPlaybackSession(playbackToken) {
+            playAssistant(assistant, playbackToken)
+          }
         } else {
           _statusText.value = "No reply"
         }
@@ -182,14 +190,12 @@ class TalkModeManager(
 
   fun playTtsForText(text: String) {
     val playbackToken = playbackGeneration.incrementAndGet()
-    ttsJob?.cancel()
-    ttsJob = scope.launch {
+    cancelActivePlayback()
+    scope.launch {
       reloadConfig()
-      ensurePlaybackActive(playbackToken)
-      _isSpeaking.value = true
-      _statusText.value = "Speaking…"
-      playAssistant(text, playbackToken)
-      ttsJob = null
+      runPlaybackSession(playbackToken) {
+        playAssistant(text, playbackToken)
+      }
     }
   }
 
@@ -272,10 +278,11 @@ class TalkModeManager(
   suspend fun speakAssistantReply(text: String) {
     if (!playbackEnabled) return
     val playbackToken = playbackGeneration.incrementAndGet()
-    stopSpeaking(resetInterrupt = false)
+    cancelActivePlayback()
     ensureConfigLoaded()
-    ensurePlaybackActive(playbackToken)
-    playAssistant(text, playbackToken)
+    runPlaybackSession(playbackToken) {
+      playAssistant(text, playbackToken)
+    }
   }
 
   private fun start() {
@@ -484,9 +491,10 @@ class TalkModeManager(
       }
       Log.d(tag, "assistant text ok chars=${assistant.length}")
       val playbackToken = playbackGeneration.incrementAndGet()
-      stopSpeaking(resetInterrupt = false)
-      ensurePlaybackActive(playbackToken)
-      playAssistant(assistant, playbackToken)
+      cancelActivePlayback()
+      runPlaybackSession(playbackToken) {
+        playAssistant(assistant, playbackToken)
+      }
     } catch (err: Throwable) {
       if (err is CancellationException) {
         Log.d(tag, "finalize speech cancelled")
@@ -680,9 +688,6 @@ class TalkModeManager(
       }
       _statusText.value = "Speak failed: ${err.message ?: err::class.simpleName}"
       Log.w(tag, "talk.speak failed: ${err.message ?: err::class.simpleName}")
-    } finally {
-
-      _isSpeaking.value = false
     }
   }
 
@@ -815,6 +820,57 @@ class TalkModeManager(
     stopSpeaking(resetInterrupt = true)
     _isSpeaking.value = false
     _statusText.value = "Listening"
+  }
+
+  private suspend fun runPlaybackSession(
+    playbackToken: Long,
+    block: suspend () -> Unit,
+  ) {
+    val currentJob = coroutineContext[Job]
+    var shouldResumeAfterSpeak = false
+    try {
+      val claimedPlayback =
+        synchronized(ttsJobLock) {
+          if (!playbackEnabled || playbackToken != playbackGeneration.get()) {
+            false
+          } else {
+            ttsJob = currentJob
+            true
+          }
+        }
+      if (!claimedPlayback) {
+        ensurePlaybackActive(playbackToken)
+        return
+      }
+      ensurePlaybackActive(playbackToken)
+      shouldResumeAfterSpeak = true
+      onBeforeSpeak()
+      ensurePlaybackActive(playbackToken)
+      _isSpeaking.value = true
+      _statusText.value = "Speaking…"
+      block()
+    } finally {
+      synchronized(ttsJobLock) {
+        if (ttsJob === currentJob) {
+          ttsJob = null
+        }
+      }
+      _isSpeaking.value = false
+      if (shouldResumeAfterSpeak) {
+        withContext(NonCancellable) {
+          onAfterSpeak()
+        }
+      }
+    }
+  }
+
+  private fun cancelActivePlayback() {
+    val activeJob =
+      synchronized(ttsJobLock) {
+        ttsJob
+      }
+    activeJob?.cancel()
+    stopSpeaking(resetInterrupt = false)
   }
 
   private fun stopSpeaking(resetInterrupt: Boolean = true) {

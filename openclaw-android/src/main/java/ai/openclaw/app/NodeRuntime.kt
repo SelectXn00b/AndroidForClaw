@@ -383,6 +383,8 @@ class NodeRuntime(
       session = localChatChannel ?: operatorSession,
       supportsChatSubscribe = false,
       isConnected = { operatorConnected },
+      onBeforeSpeak = { micCapture.pauseForTts() },
+      onAfterSpeak = { micCapture.resumeAfterTts() },
     ).also { speaker ->
       speaker.setPlaybackEnabled(prefs.speakerEnabled.value)
     }
@@ -425,15 +427,20 @@ class NodeRuntime(
       session = localChatChannel ?: operatorSession,
       supportsChatSubscribe = localChatChannel == null,
       isConnected = { operatorConnected },
+      onBeforeSpeak = { micCapture.pauseForTts() },
+      onAfterSpeak = { micCapture.resumeAfterTts() },
     )
   }
 
   private fun applyMainSessionKey(candidate: String?) {
     val trimmed = normalizeMainKey(candidate) ?: return
+    // Always push the resolved session key into TalkMode, even when the
+    // state flow value is unchanged, so lazy TalkMode instances do not
+    // stay on the default "main" session key.
+    talkMode.setMainSessionKey(trimmed)
     if (isCanonicalMainSessionKey(_mainSessionKey.value)) return
     if (_mainSessionKey.value == trimmed) return
     _mainSessionKey.value = trimmed
-    talkMode.setMainSessionKey(trimmed)
     chat.applyMainSessionKey(trimmed)
     updateHomeCanvasState()
   }
