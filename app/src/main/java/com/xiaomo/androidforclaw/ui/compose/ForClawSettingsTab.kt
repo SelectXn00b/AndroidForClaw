@@ -543,9 +543,9 @@ private fun AvatarToggleItem() {
                         )
                         return@Switch
                     }
+                    enabled = v
+                    prefs.edit().putBoolean("enabled", v).apply()
                     if (v) FloatingAvatarService.start(context) else FloatingAvatarService.stop(context)
-                    enabled = FloatingAvatarService.isRunning
-                    prefs.edit().putBoolean("enabled", enabled).apply()
                 },
             )
         }

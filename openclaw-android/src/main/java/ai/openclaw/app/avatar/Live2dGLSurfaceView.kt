@@ -52,12 +52,19 @@ class Live2dGLSurfaceView(context: Context) : GLSurfaceView(context) {
     fun postOnGLThread(block: (Live2dModel?) -> Unit) {
         queueEvent { block(renderer.model) }
     }
+
+    fun releaseModelOnGLThread(onDone: Runnable) {
+        queueEvent {
+            renderer.model?.release()
+            renderer.model = null
+            onDone.run()
+        }
+    }
 }
 
 private class Live2dRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
-    var model: Live2dModel? = null
-        private set
+    @Volatile var model: Live2dModel? = null
 
     private var viewWidth = 0
     private var viewHeight = 0

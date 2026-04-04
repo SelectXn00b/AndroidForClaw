@@ -36,11 +36,17 @@ class FloatingAvatarService : Service() {
     override fun onDestroy() {
         isRunning = false
         scope.cancel()
-        glView?.let { view ->
-            view.postOnGLThread { it?.release() }
+        val view = glView
+        glView = null
+        if (view != null) {
+            // Release Live2D native resources on the GL thread first (needs EGL context),
+            // then synchronously remove the view. Must be synchronous so a quick
+            // stop-then-start doesn't race with a stale view still in the WindowManager.
+            val latch = java.util.concurrent.CountDownLatch(1)
+            view.releaseModelOnGLThread { latch.countDown() }
+            try { latch.await(500, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (_: Exception) {}
             try { windowManager?.removeView(view) } catch (_: Exception) {}
         }
-        glView = null
         super.onDestroy()
     }
 
