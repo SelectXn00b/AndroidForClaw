@@ -42,6 +42,7 @@ class FloatingRiveService : Service() {
         val view = riveView
         riveView = null
         if (view != null) {
+            try { view.stop() } catch (_: Exception) {}
             try { windowManager?.removeView(view) } catch (_: Exception) {}
         }
         super.onDestroy()
@@ -83,15 +84,22 @@ class FloatingRiveService : Service() {
             y = (200 * density).toInt()
         }
 
-        val view = RiveAnimationView(this).apply {
-            setRiveResource(
-                ai.openclaw.app.R.raw.robot_expressions,
-                stateMachineName = STATE_MACHINE_NAME,
-                autoplay = true,
-            )
-            setBackgroundColor(Color.TRANSPARENT)
+        val view = try {
+            RiveAnimationView(this).apply {
+                setRiveResource(
+                    ai.openclaw.app.R.raw.robot_expressions,
+                    stateMachineName = STATE_MACHINE_NAME,
+                    autoplay = true,
+                )
+                setBackgroundColor(Color.TRANSPARENT)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load .riv (stateMachine=$STATE_MACHINE_NAME)", e)
+            stopSelf()
+            return
         }
         riveView = view
+        Log.i(TAG, "Rive loaded: artboard=default, stateMachine=$STATE_MACHINE_NAME")
 
         // Drag handling (same pattern as FloatingAvatarService)
         var initX = 0; var initY = 0; var touchX = 0f; var touchY = 0f

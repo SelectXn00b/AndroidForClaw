@@ -13,6 +13,7 @@ import com.xiaomo.androidforclaw.providers.UnifiedLLMProvider
 import com.xiaomo.androidforclaw.providers.llm.toLegacyMessage
 import com.xiaomo.androidforclaw.providers.llm.toNewMessage
 import com.xiaomo.androidforclaw.util.ReasoningTagFilter
+import com.xiaomo.androidforclaw.util.ReplyTagFilter
 
 /**
  * Shared message processing pipeline for Discord, Telegram, Slack, and Signal.
@@ -151,8 +152,10 @@ class ChannelMessageProcessor(private val app: MyApplication) {
             Log.i(TAG, "[Session] saved, total=${session.messageCount()}")
 
             // 9. Send reply
-            var replyContent = ReasoningTagFilter.stripReasoningTags(
-                result.finalContent ?: "\u62b1\u6b49\uff0c\u6211\u65e0\u6cd5\u5904\u7406\u8fd9\u4e2a\u8bf7\u6c42\u3002"
+            var replyContent = ReplyTagFilter.strip(
+                ReasoningTagFilter.stripReasoningTags(
+                    result.finalContent ?: "\u62b1\u6b49\uff0c\u6211\u65e0\u6cd5\u5904\u7406\u8fd9\u4e2a\u8bf7\u6c42\u3002"
+                )
             )
             if (adapter.isGroupContext()) {
                 replyContent = ContextSecurityGuard.redactForSharedContext(replyContent)
