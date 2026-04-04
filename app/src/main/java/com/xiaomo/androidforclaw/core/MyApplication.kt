@@ -76,6 +76,8 @@ import com.xiaomo.androidforclaw.agent.context.ContextBuilder
 import com.xiaomo.androidforclaw.agent.loop.AgentLoop
 import com.xiaomo.androidforclaw.agent.loop.ProgressUpdate
 import com.xiaomo.androidforclaw.providers.UnifiedLLMProvider
+import com.xiaomo.androidforclaw.core.channel.ChannelAdapter
+import com.xiaomo.androidforclaw.core.channel.ChannelMessageProcessor
 
 /**
  */
@@ -1832,204 +1834,44 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
         }
     }
 
-    /**
-     * Send Discord reply (actual implementation)
-     */
     private suspend fun sendDiscordReply(event: ChannelEvent.Message) {
-        val startTime = System.currentTimeMillis()
-
         try {
-            // Message deduplication check
-            if (discordDedup.isDuplicate(event.messageId)) {
-                Log.d(TAG, "⏭️  消息已处理，跳过: ${event.messageId}")
-                return
-            }
-
-            // Cancel previous processing task for this channel
+            if (discordDedup.isDuplicate(event.messageId)) return
             discordProcessingJobs[event.channelId]?.cancel()
-
-            // Create new processing task
             val job = GlobalScope.launch(Dispatchers.IO) {
                 try {
-                    processDiscordMessage(event, startTime)
+                    val adapter = object : ChannelAdapter {
+                        override val channelName = "discord"
+                        override val sessionPrefix = "discord"
+                        override val messageCharLimit = 1900
+                        override val supportsReactions = true
+                        override val supportsTyping = true
+                        override suspend fun addThinkingReaction() { discordChannel?.addReaction(event.channelId, event.messageId, "\uD83E\uDD14") }
+                        override suspend fun removeThinkingReaction() { discordChannel?.removeReaction(event.channelId, event.messageId, "\uD83E\uDD14") }
+                        override suspend fun addCompletionReaction() { discordChannel?.addReaction(event.channelId, event.messageId, "\u2705") }
+                        override suspend fun addErrorReaction() { discordChannel?.addReaction(event.channelId, event.messageId, "\u274C") }
+                        override fun startTyping() { discordTyping?.startContinuous(event.channelId) }
+                        override fun stopTyping() { discordTyping?.stopContinuous(event.channelId) }
+                        override suspend fun sendMessageChunk(text: String, isFirstChunk: Boolean) {
+                            discordChannel?.sendMessage(channelId = event.channelId, content = text, replyToId = if (isFirstChunk) event.messageId else null)
+                        }
+                        override suspend fun sendErrorMessage(error: String) {
+                            discordChannel?.sendMessage(channelId = event.channelId, content = error, replyToId = event.messageId)
+                        }
+                        override fun isGroupContext() = event.guildId != null
+                        override fun getUserMessage() = event.content
+                        override fun getSessionKey() = "discord_${event.channelId}"
+                        override fun buildSystemPrompt() = buildDiscordSystemPrompt(event)
+                    }
+                    ChannelMessageProcessor(this@MyApplication).processMessage(adapter)
                 } finally {
                     discordProcessingJobs.remove(event.channelId)
                 }
             }
-
             discordProcessingJobs[event.channelId] = job
-
         } catch (e: Exception) {
-            Log.e(TAG, "发送 Discord 回复失败", e)
-            try {
-                discordChannel?.addReaction(event.channelId, event.messageId, "❌")
-            } catch (e2: Exception) {
-                Log.e(TAG, "添加错误表情失败", e2)
-            }
-        }
-    }
-
-    /**
-     * Process Discord message (core logic)
-     */
-    private suspend fun processDiscordMessage(event: ChannelEvent.Message, startTime: Long) {
-        var thinkingReactionAdded = false
-        var typingStarted = false
-
-        try {
-            Log.i(TAG, "========================================")
-            Log.i(TAG, "🤖 开始处理 Discord 消息")
-            Log.i(TAG, "   MessageID: ${event.messageId}")
-            Log.i(TAG, "   From: ${event.authorName} (${event.authorId})")
-            Log.i(TAG, "   Channel: ${event.channelId}")
-            Log.i(TAG, "   Content: ${event.content}")
-            Log.i(TAG, "========================================")
-
-            // 1. Add thinking reaction
-            discordChannel?.addReaction(event.channelId, event.messageId, "🤔")
-            thinkingReactionAdded = true
-
-            // 2. Start typing indicator
-            discordTyping?.startContinuous(event.channelId)
-            typingStarted = true
-
-            // 3. 🆔 Generate session ID: use channelId as unique identifier
-            val sessionId = "discord_${event.channelId}"
-            Log.i(TAG, "🆔 Session ID: $sessionId")
-
-            // 4. Get or create unified session
-            if (MainEntryNew.getSessionManager() == null) {
-                MainEntryNew.initialize(this@MyApplication)
-            }
-            val session = MainEntryNew.getSessionManager()?.getOrCreate(sessionId)
-            if (session == null) {
-                throw Exception("无法创建会话")
-            }
-
-            Log.i(TAG, "📋 [Session] 加载会话: ${session.messageCount()} 条历史消息")
-
-            // 5. Get history messages and cleanup (ensure tool_use and tool_result are paired)
-            val rawHistory = session.getRecentMessages(20)
-            val contextHistory = cleanupToolMessages(rawHistory)
-            Log.i(TAG, "📋 [Session] 清理后: ${contextHistory.size} 条消息（原始: ${rawHistory.size}）")
-
-            // 6. Build system prompt
-            val historyContext = ""  // History is in contextHistory
-            val systemPrompt = buildDiscordSystemPrompt(event, historyContext)
-
-            // 7. Call AgentLoop
-            Log.i(TAG, "🔄 调用 AgentLoop 处理消息...")
-
-            val llmProvider = com.xiaomo.androidforclaw.providers.UnifiedLLMProvider(this@MyApplication)
-            val contextManager = com.xiaomo.androidforclaw.agent.context.ContextManager(llmProvider)
-            val taskDataManager = TaskDataManager.getInstance()
-
-            val toolRegistry = ToolRegistry(this@MyApplication, taskDataManager)
-            val androidToolRegistry = AndroidToolRegistry(this@MyApplication, taskDataManager, cameraCaptureManager = cameraCaptureManager)
-
-            val agentLoop = AgentLoop(
-                llmProvider = llmProvider,
-                toolRegistry = toolRegistry,
-                androidToolRegistry = androidToolRegistry,
-                contextManager = contextManager,
-                maxIterations = 40,
-                modelRef = null
-            )
-
-            val result = agentLoop.run(
-                systemPrompt = systemPrompt,
-                userMessage = event.content,
-                contextHistory = contextHistory.map { it.toNewMessage() },
-                reasoningEnabled = true
-            )
-
-            // 8. Stop typing status
-            if (typingStarted) {
-                discordTyping?.stopContinuous(event.channelId)
-                typingStarted = false
-            }
-
-            // 9. Remove thinking reaction
-            if (thinkingReactionAdded) {
-                discordChannel?.removeReaction(event.channelId, event.messageId, "🤔")
-                thinkingReactionAdded = false
-            }
-
-            // 9. Save messages to session (convert back to old format)
-            result.messages.forEach { message ->
-                session.addMessage(message.toLegacyMessage())
-            }
-            MainEntryNew.getSessionManager()?.save(session)
-            Log.i(TAG, "💾 [Session] 会话已保存，总消息数: ${session.messageCount()}")
-
-            // 10. Send reply
-            var replyContent = com.xiaomo.androidforclaw.util.ReplyTagFilter.strip(result.finalContent ?: "抱歉，我无法处理这个请求。")
-            // Redact secrets in guild (group) channel outbound messages
-            if (event.guildId != null) {
-                replyContent = com.xiaomo.androidforclaw.agent.context.ContextSecurityGuard
-                    .redactForSharedContext(replyContent)
-            }
-
-            // Send in chunks (Discord 2000 character limit)
-            val chunks = splitMessageIntoChunks(replyContent, 1900)
-
-            for ((index, chunk) in chunks.withIndex()) {
-                val sendResult = discordChannel?.sendMessage(
-                    channelId = event.channelId,
-                    content = chunk,
-                    replyToId = if (index == 0) event.messageId else null
-                )
-
-                if (sendResult?.isSuccess == true) {
-                    val sentMessageId = sendResult.getOrNull()
-                    Log.i(TAG, "✅ 消息块 ${index + 1}/${chunks.size} 发送成功: $sentMessageId")
-                } else {
-                    Log.e(TAG, "❌ 消息块 ${index + 1}/${chunks.size} 发送失败: ${sendResult?.exceptionOrNull()?.message}")
-                }
-            }
-
-            // 11. Add completion reaction
-            discordChannel?.addReaction(event.channelId, event.messageId, "✅")
-
-            val elapsed = System.currentTimeMillis() - startTime
-            Log.i(TAG, "========================================")
-            Log.i(TAG, "✅ Discord 消息处理完成")
-            Log.i(TAG, "   耗时: ${elapsed}ms")
-            Log.i(TAG, "   迭代: ${result.iterations}")
-            Log.i(TAG, "   回复长度: ${replyContent.length} 字符")
-            Log.i(TAG, "   分块数: ${chunks.size}")
-            Log.i(TAG, "========================================")
-
-        } catch (e: Exception) {
-            Log.e(TAG, "========================================")
-            Log.e(TAG, "❌ Discord 消息处理失败", e)
-            Log.e(TAG, "========================================")
-
-            // Cleanup status
-            if (typingStarted) {
-                discordTyping?.stopContinuous(event.channelId)
-            }
-
-            if (thinkingReactionAdded) {
-                try {
-                    discordChannel?.removeReaction(event.channelId, event.messageId, "🤔")
-                } catch (e2: Exception) {
-                    Log.e(TAG, "移除思考表情失败", e2)
-                }
-            }
-
-            // Add error reaction and error message
-            try {
-                discordChannel?.addReaction(event.channelId, event.messageId, "❌")
-
-                discordChannel?.sendMessage(
-                    channelId = event.channelId,
-                    content = "抱歉，处理您的消息时遇到错误：${e.message}",
-                    replyToId = event.messageId
-                )
-            } catch (e2: Exception) {
-                Log.e(TAG, "发送错误消息失败", e2)
-            }
+            Log.e(TAG, "Send Discord reply failed", e)
+            try { discordChannel?.addReaction(event.channelId, event.messageId, "\u274C") } catch (_: Exception) {}
         }
     }
 
@@ -2418,7 +2260,7 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
     /**
      * Build Discord system prompt
      */
-    private fun buildDiscordSystemPrompt(event: ChannelEvent.Message, historyContext: String): String {
+    private fun buildDiscordSystemPrompt(event: ChannelEvent.Message): String {
         val botName = discordChannel?.getBotUsername() ?: "AndroidForClaw Bot"
         val botId = discordChannel?.getBotUserId() ?: ""
 
@@ -2432,8 +2274,6 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
 - **频道 ID**: ${event.channelId}
 - **用户**: ${event.authorName} (ID: ${event.authorId})
 - **Bot ID**: $botId
-
-$historyContext
 
 # 核心能力
 你可以通过工具调用来控制 Android 设备：
@@ -2553,142 +2393,36 @@ $historyContext
     }
 
     private suspend fun sendTelegramReply(event: TelegramChannel.ChannelEvent.Message) {
-        val startTime = System.currentTimeMillis()
         try {
-            if (!telegramDedup.add(event.messageId)) {
-                return
-            }
+            if (!telegramDedup.add(event.messageId)) return
             telegramProcessingJobs[event.chatId]?.cancel()
             val job = GlobalScope.launch(Dispatchers.IO) {
                 try {
-                    processTelegramMessage(event, startTime)
-                } finally {
-                    telegramProcessingJobs.remove(event.chatId)
-                }
-            }
-            telegramProcessingJobs[event.chatId] = job
-        } catch (e: Exception) {
-            Log.e(TAG, "Send Telegram reply failed", e)
-            try {
-                telegramChannel?.setMessageReaction(event.chatId, event.messageId, "❌")
-            } catch (_: Exception) {}
-        }
-    }
-
-    private suspend fun processTelegramMessage(event: TelegramChannel.ChannelEvent.Message, startTime: Long) {
-        var thinkingReactionAdded = false
-        var typingStarted = false
-
-        try {
-            Log.i(TAG, "Processing Telegram message from ${event.senderName} (${event.senderId})")
-
-            // 1. Add thinking reaction
-            telegramChannel?.setMessageReaction(event.chatId, event.messageId, "\uD83E\uDD14")
-            thinkingReactionAdded = true
-
-            // 2. Start typing indicator
-            telegramTyping?.startContinuous(event.chatId)
-            typingStarted = true
-
-            // 3. Session
-            val sessionId = "telegram_${event.chatId}"
-            if (MainEntryNew.getSessionManager() == null) {
-                MainEntryNew.initialize(this@MyApplication)
-            }
-            val session = MainEntryNew.getSessionManager()?.getOrCreate(sessionId)
-                ?: throw Exception("Cannot create session")
-
-            val rawHistory = session.getRecentMessages(20)
-            val contextHistory = cleanupToolMessages(rawHistory)
-
-            // 4. System prompt
-            val systemPrompt = buildTelegramSystemPrompt(event)
-
-            // 5. AgentLoop
-            val llmProvider = UnifiedLLMProvider(this@MyApplication)
-            val contextManager = com.xiaomo.androidforclaw.agent.context.ContextManager(llmProvider)
-            val taskDataManager = TaskDataManager.getInstance()
-            val toolRegistry = ToolRegistry(this@MyApplication, taskDataManager)
-            val androidToolRegistry = AndroidToolRegistry(this@MyApplication, taskDataManager, cameraCaptureManager = cameraCaptureManager)
-
-            val agentLoop = AgentLoop(
-                llmProvider = llmProvider,
-                toolRegistry = toolRegistry,
-                androidToolRegistry = androidToolRegistry,
-                contextManager = contextManager,
-                maxIterations = 40,
-                modelRef = null
-            )
-
-            val result = agentLoop.run(
-                systemPrompt = systemPrompt,
-                userMessage = event.content,
-                contextHistory = contextHistory.map { it.toNewMessage() },
-                reasoningEnabled = true
-            )
-
-            // 6. Stop typing
-            if (typingStarted) {
-                telegramTyping?.stopContinuous(event.chatId)
-                typingStarted = false
-            }
-
-            // 7. Remove thinking reaction
-            if (thinkingReactionAdded) {
-                telegramChannel?.removeMessageReaction(event.chatId, event.messageId)
-                thinkingReactionAdded = false
-            }
-
-            // 8. Save session
-            result.messages.forEach { message ->
-                session.addMessage(message.toLegacyMessage())
-            }
-            MainEntryNew.getSessionManager()?.save(session)
-
-            // 9. Send reply
-            var replyContent = ReasoningTagFilter.stripReasoningTags(result.finalContent ?: "抱歉，我无法处理这个请求。")
-            if (event.chatType == "group") {
-                replyContent = com.xiaomo.androidforclaw.agent.context.ContextSecurityGuard
-                    .redactForSharedContext(replyContent)
-            }
-
-            val chunks = TelegramSender.splitMessageIntoChunks(replyContent, 4000)
-            for ((index, chunk) in chunks.withIndex()) {
-                val replyTo = if (index == 0) event.messageId else null
-                telegramChannel?.sendMessage(event.chatId, chunk, replyTo)
-            }
-
-            // 10. Add completion reaction
-            telegramChannel?.setMessageReaction(event.chatId, event.messageId, "✅")
-
-            val elapsed = System.currentTimeMillis() - startTime
-            Log.i(TAG, "Telegram message processed in ${elapsed}ms, ${result.iterations} iterations, ${replyContent.length} chars")
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Telegram message processing failed", e)
-
-            if (typingStarted) {
-                telegramTyping?.stopContinuous(event.chatId)
-            }
-            if (thinkingReactionAdded) {
-                try { telegramChannel?.removeMessageReaction(event.chatId, event.messageId) } catch (_: Exception) {}
-            }
-            try {
-                telegramChannel?.setMessageReaction(event.chatId, event.messageId, "❌")
-                telegramChannel?.sendMessage(
-                    event.chatId,
-                    "抱歉，处理您的消息时遇到错误：${e.message}",
-                    event.messageId
-                )
-            } catch (_: Exception) {}
-        }
-    }
-
-    private fun buildTelegramSystemPrompt(event: TelegramChannel.ChannelEvent.Message): String {
-        val botName = telegramChannel?.getBotUsername() ?: "AndroidForClaw Bot"
-        val botId = telegramChannel?.getBotId() ?: ""
-
-        return """
+                    val adapter = object : ChannelAdapter {
+                        override val channelName = "telegram"
+                        override val sessionPrefix = "telegram"
+                        override val messageCharLimit = 4000
+                        override val supportsReactions = true
+                        override val supportsTyping = true
+                        override suspend fun addThinkingReaction() { telegramChannel?.setMessageReaction(event.chatId, event.messageId, "\uD83E\uDD14") }
+                        override suspend fun removeThinkingReaction() { telegramChannel?.removeMessageReaction(event.chatId, event.messageId) }
+                        override suspend fun addCompletionReaction() { telegramChannel?.setMessageReaction(event.chatId, event.messageId, "\u2705") }
+                        override suspend fun addErrorReaction() { telegramChannel?.setMessageReaction(event.chatId, event.messageId, "\u274C") }
+                        override fun startTyping() { telegramTyping?.startContinuous(event.chatId) }
+                        override fun stopTyping() { telegramTyping?.stopContinuous(event.chatId) }
+                        override suspend fun sendMessageChunk(text: String, isFirstChunk: Boolean) {
+                            telegramChannel?.sendMessage(event.chatId, text, if (isFirstChunk) event.messageId else null)
+                        }
+                        override suspend fun sendErrorMessage(error: String) {
+                            telegramChannel?.sendMessage(event.chatId, error, event.messageId)
+                        }
+                        override fun isGroupContext() = event.chatType == "group"
+                        override fun getUserMessage() = event.content
+                        override fun getSessionKey() = "telegram_${event.chatId}"
+                        override fun buildSystemPrompt(): String {
+                            val botName = telegramChannel?.getBotUsername() ?: "AndroidForClaw Bot"
+                            val botId = telegramChannel?.getBotId() ?: ""
+                            return """
 # 身份
 你是 **$botName**，一个运行在 Android 设备上的智能助手，通过 Telegram 与用户交互。
 
@@ -2722,7 +2456,19 @@ $historyContext
 - 代码块使用语法高亮
 
 现在，请处理用户的消息。
-        """.trimIndent()
+                            """.trimIndent()
+                        }
+                    }
+                    ChannelMessageProcessor(this@MyApplication).processMessage(adapter)
+                } finally {
+                    telegramProcessingJobs.remove(event.chatId)
+                }
+            }
+            telegramProcessingJobs[event.chatId] = job
+        } catch (e: Exception) {
+            Log.e(TAG, "Send Telegram reply failed", e)
+            try { telegramChannel?.setMessageReaction(event.chatId, event.messageId, "\u274C") } catch (_: Exception) {}
+        }
     }
 
     // ==================== Slack Channel ====================
@@ -2807,130 +2553,37 @@ $historyContext
     }
 
     private suspend fun sendSlackReply(event: SlackChannel.ChannelEvent.Message) {
-        val startTime = System.currentTimeMillis()
         try {
-            if (!slackDedup.add(event.ts)) {
-                return
-            }
+            if (!slackDedup.add(event.ts)) return
             slackProcessingJobs[event.channelId]?.cancel()
             val job = GlobalScope.launch(Dispatchers.IO) {
                 try {
-                    processSlackMessage(event, startTime)
-                } finally {
-                    slackProcessingJobs.remove(event.channelId)
-                }
-            }
-            slackProcessingJobs[event.channelId] = job
-        } catch (e: Exception) {
-            Log.e(TAG, "Send Slack reply failed", e)
-            try {
-                slackChannel?.addReaction(event.channelId, "x", event.ts)
-            } catch (_: Exception) {}
-        }
-    }
-
-    private suspend fun processSlackMessage(event: SlackChannel.ChannelEvent.Message, startTime: Long) {
-        var thinkingReactionAdded = false
-
-        try {
-            Log.i(TAG, "Processing Slack message from ${event.userId}")
-
-            // 1. Add thinking reaction
-            slackChannel?.addReaction(event.channelId, "thinking_face", event.ts)
-            thinkingReactionAdded = true
-
-            // 2. Session
-            val sessionId = "slack_${event.channelId}"
-            if (MainEntryNew.getSessionManager() == null) {
-                MainEntryNew.initialize(this@MyApplication)
-            }
-            val session = MainEntryNew.getSessionManager()?.getOrCreate(sessionId)
-                ?: throw Exception("Cannot create session")
-
-            val rawHistory = session.getRecentMessages(20)
-            val contextHistory = cleanupToolMessages(rawHistory)
-
-            // 3. System prompt
-            val systemPrompt = buildSlackSystemPrompt(event)
-
-            // 4. AgentLoop
-            val llmProvider = UnifiedLLMProvider(this@MyApplication)
-            val contextManager = com.xiaomo.androidforclaw.agent.context.ContextManager(llmProvider)
-            val taskDataManager = TaskDataManager.getInstance()
-            val toolRegistry = ToolRegistry(this@MyApplication, taskDataManager)
-            val androidToolRegistry = AndroidToolRegistry(this@MyApplication, taskDataManager, cameraCaptureManager = cameraCaptureManager)
-
-            val agentLoop = AgentLoop(
-                llmProvider = llmProvider,
-                toolRegistry = toolRegistry,
-                androidToolRegistry = androidToolRegistry,
-                contextManager = contextManager,
-                maxIterations = 40,
-                modelRef = null
-            )
-
-            val result = agentLoop.run(
-                systemPrompt = systemPrompt,
-                userMessage = event.text,
-                contextHistory = contextHistory.map { it.toNewMessage() },
-                reasoningEnabled = true
-            )
-
-            // 5. Remove thinking reaction
-            if (thinkingReactionAdded) {
-                slackChannel?.removeReaction(event.channelId, "thinking_face", event.ts)
-                thinkingReactionAdded = false
-            }
-
-            // 6. Save session
-            result.messages.forEach { message ->
-                session.addMessage(message.toLegacyMessage())
-            }
-            MainEntryNew.getSessionManager()?.save(session)
-
-            // 7. Send reply
-            var replyContent = ReasoningTagFilter.stripReasoningTags(result.finalContent ?: "抱歉，我无法处理这个请求。")
-            if (event.channelType == "group") {
-                replyContent = com.xiaomo.androidforclaw.agent.context.ContextSecurityGuard
-                    .redactForSharedContext(replyContent)
-            }
-
-            // Reply in thread (use message ts as thread_ts for new threads, or existing threadTs)
-            val threadTs = event.threadTs ?: event.ts
-            val chunks = SlackSender.splitMessageIntoChunks(replyContent, 3900)
-            for (chunk in chunks) {
-                slackChannel?.postMessage(event.channelId, chunk, threadTs)
-            }
-
-            // 8. Add completion reaction
-            slackChannel?.addReaction(event.channelId, "white_check_mark", event.ts)
-
-            val elapsed = System.currentTimeMillis() - startTime
-            Log.i(TAG, "Slack message processed in ${elapsed}ms, ${result.iterations} iterations")
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Slack message processing failed", e)
-
-            if (thinkingReactionAdded) {
-                try { slackChannel?.removeReaction(event.channelId, "thinking_face", event.ts) } catch (_: Exception) {}
-            }
-            try {
-                slackChannel?.addReaction(event.channelId, "x", event.ts)
-                val threadTs = event.threadTs ?: event.ts
-                slackChannel?.postMessage(
-                    event.channelId,
-                    "抱歉，处理您的消息时遇到错误：${e.message}",
-                    threadTs
-                )
-            } catch (_: Exception) {}
-        }
-    }
-
-    private fun buildSlackSystemPrompt(event: SlackChannel.ChannelEvent.Message): String {
-        val botName = slackChannel?.getBotUsername() ?: "AndroidForClaw Bot"
-        val botId = slackChannel?.getBotId() ?: ""
-
-        return """
+                    val threadTs = event.threadTs ?: event.ts
+                    val adapter = object : ChannelAdapter {
+                        override val channelName = "slack"
+                        override val sessionPrefix = "slack"
+                        override val messageCharLimit = 3900
+                        override val supportsReactions = true
+                        override val supportsTyping = false
+                        override suspend fun addThinkingReaction() { slackChannel?.addReaction(event.channelId, "thinking_face", event.ts) }
+                        override suspend fun removeThinkingReaction() { slackChannel?.removeReaction(event.channelId, "thinking_face", event.ts) }
+                        override suspend fun addCompletionReaction() { slackChannel?.addReaction(event.channelId, "white_check_mark", event.ts) }
+                        override suspend fun addErrorReaction() { slackChannel?.addReaction(event.channelId, "x", event.ts) }
+                        override fun startTyping() {}
+                        override fun stopTyping() {}
+                        override suspend fun sendMessageChunk(text: String, isFirstChunk: Boolean) {
+                            slackChannel?.postMessage(event.channelId, text, threadTs)
+                        }
+                        override suspend fun sendErrorMessage(error: String) {
+                            slackChannel?.postMessage(event.channelId, error, threadTs)
+                        }
+                        override fun isGroupContext() = event.channelType == "group"
+                        override fun getUserMessage() = event.text
+                        override fun getSessionKey() = "slack_${event.channelId}"
+                        override fun buildSystemPrompt(): String {
+                            val botName = slackChannel?.getBotUsername() ?: "AndroidForClaw Bot"
+                            val botId = slackChannel?.getBotId() ?: ""
+                            return """
 # 身份
 你是 **$botName**，一个运行在 Android 设备上的智能助手，通过 Slack 与用户交互。
 
@@ -2965,7 +2618,19 @@ $historyContext
 - 代码块使用语法高亮
 
 现在，请处理用户的消息。
-        """.trimIndent()
+                            """.trimIndent()
+                        }
+                    }
+                    ChannelMessageProcessor(this@MyApplication).processMessage(adapter)
+                } finally {
+                    slackProcessingJobs.remove(event.channelId)
+                }
+            }
+            slackProcessingJobs[event.channelId] = job
+        } catch (e: Exception) {
+            Log.e(TAG, "Send Slack reply failed", e)
+            try { slackChannel?.addReaction(event.channelId, "x", event.ts) } catch (_: Exception) {}
+        }
     }
 
     // ==================== Signal Channel ====================
@@ -3056,118 +2721,35 @@ $historyContext
     }
 
     private suspend fun sendSignalReply(event: SignalChannel.ChannelEvent.Message) {
-        val startTime = System.currentTimeMillis()
         try {
-            if (!signalDedup.add(event.timestamp)) {
-                return
-            }
+            if (!signalDedup.add(event.timestamp)) return
             signalProcessingJobs[event.chatId]?.cancel()
             val job = GlobalScope.launch(Dispatchers.IO) {
                 try {
-                    processSignalMessage(event, startTime)
-                } finally {
-                    signalProcessingJobs.remove(event.chatId)
-                }
-            }
-            signalProcessingJobs[event.chatId] = job
-        } catch (e: Exception) {
-            Log.e(TAG, "Send Signal reply failed", e)
-        }
-    }
-
-    private suspend fun processSignalMessage(event: SignalChannel.ChannelEvent.Message, startTime: Long) {
-        var typingStarted = false
-
-        try {
-            Log.i(TAG, "Processing Signal message from ${event.sourceName} (${event.sourceNumber})")
-
-            // 1. Start typing indicator
-            signalTyping?.startContinuous(event.chatId)
-            typingStarted = true
-
-            // 2. Session
-            val sessionId = "signal_${event.chatId}"
-            if (MainEntryNew.getSessionManager() == null) {
-                MainEntryNew.initialize(this@MyApplication)
-            }
-            val session = MainEntryNew.getSessionManager()?.getOrCreate(sessionId)
-                ?: throw Exception("Cannot create session")
-
-            val rawHistory = session.getRecentMessages(20)
-            val contextHistory = cleanupToolMessages(rawHistory)
-
-            // 3. System prompt
-            val systemPrompt = buildSignalSystemPrompt(event)
-
-            // 4. AgentLoop
-            val llmProvider = UnifiedLLMProvider(this@MyApplication)
-            val contextManager = com.xiaomo.androidforclaw.agent.context.ContextManager(llmProvider)
-            val taskDataManager = TaskDataManager.getInstance()
-            val toolRegistry = ToolRegistry(this@MyApplication, taskDataManager)
-            val androidToolRegistry = AndroidToolRegistry(this@MyApplication, taskDataManager, cameraCaptureManager = cameraCaptureManager)
-
-            val agentLoop = AgentLoop(
-                llmProvider = llmProvider,
-                toolRegistry = toolRegistry,
-                androidToolRegistry = androidToolRegistry,
-                contextManager = contextManager,
-                maxIterations = 40,
-                modelRef = null
-            )
-
-            val result = agentLoop.run(
-                systemPrompt = systemPrompt,
-                userMessage = event.text,
-                contextHistory = contextHistory.map { it.toNewMessage() },
-                reasoningEnabled = true
-            )
-
-            // 5. Stop typing
-            if (typingStarted) {
-                signalTyping?.stopContinuous(event.chatId)
-                typingStarted = false
-            }
-
-            // 6. Save session
-            result.messages.forEach { message ->
-                session.addMessage(message.toLegacyMessage())
-            }
-            MainEntryNew.getSessionManager()?.save(session)
-
-            // 7. Send reply
-            var replyContent = ReasoningTagFilter.stripReasoningTags(result.finalContent ?: "抱歉，我无法处理这个请求。")
-            if (event.chatType == "group") {
-                replyContent = com.xiaomo.androidforclaw.agent.context.ContextSecurityGuard
-                    .redactForSharedContext(replyContent)
-            }
-
-            val chunks = SignalSender.splitMessageIntoChunks(replyContent, 1900)
-            for (chunk in chunks) {
-                signalChannel?.sendMessage(event.chatId, chunk)
-            }
-
-            val elapsed = System.currentTimeMillis() - startTime
-            Log.i(TAG, "Signal message processed in ${elapsed}ms, ${result.iterations} iterations")
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Signal message processing failed", e)
-
-            if (typingStarted) {
-                signalTyping?.stopContinuous(event.chatId)
-            }
-            try {
-                signalChannel?.sendMessage(
-                    event.chatId,
-                    "抱歉，处理您的消息时遇到错误：${e.message}"
-                )
-            } catch (_: Exception) {}
-        }
-    }
-
-    private fun buildSignalSystemPrompt(event: SignalChannel.ChannelEvent.Message): String {
-        val phoneNumber = signalChannel?.getPhoneNumber() ?: ""
-
-        return """
+                    val adapter = object : ChannelAdapter {
+                        override val channelName = "signal"
+                        override val sessionPrefix = "signal"
+                        override val messageCharLimit = 1900
+                        override val supportsReactions = false
+                        override val supportsTyping = true
+                        override suspend fun addThinkingReaction() {}
+                        override suspend fun removeThinkingReaction() {}
+                        override suspend fun addCompletionReaction() {}
+                        override suspend fun addErrorReaction() {}
+                        override fun startTyping() { signalTyping?.startContinuous(event.chatId) }
+                        override fun stopTyping() { signalTyping?.stopContinuous(event.chatId) }
+                        override suspend fun sendMessageChunk(text: String, isFirstChunk: Boolean) {
+                            signalChannel?.sendMessage(event.chatId, text)
+                        }
+                        override suspend fun sendErrorMessage(error: String) {
+                            signalChannel?.sendMessage(event.chatId, error)
+                        }
+                        override fun isGroupContext() = event.chatType == "group"
+                        override fun getUserMessage() = event.text
+                        override fun getSessionKey() = "signal_${event.chatId}"
+                        override fun buildSystemPrompt(): String {
+                            val phoneNumber = signalChannel?.getPhoneNumber() ?: ""
+                            return """
 # 身份
 你是一个运行在 Android 设备上的智能助手，通过 Signal 与用户交互。
 
@@ -3198,51 +2780,18 @@ $historyContext
 - 不要输出过长的消息（建议 1500 字符以内）
 
 现在，请处理用户的消息。
-        """.trimIndent()
-    }
-
-    /**
-     * Split message into multiple chunks (Discord 2000 character limit)
-     */
-    private fun splitMessageIntoChunks(message: String, maxChunkSize: Int = 1900): List<String> {
-        if (message.length <= maxChunkSize) {
-            return listOf(message)
-        }
-
-        val chunks = mutableListOf<String>()
-        var remaining = message
-
-        while (remaining.length > maxChunkSize) {
-            // Try to split at appropriate position (newline, period, space)
-            var splitIndex = maxChunkSize
-
-            // Prioritize splitting at newline
-            val lastNewline = remaining.substring(0, maxChunkSize).lastIndexOf('\n')
-            if (lastNewline > maxChunkSize / 2) {
-                splitIndex = lastNewline + 1
-            } else {
-                // Next try to split at period
-                val lastPeriod = remaining.substring(0, maxChunkSize).lastIndexOf('。')
-                if (lastPeriod > maxChunkSize / 2) {
-                    splitIndex = lastPeriod + 1
-                } else {
-                    // Finally try to split at space
-                    val lastSpace = remaining.substring(0, maxChunkSize).lastIndexOf(' ')
-                    if (lastSpace > maxChunkSize / 2) {
-                        splitIndex = lastSpace + 1
+                            """.trimIndent()
+                        }
                     }
+                    ChannelMessageProcessor(this@MyApplication).processMessage(adapter)
+                } finally {
+                    signalProcessingJobs.remove(event.chatId)
                 }
             }
-
-            chunks.add(remaining.substring(0, splitIndex))
-            remaining = remaining.substring(splitIndex)
+            signalProcessingJobs[event.chatId] = job
+        } catch (e: Exception) {
+            Log.e(TAG, "Send Signal reply failed", e)
         }
-
-        if (remaining.isNotEmpty()) {
-            chunks.add(remaining)
-        }
-
-        return chunks
     }
 
     override fun onTerminate() {
