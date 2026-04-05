@@ -172,7 +172,7 @@ object SessionFloatWindow {
                         sessionInfoTextView?.text = latestMessage.take(100)
                     }
                 }
-                .setGravity(Gravity.END or Gravity.BOTTOM, -16, -200)
+                .setGravity(Gravity.END or Gravity.TOP, -16, 120)
                 .setShowPattern(ShowPattern.ALL_TIME)
                 .setSidePattern(SidePattern.RESULT_SIDE)
                 .setDragEnable(true)

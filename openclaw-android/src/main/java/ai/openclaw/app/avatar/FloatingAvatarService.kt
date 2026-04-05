@@ -68,6 +68,13 @@ class FloatingAvatarService : Service() {
 
     private fun createFloatingWindow() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+
+        // Safety: remove any stale view from a previous instance (Android 12 race condition)
+        val oldView = glView
+        if (oldView != null) {
+            try { windowManager?.removeView(oldView) } catch (_: Exception) {}
+        }
+
         val density = resources.displayMetrics.density
         val w = (180 * density).toInt()
         val h = (150 * density).toInt()
@@ -76,12 +83,13 @@ class FloatingAvatarService : Service() {
             w, h,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT,
         ).apply {
-            gravity = Gravity.BOTTOM or Gravity.END
+            gravity = Gravity.TOP or Gravity.END
             x = (16 * density).toInt()
-            y = (200 * density).toInt()
+            y = (120 * density).toInt()
         }
 
         val view = Live2dGLSurfaceView(this)
