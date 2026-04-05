@@ -718,7 +718,7 @@ This is a single-user Android device. All requests come from the device owner.
     private fun buildTimeSection(): String {
         // Aligned with OpenClaw: "## Current Date & Time" + "Time zone: xxx"
         val timezone = java.util.TimeZone.getDefault().id
-        val sdf = SimpleDateFormat("EEEE, MMMM d, yyyy — h:mm a (z)", Locale.getDefault())
+        val sdf = SimpleDateFormat("EEEE, MMMM d, yyyy - h:mm a (z)", Locale.getDefault())
         sdf.timeZone = java.util.TimeZone.getDefault()
         val formattedTime = sdf.format(Date())
         return """
