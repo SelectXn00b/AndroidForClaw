@@ -121,8 +121,7 @@ class MainEntryAgentHandler(
                     "success" to true,
                     "iterations" to result.iterations,
                     "toolsUsed" to result.toolsUsed,
-                    "finalContent" to com.xiaomo.androidforclaw.util.RiveEmotionDispatcher
-                        .processAndDispatch(application, result.finalContent),
+                    "finalContent" to result.finalContent,
                     "sessionId" to sessionId
                 ))
 

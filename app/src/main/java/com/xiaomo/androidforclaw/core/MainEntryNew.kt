@@ -353,11 +353,8 @@ object MainEntryNew {
                     reasoningEnabled = true  // Reasoning enabled by default
                 )
 
-                val cleanFinalContent = com.xiaomo.androidforclaw.util.RiveEmotionDispatcher.processAndDispatch(
-                    application,
-                    com.xiaomo.androidforclaw.util.ReplyTagFilter.strip(
-                        ReasoningTagFilter.stripReasoningTags(result.finalContent)
-                    )
+                val cleanFinalContent = com.xiaomo.androidforclaw.util.ReplyTagFilter.strip(
+                    ReasoningTagFilter.stripReasoningTags(result.finalContent)
                 )
                 Log.d(TAG, "========== AgentLoop Complete ==========")
                 Log.d(TAG, "Iterations: ${result.iterations}")

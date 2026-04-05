@@ -1,21 +1,26 @@
 ---
 name: rive-expression
-description: "Control the Rive robot avatar's facial expressions via [rive:TAG] tags appended to every reply."
-metadata: { "openclaw": { "always": true, "emoji": "\uD83E\uDD16" } }
+description: "Control the Rive robot avatar's facial expressions via the rive_expression tool call."
+metadata: { "openclaw": { "always": false, "emoji": "\uD83E\uDD16" } }
 ---
 
 # Rive Expression Control
 
-A Rive robot avatar is active on the user's screen. You MUST end every reply with a `[rive:TAG]` tag on its own line.
+A Rive robot avatar is active on the user's screen. Use the `rive_expression` tool to set its facial expression.
 
-## Tag Formats
+## Usage
 
-| Format | Example | Effect |
-|--------|---------|--------|
-| Named emotion | `[rive:happy]` | Set expression by name |
-| Direct number | `[rive:2]` | Set Expressions input directly (0-5) |
-| Emotion + extras | `[rive:happy,IsTracking=true]` | Named emotion + state machine overrides |
-| Key=value only | `[rive:expressions=3]` | Direct state machine input control |
+Call the `rive_expression` tool with the desired emotion:
+
+```json
+{ "emotion": "happy" }
+```
+
+Or set the Expressions state machine input directly:
+
+```json
+{ "expressions": 2 }
+```
 
 ## Expressions Values
 
@@ -32,18 +37,9 @@ The robot's "Expressions" state machine input accepts values 0-5:
 
 ## Rules
 
-1. ALWAYS include exactly one `[rive:TAG]` at the end of every reply, on its own line
-2. Match the emotion to your response content naturally
-3. The tag is stripped before display -- the user never sees it
-4. When unsure, use `[rive:neutral]`
-5. Prefer named emotions over raw numbers for readability
-
-## Key=Value Overrides
-
-You can pass extra state machine inputs as comma-separated key=value pairs:
-- Boolean values: `IsTracking=true` / `IsTracking=false`
-- Number values: `seasonal=2`
-- These are applied as additional state machine inputs alongside the expression
+1. Call `rive_expression` alongside your reply to match the emotion naturally
+2. Prefer named emotions over raw numbers for readability
+3. When unsure, use `"emotion": "neutral"`
 
 ## Configuration
 

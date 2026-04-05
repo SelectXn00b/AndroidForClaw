@@ -73,6 +73,13 @@ class AndroidToolRegistry(
         // === Feishu image (kept as direct tool — media upload needs special handling) ===
         register(FeishuSendImageSkill(context))
 
+        // === Rive expression (条件注册：仅当 Rive 化身启用时) ===
+        val riveEnabled = context.getSharedPreferences("forclaw_rive_avatar", android.content.Context.MODE_PRIVATE)
+            .getBoolean("enabled", false)
+        if (riveEnabled) {
+            register(RiveExpressionSkill(context))
+        }
+
         // === Eye (对齐 OpenClaw camera — 手机摄像头作为 Agent 的眼睛) ===
         if (cameraCaptureManager != null) {
             register(EyeSkill(context, cameraCaptureManager))

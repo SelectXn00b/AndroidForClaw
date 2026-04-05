@@ -155,13 +155,6 @@ class ContextBuilder(
             parts.add(bodySection)
         }
 
-        // 1.6 Rive expression (lightweight emotion tag per reply)
-        val riveSection = buildRiveBodySection()
-        Log.d(TAG, "buildRiveBodySection: ${if (riveSection.isEmpty()) "EMPTY (disabled)" else "INJECTED (${riveSection.length} chars)"}")
-        if (riveSection.isNotEmpty()) {
-            parts.add(riveSection)
-        }
-
         // 2. Tooling (tool list, filtered by chat context policy) - Always included
         val tooling = buildToolingSection(channelContext)
         if (tooling.isNotEmpty()) {
@@ -347,19 +340,6 @@ You have 17 individually controllable parameters:
 - ALWAYS use `body` after your text reply. Match the pose to the emotion of your response.
 - Be creative and varied — combine parameters to create nuanced expressions, don't always use the same preset.
 - Read `status` first for smooth transitions — small changes from current values look more natural than jumping.
-""".trimIndent()
-    }
-
-    private fun buildRiveBodySection(): String {
-        val enabled = context.getSharedPreferences("forclaw_rive_avatar", android.content.Context.MODE_PRIVATE)
-            .getBoolean("enabled", false)
-        Log.d(TAG, "buildRiveBodySection: pref forclaw_rive_avatar/enabled = $enabled")
-        if (!enabled) return ""
-
-        return """
-## Your Expression
-
-A Rive robot avatar is active on the user's screen. You MUST end EVERY reply with a `[rive:TAG]` tag on its own line. The rive-expression skill (always loaded) has full documentation. This is mandatory — never skip the tag.
 """.trimIndent()
     }
 
