@@ -137,6 +137,20 @@ class PermissionActivity : Activity() {
                 requestAccessibilityPermission()
             }
 
+            // 一键开启无障碍按钮
+            btnOneClickAccessibility.setOnClickListener {
+                Log.d(TAG, "btnOneClickAccessibility clicked")
+                oneClickEnableAccessibility()
+            }
+
+            // 显示 shell 命令
+            tvShellCmd.text = shellCommand()
+            tvShellCmd.setOnClickListener {
+                val cb = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cb.setPrimaryClip(android.content.ClipData.newPlainText("Shell Command", shellCommand()))
+                Toast.makeText(this@PermissionActivity, "已复制 shell 命令", Toast.LENGTH_SHORT).show()
+            }
+
             // 存储权限按钮
             btnStorage.setOnClickListener {
                 Log.d(TAG, "btnStorage clicked")
@@ -514,6 +528,93 @@ class PermissionActivity : Activity() {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to request storage permission", e)
             Toast.makeText(this, "请求存储权限失败: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * Shell 命令文本
+     */
+    private fun shellCommand(): String {
+        val svc = "${packageName}/com.xiaomo.androidforclaw.accessibility.service.PhoneAccessibilityService"
+        return "adb shell settings put secure enabled_accessibility_services $svc"
+    }
+
+    /**
+     * 一键开启无障碍服务（需要 root 或 shell 权限）
+     */
+    private fun oneClickEnableAccessibility() {
+        binding.btnOneClickAccessibility.isEnabled = false
+        binding.btnOneClickAccessibility.text = "执行中..."
+        binding.tvOneClickResult.visibility = android.view.View.VISIBLE
+        binding.tvOneClickResult.text = "正在检测权限..."
+        binding.tvOneClickResult.setTextColor(getColor(android.R.color.holo_orange_dark))
+
+        activityScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    // 先尝试普通 shell
+                    val shellResult = execShellCommand(shellCommand())
+                    if (shellResult.isSuccess) return@withContext "success" to "Shell 命令执行成功"
+
+                    // 再尝试 su (root)
+                    val suResult = execRootCommand(shellCommand())
+                    if (suResult.isSuccess) return@withContext "success" to "Root 命令执行成功"
+
+                    // 两种都失败
+                    "fail" to "无 shell/root 权限，请手动开启或使用 Termux"
+                } catch (e: Exception) {
+                    "fail" to "执行失败: ${e.message}"
+                }
+            }
+
+            when (result.first) {
+                "success" -> {
+                    binding.tvOneClickResult.text = "✅ ${result.second}\n正在验证..."
+                    binding.tvOneClickResult.setTextColor(getColor(android.R.color.holo_green_dark))
+                    // 等一下再检查
+                    delay(1500)
+                    checkPermissionsAsync("one_click")
+                    // 同时开启全局 accessibility 开关
+                    try {
+                        Settings.Secure.putInt(contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+                    } catch (_: Exception) {}
+                    binding.btnOneClickAccessibility.text = "✅ 已开启"
+                }
+                "fail" -> {
+                    binding.tvOneClickResult.text = "❌ ${result.second}"
+                    binding.tvOneClickResult.setTextColor(getColor(android.R.color.holo_red_dark))
+                    binding.btnOneClickAccessibility.text = "⚙️ 一键开启无障碍服务"
+                    binding.btnOneClickAccessibility.isEnabled = true
+                }
+            }
+        }
+    }
+
+    /**
+     * 执行普通 shell 命令
+     */
+    private fun execShellCommand(cmd: String): Result<Unit> {
+        return try {
+            val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
+            val exitCode = process.waitFor()
+            if (exitCode == 0) Result.success(Unit) else Result.failure(RuntimeException("exit code: $exitCode"))
+        } catch (e: Exception) {
+            Log.w(TAG, "Shell command failed: $e")
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * 执行 root (su) 命令
+     */
+    private fun execRootCommand(cmd: String): Result<Unit> {
+        return try {
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+            val exitCode = process.waitFor()
+            if (exitCode == 0) Result.success(Unit) else Result.failure(RuntimeException("exit code: $exitCode"))
+        } catch (e: Exception) {
+            Log.w(TAG, "Root command failed: $e")
+            Result.failure(e)
         }
     }
 
