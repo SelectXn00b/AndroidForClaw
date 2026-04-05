@@ -237,6 +237,12 @@ class AgentLoop(
     // Transient HTTP retry guard (aligned with OpenClaw didRetryTransientHttpError)
     private var didRetryTransientHttpError = false
 
+    // Hook runner (aligned with OpenClaw EmbeddedAgentHookRunner)
+    val hookRunner = com.xiaomo.androidforclaw.agent.hook.HookRunner()
+
+    // Memory flush manager (aligned with OpenClaw runMemoryFlushIfNeeded)
+    private val memoryFlushManager = com.xiaomo.androidforclaw.agent.memory.MemoryFlushManager()
+
     /**
      * Live conversation messages, accessible for sessions_history.
      * Set to the mutable list used inside runInternal(). After run() completes,
@@ -617,6 +623,45 @@ class AgentLoop(
                         writeLog("🔄 Timeout compaction attempt $timeoutCompactionAttempts/$MAX_TIMEOUT_COMPACTION_ATTEMPTS " +
                             "(context usage: ${(tokenUsedRatio * 100).toInt()}%)")
 
+                        // Run before_compaction hook (aligned with OpenClaw hookRunner.runBeforeCompaction)
+                        val hookCtx = com.xiaomo.androidforclaw.agent.hook.HookContext(
+                            sessionKey = null,
+                            agentId = null,
+                            provider = "",
+                            model = modelRef ?: ""
+                        )
+                        val hookResult = hookRunner.runBeforeCompaction(
+                            data = mapOf("reason" to "timeout", "tokenUsedRatio" to tokenUsedRatio),
+                            context = hookCtx
+                        )
+
+                        if (hookResult.shouldCancel) {
+                            writeLog("🪝 before_compaction hook cancelled compaction")
+                            // Skip compaction, continue with current messages
+                        } else {
+                            // Memory flush: run before compaction if context is getting full
+                            // Aligned with OpenClaw runMemoryFlushIfNeeded()
+                            try {
+                                if (memoryFlushManager.shouldRunFlush(
+                                    tokenCount = (totalCharsNow / 4),
+                                    contextWindowTokens = contextWindowTokens
+                                )) {
+                                    writeLog("🧠 Running memory flush before compaction...")
+                                    val flushResult = memoryFlushManager.runFlush(
+                                        llmProvider = llmProvider,
+                                        modelRef = modelRef ?: "",
+                                        messages = messages
+                                    )
+                                    if (flushResult.success && flushResult.memoriesExtracted) {
+                                        writeLog("✅ Memory flush: extracted ${flushResult.memoriesContent?.length ?: 0} chars")
+                                        _progressFlow.emit(ProgressUpdate.BlockReply(text = "🧠 记忆提取完成", iteration = iteration))
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                writeLog("⚠️ Memory flush failed (non-fatal): ${e.message}")
+                            }
+                        }
+
                         if (contextManager != null) {
                             val recoveryResult = contextManager.handleContextOverflow(
                                 error = e,
@@ -779,6 +824,27 @@ class AgentLoop(
                         // Send call progress update
                         _progressFlow.emit(ProgressUpdate.ToolCall(functionName, args))
 
+                        // Run before_tool_call hook (aligned with OpenClaw hookRunner.runBeforeToolCall)
+                        val toolHookCtx = com.xiaomo.androidforclaw.agent.hook.HookContext(
+                            sessionKey = null,
+                            agentId = null,
+                            provider = "",
+                            model = modelRef ?: ""
+                        )
+                        val beforeToolHook = hookRunner.runBeforeToolCall(
+                            toolName = functionName,
+                            arguments = toolCall.arguments,
+                            context = toolHookCtx
+                        )
+
+                        if (beforeToolHook.shouldCancel) {
+                            writeLog("🪝 before_tool_call hook cancelled $functionName")
+                            messages.add(
+                                toolMessage(toolCallId = toolCall.id, content = "Tool execution cancelled by hook", name = functionName)
+                            )
+                            continue
+                        }
+
                         // ✅ Search universal tools first, then Android tools
                         val execStartTime = System.currentTimeMillis()
 
@@ -816,6 +882,15 @@ class AgentLoop(
                             result = result.toString(),
                             error = if (result.success) null else Exception(result.content),
                             toolCallId = toolCall.id
+                        )
+
+                        // Run after_tool_call hook (aligned with OpenClaw hookRunner.runAfterToolCall)
+                        hookRunner.runAfterToolCall(
+                            toolName = functionName,
+                            arguments = toolCall.arguments,
+                            result = result.toString(),
+                            success = result.success,
+                            context = toolHookCtx
                         )
 
                         // Add result to message list (with images if tool returned any)
