@@ -399,11 +399,19 @@ Legacy tools (tap, swipe, screenshot, etc.) are also available but prefer `devic
      * 2. Tooling Section (tool list)
      * Aligned with OpenClaw: "## Tooling" + tool list + TOOLS.md disclaimer
      */
+    /**
+     * 2. Tooling Section (aligned with OpenClaw verbatim)
+     *
+     * Upstream removed hardcoded tool descriptions from system prompt
+     * (structured tool definitions / JSON schema are the source of truth).
+     */
     private fun buildToolingSection(channelContext: ChannelContext? = null): String {
         val lines = mutableListOf<String>()
         lines.add("## Tooling")
-        lines.add("Tool availability (filtered by policy):")
-        lines.add("Tool names are case-sensitive. Call tools exactly as listed.")
+        lines.add("Structured tool definitions are the source of truth for tool names, descriptions, and parameters.")
+        lines.add("Tool names are case-sensitive. Call tools exactly as listed in the structured tool definitions.")
+        lines.add("If a tool is present in the structured tool definitions, it is available unless a later tool call reports a policy/runtime restriction.")
+        lines.add("TOOLS.md does not control tool availability; it is user guidance for how to use external tools.")
 
         // Resolve tool policy based on chat context
         val policy = ToolPolicyResolver.resolveToolPolicy(channelContext?.chatType)
@@ -413,25 +421,13 @@ Legacy tools (tap, swipe, screenshot, etc.) are also available but prefer `devic
             emptySet()
         }
 
-        // Universal tools (filtered by policy)
-        val universalTools = toolRegistry.getToolsDescription(excludeTools)
-        if (universalTools.isNotEmpty()) {
-            lines.add(universalTools)
-        }
-
-        // Android platform tools (filtered by policy)
-        val androidTools = androidToolRegistry.getToolsDescription(excludeTools)
-        if (androidTools.isNotEmpty()) {
-            lines.add(androidTools)
-        }
-
         // Note restricted tools in shared context
         if (policy == ToolPolicyLevel.RESTRICTED && excludeTools.isNotEmpty()) {
             lines.add("[Policy: ${excludeTools.joinToString(", ")} restricted in shared context]")
         }
 
-        // TOOLS.md disclaimer (aligned with OpenClaw)
-        lines.add("TOOLS.md does not control tool availability; it is user guidance for how to use external tools.")
+        lines.add("For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).")
+        lines.add("If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.")
 
         return lines.joinToString("\n")
     }
