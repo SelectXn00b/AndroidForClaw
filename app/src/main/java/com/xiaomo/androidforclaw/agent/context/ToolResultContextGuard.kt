@@ -37,7 +37,7 @@ object ToolResultContextGuard {
     const val CONTEXT_INPUT_HEADROOM_RATIO = 0.75
     const val SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5
     const val MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3  // OpenClaw: max share of context for ALL tool results
-    const val HARD_MAX_TOOL_RESULT_CHARS = 400_000  // OpenClaw: absolute max per single tool result
+    const val HARD_MAX_TOOL_RESULT_CHARS = 40_000  // OpenClaw: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS (was 400K, reduced 10x)
 
     const val CONTEXT_LIMIT_TRUNCATION_NOTICE = "[truncated: output exceeded context limit]"
     const val PREEMPTIVE_COMPACTION_PLACEHOLDER = "[compacted: tool output removed to free context]"

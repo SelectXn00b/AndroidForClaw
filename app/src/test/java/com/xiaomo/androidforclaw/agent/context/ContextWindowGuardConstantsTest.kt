@@ -10,7 +10,7 @@ import org.junit.Test
  * OpenClaw source reference:
  * - auth-profiles-DRjqKE3G.js line 374: const DEFAULT_CONTEXT_TOKENS = 2e5  (200,000)
  * - auth-profiles-DRjqKE3G.js line 96107: const MAX_TOOL_RESULT_CONTEXT_SHARE = .3
- * - auth-profiles-DRjqKE3G.js line 96114: const HARD_MAX_TOOL_RESULT_CHARS = 4e5 (400,000)
+ * - tool-result-truncation.ts: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS = 40_000 (was 400K, reduced 10x)
  * - auth-profiles-DRjqKE3G.js line 97030: const EMBEDDED_COMPACTION_TIMEOUT_MS = 3e5 (300,000)
  * - auth-profiles-DRjqKE3G.js line 103642: const TOOL_RESULT_MAX_CHARS = 8e3 (8,000)
  */
@@ -32,8 +32,8 @@ class ContextWindowGuardConstantsTest {
     }
 
     @Test
-    fun `HARD_MAX_TOOL_RESULT_CHARS matches OpenClaw value of 400000`() {
-        assertEquals(400_000, ToolResultContextGuard.HARD_MAX_TOOL_RESULT_CHARS)
+    fun `HARD_MAX_TOOL_RESULT_CHARS matches OpenClaw value of 40000`() {
+        assertEquals(40_000, ToolResultContextGuard.HARD_MAX_TOOL_RESULT_CHARS)
     }
 
     @Test
