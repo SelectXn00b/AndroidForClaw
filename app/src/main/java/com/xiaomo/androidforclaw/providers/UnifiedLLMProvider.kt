@@ -191,7 +191,19 @@ class UnifiedLLMProvider(private val context: Context) {
                     )
                     batchResponse.thinkingContent?.let { emit(StreamChunk(type = ChunkType.THINKING_DELTA, text = it)) }
                     batchResponse.content?.let { emit(StreamChunk(type = ChunkType.TEXT_DELTA, text = it)) }
-                    emit(StreamChunk(type = ChunkType.DONE, finishReason = batchResponse.finishReason))
+                    // Emit tool calls as TOOL_CALL_DELTA (critical: without this, agent loop sees no tools → breaks)
+                    batchResponse.toolCalls?.forEachIndexed { idx, tc ->
+                        emit(StreamChunk(
+                            type = ChunkType.TOOL_CALL_DELTA,
+                            toolCallIndex = idx,
+                            toolCallId = tc.id,
+                            toolCallName = tc.name,
+                            toolCallArgs = tc.arguments
+                        ))
+                    }
+                    emit(StreamChunk(type = ChunkType.DONE, finishReason = batchResponse.finishReason, usage = batchResponse.usage?.let {
+                        Usage(it.promptTokens, it.completionTokens)
+                    }))
                     return@flow
                 }
 
