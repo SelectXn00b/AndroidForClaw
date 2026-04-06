@@ -118,7 +118,6 @@ class AgentLoop(
          * Android: single profile → use MAX (160) for safety headroom since no auth failover.
          */
         private const val MAX_RUN_LOOP_ITERATIONS = 160
-        private const val MAX_THINKING_CHARS = 10_000 // Thinking 内容最大字符数，防止幻觉死循环
 
         /**
          * Overload backoff: aligned with OpenClaw OVERLOAD_FAILOVER_BACKOFF_POLICY.
@@ -544,10 +543,6 @@ class AgentLoop(
                     // Scrub Anthropic refusal magic string from system prompt (aligned with OpenClaw scrubAnthropicRefusalMagic)
                     val scrubbedMessages = scrubAnthropicRefusalMagic(messages)
 
-                    // Thinking 重复检测（防幻觉死循环）
-                    var thinkingRepeatCount = 0
-                    var lastThinkingSig = ""
-
                     kotlinx.coroutines.withTimeout(LLM_TIMEOUT_MS) {
                         llmProvider.chatWithToolsStreaming(
                             messages = scrubbedMessages,
@@ -557,23 +552,8 @@ class AgentLoop(
                         ).collect { chunk ->
                             when (chunk.type) {
                                 ChunkType.THINKING_DELTA -> {
-                                    // 检测重复 thinking（模型卡在循环）
-                                    val sig = chunk.text.take(50).trim()
-                                    if (sig.isNotEmpty() && sig == lastThinkingSig) {
-                                        thinkingRepeatCount++
-                                        if (thinkingRepeatCount > 20) {
-                                            writeLog("⚠️ Thinking 重复超过 20 次，跳过剩余 thinking")
-                                            Log.w(TAG, "Thinking repetition detected ($thinkingRepeatCount times), skipping")
-                                            // 不再累积，也不再推送
-                                        }
-                                    } else {
-                                        thinkingRepeatCount = 0
-                                        lastThinkingSig = sig
-                                    }
-                                    if (thinkingRepeatCount <= 20 && thinkingAccumulated.length < MAX_THINKING_CHARS) {
-                                        thinkingAccumulated.append(chunk.text)
-                                        _progressFlow.emit(ProgressUpdate.ReasoningDelta(chunk.text))
-                                    }
+                                    thinkingAccumulated.append(chunk.text)
+                                    _progressFlow.emit(ProgressUpdate.ReasoningDelta(chunk.text))
                                 }
                                 ChunkType.TEXT_DELTA -> {
                                     contentAccumulated.append(chunk.text)
