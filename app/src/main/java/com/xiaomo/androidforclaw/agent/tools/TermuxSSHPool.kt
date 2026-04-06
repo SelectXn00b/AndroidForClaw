@@ -27,10 +27,10 @@ object TermuxSSHPool {
     private const val CONNECT_TIMEOUT_MS = 5000
     private const val KEEPALIVE_INTERVAL_S = 15
 
-    private val CONFIG_DIR = StoragePaths.root.absolutePath
-    private val SSH_CONFIG_FILE = "$CONFIG_DIR/termux_ssh.json"
-    private val KEY_DIR = "$CONFIG_DIR/.ssh"
-    private val PRIVATE_KEY = "$KEY_DIR/id_ed25519"
+    private val CONFIG_DIR get() = StoragePaths.root.absolutePath
+    private val SSH_CONFIG_FILE get() = "$CONFIG_DIR/termux_ssh.json"
+    private val KEY_DIR get() = "$CONFIG_DIR/.ssh"
+    private val PRIVATE_KEY get() = "$KEY_DIR/id_ed25519"
 
     private const val MAX_RETRIES = 3
     private val RETRY_DELAYS_MS = longArrayOf(500, 1000, 2000)

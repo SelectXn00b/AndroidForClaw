@@ -4,16 +4,24 @@
  */
 package com.xiaomo.androidforclaw.workspace
 
+import android.content.Context
 import android.os.Environment
 import java.io.File
 
 /**
- * Unified storage path constants for /sdcard/.androidforclaw.
- * Requires MANAGE_EXTERNAL_STORAGE permission — prompt the user if not granted.
+ * Unified storage path constants.
+ * Call [init] from Application.onCreate() before first use.
+ * Defaults to /sdcard/.androidforclaw; after init uses app-private external dir.
  */
 object StoragePaths {
 
-    val root: File = File(Environment.getExternalStorageDirectory(), ".androidforclaw")
+    var root: File = File(Environment.getExternalStorageDirectory(), ".androidforclaw")
+        private set
+
+    /** Switch root to app-private external directory (no MANAGE_EXTERNAL_STORAGE needed). */
+    fun init(context: Context) {
+        root = context.getExternalFilesDir(null) ?: root
+    }
 
     // Top-level directories
     val config: File get() = File(root, "config")

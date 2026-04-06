@@ -23,18 +23,18 @@ class WorkspaceInitializer(private val context: Context) {
     companion object {
         private const val TAG = "WorkspaceInit"
 
-        // 主目录
-        private val ROOT_DIR = StoragePaths.root.absolutePath
+        // 主目录 (use get() so values reflect StoragePaths.init() result)
+        private val ROOT_DIR get() = StoragePaths.root.absolutePath
 
         // 子目录
-        private val CONFIG_DIR = StoragePaths.config.absolutePath
-        private val WORKSPACE_DIR = StoragePaths.workspace.absolutePath
-        private val WORKSPACE_META_DIR = "$WORKSPACE_DIR/.androidforclaw"
-        private val SKILLS_DIR = StoragePaths.skills.absolutePath
-        private val LOGS_DIR = StoragePaths.logs.absolutePath
+        private val CONFIG_DIR get() = StoragePaths.config.absolutePath
+        private val WORKSPACE_DIR get() = StoragePaths.workspace.absolutePath
+        private val WORKSPACE_META_DIR get() = "$WORKSPACE_DIR/.androidforclaw"
+        private val SKILLS_DIR get() = StoragePaths.skills.absolutePath
+        private val LOGS_DIR get() = StoragePaths.logs.absolutePath
 
         // 元数据文件
-        private val DEVICE_ID_FILE = "$ROOT_DIR/.device-id"
+        private val DEVICE_ID_FILE get() = "$ROOT_DIR/.device-id"
         private val WORKSPACE_STATE_FILE = "$WORKSPACE_META_DIR/workspace-state.json"
     }
 

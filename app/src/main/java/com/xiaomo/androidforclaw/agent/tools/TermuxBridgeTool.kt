@@ -37,11 +37,11 @@ class TermuxBridgeTool(private val context: Context) : Tool {
         private const val SSH_PORT = 8022
         private const val DEFAULT_TIMEOUT_S = 60
 
-        private val CONFIG_DIR = StoragePaths.root.absolutePath
-        private val SSH_CONFIG_FILE = "$CONFIG_DIR/termux_ssh.json"
-        private val KEY_DIR = "$CONFIG_DIR/.ssh"
-        private val PRIVATE_KEY = "$KEY_DIR/id_ed25519"
-        private val PUBLIC_KEY = "$KEY_DIR/id_ed25519.pub"
+        private val CONFIG_DIR get() = StoragePaths.root.absolutePath
+        private val SSH_CONFIG_FILE get() = "$CONFIG_DIR/termux_ssh.json"
+        private val KEY_DIR get() = "$CONFIG_DIR/.ssh"
+        private val PRIVATE_KEY get() = "$KEY_DIR/id_ed25519"
+        private val PUBLIC_KEY get() = "$KEY_DIR/id_ed25519.pub"
 
         private var bcRegistered = false
     }

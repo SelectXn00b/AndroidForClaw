@@ -249,6 +249,9 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
         super.onCreate()
         application = this
 
+        // Init storage paths early — must run before any StoragePaths access
+        com.xiaomo.androidforclaw.workspace.StoragePaths.init(this)
+
         // Apply saved language settings
         com.xiaomo.androidforclaw.util.LocaleHelper.applyLanguage(this)
 
