@@ -2,7 +2,11 @@ package com.xiaomo.androidforclaw.agent.hook
 
 /**
  * Hook system for agent lifecycle events.
- * Aligned with OpenClaw hook runner (src/agents/pi-embedded-runner/runner-hooks.ts).
+ *
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/agents/pi-embedded-runner/compaction-hooks.ts (compaction lifecycle hooks)
+ * - ../openclaw/src/agents/pi-embedded-runner/compact.hooks.harness.ts (hook harness)
+ * - ../openclaw/src/agents/bootstrap-hooks.ts (bootstrap hooks)
  *
  * Provides registration and execution of lifecycle hooks:
  * - before_compaction: runs before context compaction

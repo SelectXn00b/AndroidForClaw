@@ -7,7 +7,12 @@ import java.io.File
 
 /**
  * Auth Profile Manager — Multi-API-key rotation with cooldown.
- * Aligned with OpenClaw auth-profiles module (auth-profiles-XJahKVCp.js).
+ *
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/agents/auth-profiles.ts (re-exports from auth-profiles/ subdir)
+ * - ../openclaw/src/agents/auth-profiles/order.ts (resolveAuthProfileOrder, resolveAuthProfileEligibility)
+ * - ../openclaw/src/agents/auth-profiles/credential-state.ts (cooldown tracking)
+ * - ../openclaw/src/agents/auth-profiles.runtime.ts (runtime profile management)
  *
  * Key behaviors from OpenClaw:
  * - resolveAuthProfileOrder(): resolve priority list of profiles for a provider

@@ -9,7 +9,13 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 
 /**
- * Aligned with OpenClaw run/images.ts + src/agents/tools/image-tool.ts:
+ * Image loading utilities for LLM context.
+ *
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/agents/tools/image-tool.ts (image tool orchestration)
+ * - ../openclaw/src/agents/tools/image-tool.helpers.ts (image helper functions)
+ *
+ * Aligned with OpenClaw:
  * - detectImageReferences(): scan prompt for image file path references
  * - loadImageFromPath(): load image file → base64 ImageBlock
  * - resolveImagePath(): resolve relative paths against workspaceDir

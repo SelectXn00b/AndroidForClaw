@@ -1,5 +1,11 @@
 package com.xiaomo.androidforclaw.agent.tools
 
+/**
+ * Avatar Tool — Live2D avatar control for agent embodiment.
+ *
+ * OpenClaw Source Reference:
+ * - Android 平台特有，无直接 OpenClaw 对应
+ */
 import ai.openclaw.app.avatar.AvatarStateHolder
 import ai.openclaw.app.avatar.FloatingAvatarService
 import android.util.Log

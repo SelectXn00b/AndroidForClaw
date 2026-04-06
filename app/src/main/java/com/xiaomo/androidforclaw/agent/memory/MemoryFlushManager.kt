@@ -11,13 +11,12 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Memory Flush Manager — Pre-compaction memory persistence.
- * Aligned with OpenClaw runMemoryFlushIfNeeded().
  *
- * Key behaviors from OpenClaw:
- * - Before compaction, check if context is getting full
- * - If threshold exceeded, run a lightweight LLM call with memory flush prompt
- * - LLM extracts durable memories and appends to daily memory file
- * - Android adaptation: stores in-memory ConcurrentHashMap (context-free)
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/agents/prompt-composition-scenarios.ts (Pre-compaction memory flush turn)
+ * - ../openclaw/src/agents/pi-tools.read.ts (memory flush tool restrictions)
+ *
+ * AndroidForClaw adaptation: stores in-memory ConcurrentHashMap (context-free)
  * - Daily format: memory/YYYY-MM-DD.md
  *
  * Threshold logic from OpenClaw:
