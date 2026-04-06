@@ -58,8 +58,8 @@ class PhoneAccessibilityService : AccessibilityService() {
             Log.e(TAG, "启动 AccessibilityBinderService 失败", e)
         }
 
-        // 初始化 MediaProjectionHelper (使用工作空间)
-        val workspace = java.io.File("/sdcard/.androidforclaw/workspace")
+        // 初始化 MediaProjectionHelper (使用 app 私有工作空间)
+        val workspace = java.io.File(getExternalFilesDir(null), "workspace")
         val screenshotDir = java.io.File(workspace, "screenshots")
         MediaProjectionHelper.initialize(this, screenshotDir)
 
