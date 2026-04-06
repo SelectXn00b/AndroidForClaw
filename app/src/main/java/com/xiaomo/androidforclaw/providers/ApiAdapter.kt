@@ -1201,8 +1201,15 @@ object ApiAdapter {
                     }
                     if (usage != null) StreamChunk(type = ChunkType.USAGE, usage = usage) else null
                 }
+                "error" -> {
+                    val error = json.optJSONObject("error") ?: json
+                    val message = error.optString("message", "Unknown Anthropic streaming error")
+                    throw LLMException("Streaming API request failed: $message")
+                }
                 else -> null
             }
+        } catch (e: LLMException) {
+            throw e  // Inline API errors must propagate for retry/fallback
         } catch (e: Exception) {
             android.util.Log.w("ApiAdapter", "Failed to parse Anthropic stream chunk: ${e.message}")
             return null
@@ -1285,6 +1292,8 @@ object ApiAdapter {
             }
 
             return null
+        } catch (e: LLMException) {
+            throw e  // Inline API errors (e.g. 502 inside SSE) must propagate for retry/fallback
         } catch (e: Exception) {
             android.util.Log.w("ApiAdapter", "Failed to parse OpenAI stream chunk: ${e.message}")
             return null
