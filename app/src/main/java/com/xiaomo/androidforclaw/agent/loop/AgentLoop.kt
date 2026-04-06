@@ -1476,30 +1476,6 @@ class AgentLoop(
         yieldSignal = null
         Log.d(TAG, "AgentLoop reset for steer-restart")
     }
-
-    /**
-     * Detect highly repetitive content (model stuck in a loop).
-     * Takes the first 50 chars as a "chunk" and checks how many times it repeats.
-     * Returns true if >50% of the content is the same chunk repeated.
-     */
-    private fun isHighlyRepetitive(content: String): Boolean {
-        if (content.length < 500) return false
-        val chunkSize = 50
-        val chunk = content.take(chunkSize)
-        if (chunk.isBlank()) return false
-        var repeatCount = 0
-        var pos = 0
-        while (pos + chunkSize <= content.length) {
-            if (content.regionMatches(pos, chunk, 0, chunkSize)) {
-                repeatCount++
-            } else {
-                break // Stop at first mismatch — repetitive content is typically at the start
-            }
-            pos += chunkSize
-        }
-        val repeatedChars = repeatCount * chunkSize
-        return repeatedChars > content.length * 0.5
-    }
 }
 
 /**
