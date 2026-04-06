@@ -450,7 +450,9 @@ private fun openSkillFolder(context: Context, skill: OnlineSkill, skillActions: 
         val dir = skillActions.getSkillDir(skill.toSlug())
 
         // Open the skill folder in system file manager via DocumentsUI
-        val encodedPath = ".androidforclaw%2Fskills%2F${dir.name}"
+        val externalRoot = android.os.Environment.getExternalStorageDirectory().absolutePath
+        val relativePath = dir.absolutePath.removePrefix("$externalRoot/")
+        val encodedPath = relativePath.replace("/", "%2F")
         val uri = android.net.Uri.parse(
             "content://com.android.externalstorage.documents/document/primary:$encodedPath",
         )
@@ -461,8 +463,9 @@ private fun openSkillFolder(context: Context, skill: OnlineSkill, skillActions: 
         try {
             context.startActivity(intent)
         } catch (_: Exception) {
-            // Fallback: open parent .androidforclaw/skills/
-            val parentPath = ".androidforclaw%2Fskills"
+            // Fallback: open parent skills directory
+            val parentRelative = dir.parentFile?.absolutePath?.removePrefix("$externalRoot/") ?: relativePath
+            val parentPath = parentRelative.replace("/", "%2F")
             val parentUri = android.net.Uri.parse(
                 "content://com.android.externalstorage.documents/document/primary:$parentPath",
             )

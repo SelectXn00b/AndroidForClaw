@@ -72,8 +72,8 @@ class PermissionActivity : Activity() {
         super.onCreate(savedInstanceState)
         Log.d(TAG, "onCreate called")
 
-        // 初始化 MediaProjectionHelper
-        val workspace = File("/sdcard/.androidforclaw/workspace")
+        // 初始化 MediaProjectionHelper (使用 app 私有工作空间)
+        val workspace = File(getExternalFilesDir(null), "workspace")
         val screenshotDir = File(workspace, "screenshots")
         MediaProjectionHelper.initialize(this, screenshotDir)
 

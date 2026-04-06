@@ -25,8 +25,8 @@ class AccessibilityBinderService : Service() {
         super.onCreate()
         Log.d(TAG, "AccessibilityBinderService onCreate()")
 
-        // 初始化 MediaProjectionHelper (使用工作空间)
-        val workspace = File("/sdcard/.androidforclaw/workspace")
+        // 初始化 MediaProjectionHelper (使用 app 私有工作空间)
+        val workspace = File(getExternalFilesDir(null), "workspace")
         val screenshotDir = File(workspace, "screenshots")
         MediaProjectionHelper.initialize(this, screenshotDir)
         Log.d(TAG, "MediaProjectionHelper initialized")
