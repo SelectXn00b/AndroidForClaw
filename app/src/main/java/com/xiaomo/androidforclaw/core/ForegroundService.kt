@@ -51,7 +51,7 @@ class ForegroundService : Service() {
                 startForeground(
                     NOTIFICATION_ID,
                     createNotification(),
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                 )
             } else {
                 startForeground(NOTIFICATION_ID, createNotification())
