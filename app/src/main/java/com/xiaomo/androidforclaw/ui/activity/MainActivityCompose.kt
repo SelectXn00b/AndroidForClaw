@@ -429,6 +429,7 @@ class MainActivityCompose : ComponentActivity() {
      * Whether the app already has file management permission.
      */
     private fun hasStoragePermission(): Boolean {
+        if (com.xiaomo.androidforclaw.BuildConfig.IS_STORE_BUILD) return true
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             Environment.isExternalStorageManager()
         } else {
@@ -489,6 +490,7 @@ class MainActivityCompose : ComponentActivity() {
      * Shows an in-app dialog if permission is not granted.
      */
     private fun checkAndRequestStoragePermission() {
+        if (com.xiaomo.androidforclaw.BuildConfig.IS_STORE_BUILD) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (!Environment.isExternalStorageManager()) {
                 Log.i(TAG, "File management permission not granted, showing dialog...")

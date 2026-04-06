@@ -7,6 +7,7 @@ package com.xiaomo.androidforclaw.core
 
 
 import android.app.Activity
+import com.xiaomo.androidforclaw.BuildConfig
 import com.xiaomo.androidforclaw.util.ReasoningTagFilter
 import android.app.Application
 import android.content.Context
@@ -613,6 +614,7 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
      * Below Android 11, always returns true.
      */
     private fun hasStoragePermission(): Boolean {
+        if (BuildConfig.IS_STORE_BUILD) return true
         return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
             android.os.Environment.isExternalStorageManager()
         } else {

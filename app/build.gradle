@@ -79,6 +79,7 @@ android {
             buildConfigField 'Boolean', 'IS_SYSTEM_APP', 'true'
             buildConfigField 'String', 'BUILD_VARIANT', '"release"'
             buildConfigField 'Boolean', 'SKIP_PERMISSION_REQUEST', 'false'  // Release版本正常请求权限
+            buildConfigField 'Boolean', 'IS_STORE_BUILD', 'true'  // 商店版本标记
             // 使用release版本的AndroidManifest（具有systemuid）
             manifestPlaceholders = [
                 useSystemUid: "true",
@@ -97,6 +98,7 @@ android {
             buildConfigField 'Boolean', 'IS_SYSTEM_APP', 'false'
             buildConfigField 'String', 'BUILD_VARIANT', '"debug"'
             buildConfigField 'Boolean', 'SKIP_PERMISSION_REQUEST', 'false'
+            buildConfigField 'Boolean', 'IS_STORE_BUILD', 'true'  // 商店版本标记
             // 使用debug版本的AndroidManifest（不使用systemuid）
             manifestPlaceholders = [
                 useSystemUid: "false",
