@@ -662,7 +662,7 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
 
                 if (!feishuConfig.enabled) {
                     Log.i(TAG, "⏭️  Feishu Channel 未启用，跳过初始化")
-                    Log.i(TAG, "   配置路径: /sdcard/.androidforclaw/openclaw.json")
+                    Log.i(TAG, "   配置路径: ${com.xiaomo.androidforclaw.workspace.StoragePaths.openclawConfig.absolutePath}")
                     Log.i(TAG, "   设置 channels.feishu.enabled = true 以启用")
                     Log.i(TAG, "========================================")
                     return@launch
@@ -1723,7 +1723,7 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
 
                 if (discordConfigData == null || !discordConfigData.enabled) {
                     Log.i(TAG, "⏭️  Discord Channel 未启用，跳过初始化")
-                    Log.i(TAG, "   配置路径: /sdcard/.androidforclaw/openclaw.json")
+                    Log.i(TAG, "   配置路径: ${com.xiaomo.androidforclaw.workspace.StoragePaths.openclawConfig.absolutePath}")
                     Log.i(TAG, "   设置 channels.discord.enabled = true 以启用")
                     Log.i(TAG, "========================================")
                     return@launch

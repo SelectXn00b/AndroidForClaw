@@ -568,7 +568,7 @@ _What can you actually do on this Android device?_
 
 ---
 
-For details on each tool, see Skills in `/sdcard/.androidforclaw/workspace/skills/`.
+For details on each tool, see Skills in `${StoragePaths.workspaceSkills.absolutePath}`.
     """.trimIndent()
 
     private val HEARTBEAT_CONTENT = """

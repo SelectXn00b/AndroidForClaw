@@ -298,7 +298,7 @@ fun FeishuChannelScreen(onBack: () -> Unit, context: android.content.Context = a
 
             // 配置文件路径提示
             Text(
-                text = "配置保存在:\n/sdcard/.androidforclaw/openclaw.json (channels.feishu)",
+                text = "配置保存在:\n${com.xiaomo.androidforclaw.workspace.StoragePaths.openclawConfig.absolutePath} (channels.feishu)",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(vertical = 8.dp)

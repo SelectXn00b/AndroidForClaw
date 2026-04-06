@@ -60,7 +60,7 @@ class InstallAppSkill(private val context: Context) : Skill {
                     properties = mapOf(
                         "apk_path" to PropertySchema(
                             "string",
-                            "APK 文件的路径，例如 '/sdcard/Download/app.apk' 或 '/sdcard/.androidforclaw/skills/example.apk'"
+                            "APK 文件的路径，例如 '/sdcard/Download/app.apk' 或 '${com.xiaomo.androidforclaw.workspace.StoragePaths.skills.absolutePath}/example.apk'"
                         ),
                         "allow_downgrade" to PropertySchema(
                             "boolean",
