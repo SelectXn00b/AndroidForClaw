@@ -161,13 +161,30 @@ fun ChatComposer(
         onClick = onRefresh,
       )
 
-      SecondaryActionButton(
-        label = "中止",
-        icon = Icons.Default.Stop,
-        enabled = pendingRunCount > 0,
-        compact = true,
-        onClick = onAbort,
-      )
+      // AI 工作时显示醒目红色停止按钮
+      if (sendBusy) {
+        Button(
+          onClick = onAbort,
+          enabled = true,
+          modifier = Modifier.height(44.dp),
+          shape = RoundedCornerShape(14.dp),
+          contentPadding = PaddingValues(horizontal = 14.dp),
+          colors = ButtonDefaults.buttonColors(
+            containerColor = Color(0xFFE53935),
+            contentColor = Color.White,
+          ),
+          border = BorderStroke(1.dp, Color(0xFFC62828)),
+        ) {
+          Icon(Icons.Default.Stop, contentDescription = "停止", modifier = Modifier.size(16.dp))
+          Spacer(modifier = Modifier.width(4.dp))
+          Text(
+            "停止",
+            style = mobileHeadline.copy(fontWeight = FontWeight.Bold),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
+      }
 
       Spacer(modifier = Modifier.weight(1f))
 
