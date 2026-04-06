@@ -234,9 +234,6 @@ class AgentLoop(
 
     // Timeout compaction counter (aligned with OpenClaw timeoutCompactionAttempts)
     private var timeoutCompactionAttempts = 0
-    // Empty/suspicious response retry counter
-    private var emptyResponseRetryAttempts = 0
-    private val MAX_EMPTY_RESPONSE_RETRY_ATTEMPTS = 2
 
     // Transient HTTP retry guard (aligned with OpenClaw didRetryTransientHttpError)
     private var didRetryTransientHttpError = false
@@ -1006,84 +1003,12 @@ class AgentLoop(
                     rawContent = response.thinkingContent
                 }
 
-                // Detect token-loop: finish_reason=length + no tool calls → model hit max_tokens in repetitive loop
-                // Also detect repetitive content (e.g. same sentence repeated 100+ times)
-                val isTokenLoop = response.finishReason == "length" && response.toolCalls.isNullOrEmpty()
-                val isRepetitiveContent = rawContent != null && rawContent.length > 500 && isHighlyRepetitive(rawContent)
-                if ((isTokenLoop || isRepetitiveContent) && emptyResponseRetryAttempts < MAX_EMPTY_RESPONSE_RETRY_ATTEMPTS) {
-                    emptyResponseRetryAttempts++
-                    val reason = if (isTokenLoop) "finish_reason=length, no tools" else "repetitive content (${rawContent!!.length} chars)"
-                    writeLog("⚠️ LLM 陷入 token 循环: $reason (retry $emptyResponseRetryAttempts/$MAX_EMPTY_RESPONSE_RETRY_ATTEMPTS)")
-                    Log.w(TAG, "⚠️ Token loop detected: $reason, retry $emptyResponseRetryAttempts")
-
-                    if (contextManager != null) {
-                        writeLog("🔄 压缩上下文后重试...")
-                        val recoveryResult = contextManager.handleContextOverflow(
-                            error = Exception("Token loop: $reason"),
-                            messages = messages
-                        )
-                        when (recoveryResult) {
-                            is ContextRecoveryResult.Recovered -> {
-                                messages.clear()
-                                messages.addAll(recoveryResult.messages)
-                                _progressFlow.emit(ProgressUpdate.ContextRecovered(
-                                    strategy = recoveryResult.strategy,
-                                    attempt = recoveryResult.attempt
-                                ))
-                            }
-                            is ContextRecoveryResult.CannotRecover -> {
-                                val ctxTokens = resolveContextWindowTokens()
-                                pruneOldToolResults(messages, ctxTokens)
-                                ToolResultContextGuard.enforceContextBudget(messages, ctxTokens)
-                            }
-                        }
-                    } else {
-                        writeLog("🔄 无 contextManager，直接重试...")
-                    }
-                    continue
-                }
-
-                // Detect suspicious default text from LLM (e.g. "无响应")
-                // Instead of silently accepting, try to compact context and retry
-                val isSuspiciousResponse = rawContent == "无响应" || rawContent == "无响应。" || rawContent == "没有响应"
-                if (isSuspiciousResponse && emptyResponseRetryAttempts < MAX_EMPTY_RESPONSE_RETRY_ATTEMPTS) {
-                    emptyResponseRetryAttempts++
-                    writeLog("⚠️ LLM returned suspicious default text: '$rawContent' (retry $emptyResponseRetryAttempts/$MAX_EMPTY_RESPONSE_RETRY_ATTEMPTS)")
+                // Warn if LLM returned suspicious default text
+                if (rawContent == "无响应" || rawContent == "无响应。" || rawContent == "没有响应") {
+                    writeLog("⚠️ LLM returned suspicious default text: '$rawContent'")
+                    writeLog("   This usually indicates: context too large, model confusion, or corrupted history")
                     writeLog("   Messages count: ${messages.size}, Total context chars: ${ToolResultContextGuard.estimateContextChars(messages)}")
-                    Log.w(TAG, "⚠️ Suspicious response '$rawContent', retry $emptyResponseRetryAttempts/$MAX_EMPTY_RESPONSE_RETRY_ATTEMPTS")
-
-                    if (contextManager != null) {
-                        writeLog("🔄 正在压缩上下文后重试...")
-                        val recoveryResult = contextManager.handleContextOverflow(
-                            error = Exception("Suspicious default response: $rawContent"),
-                            messages = messages
-                        )
-                        when (recoveryResult) {
-                            is ContextRecoveryResult.Recovered -> {
-                                writeLog("✅ 上下文压缩成功: ${recoveryResult.strategy}")
-                                messages.clear()
-                                messages.addAll(recoveryResult.messages)
-                                _progressFlow.emit(ProgressUpdate.ContextRecovered(
-                                    strategy = recoveryResult.strategy,
-                                    attempt = recoveryResult.attempt
-                                ))
-                            }
-                            is ContextRecoveryResult.CannotRecover -> {
-                                writeLog("⚠️ 上下文压缩失败，尝试工具结果截断...")
-                                val ctxTokens = resolveContextWindowTokens()
-                                pruneOldToolResults(messages, ctxTokens)
-                                ToolResultContextGuard.enforceContextBudget(messages, ctxTokens)
-                            }
-                        }
-                    } else {
-                        writeLog("🔄 无 contextManager，直接重试...")
-                    }
-                    continue
-                }
-
-                if (isSuspiciousResponse) {
-                    writeLog("❌ LLM 多次返回可疑默认文本 '$rawContent'，放弃重试")
-                    Log.e(TAG, "❌ LLM returned suspicious response after $emptyResponseRetryAttempts retries")
+                    Log.w(TAG, "⚠️ LLM returned suspicious default text: '$rawContent' (context may be too large)")
                 }
 
                 finalContent = if (SubagentPromptBuilder.isSilentReplyText(rawContent)) null else rawContent
@@ -1543,7 +1468,6 @@ class AgentLoop(
     fun reset() {
         shouldStop = false
         timeoutCompactionAttempts = 0
-        emptyResponseRetryAttempts = 0
         didRetryTransientHttpError = false
         loopDetectionState.toolCallHistory.clear()
         // Drain steer channel to remove stale messages
