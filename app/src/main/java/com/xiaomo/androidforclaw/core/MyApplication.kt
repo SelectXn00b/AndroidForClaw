@@ -72,6 +72,7 @@ import com.xiaomo.androidforclaw.providers.llm.toNewMessage
 import com.xiaomo.androidforclaw.providers.llm.toLegacyMessage
 import com.xiaomo.androidforclaw.agent.tools.ToolRegistry
 import com.xiaomo.androidforclaw.agent.tools.AndroidToolRegistry
+import com.xiaomo.androidforclaw.agent.context.ChannelContext
 import com.xiaomo.androidforclaw.agent.context.ContextBuilder
 import com.xiaomo.androidforclaw.agent.loop.AgentLoop
 import com.xiaomo.androidforclaw.agent.loop.ProgressUpdate
@@ -1361,7 +1362,7 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                 messageQueueManager.setActiveAgentLoop(steerQueueKey, agentLoop)
 
                 // Build system prompt (with channel context for messaging awareness)
-                val channelCtx = ContextBuilder.ChannelContext(
+                val channelCtx = ChannelContext(
                     channel = "feishu",
                     chatId = event.chatId,
                     chatType = event.chatType,
@@ -2213,7 +2214,7 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
             // Register with MessageQueueManager (channel-agnostic stop/steer support)
             messageQueueManager.setActiveAgentLoop(queueKey, agentLoop)
 
-            val channelCtx = ContextBuilder.ChannelContext(
+            val channelCtx = ChannelContext(
                 channel = "weixin",
                 chatId = msg.fromUserId,
                 chatType = "p2p",

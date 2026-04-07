@@ -3,14 +3,129 @@ package com.xiaomo.androidforclaw.agent.skills
 /**
  * OpenClaw Source Reference:
  * - ../openclaw/src/agents/skills-status.ts
+ *
+ * Skill status types, requirements checking, statistics, and status builder.
  */
-
 
 import android.content.Context
 import com.xiaomo.androidforclaw.logging.Log
 import com.xiaomo.androidforclaw.config.ConfigLoader
 import com.xiaomo.androidforclaw.workspace.StoragePaths
 import java.io.File
+
+// ==================== Status Data Types ====================
+
+/**
+ * Skill Status Report (aligns with OpenClaw SkillStatusReport)
+ */
+data class SkillStatusReport(
+    val workspaceDir: String,
+    val managedSkillsDir: String,
+    val skills: List<SkillStatusEntry>
+)
+
+/**
+ * Skill Status Entry (aligns with OpenClaw SkillStatusEntry)
+ */
+data class SkillStatusEntry(
+    val name: String,
+    val description: String,
+    val source: SkillSource,
+    val bundled: Boolean,
+    val filePath: String,
+    val baseDir: String,
+    val skillKey: String,
+    val primaryEnv: String? = null,
+    val emoji: String? = null,
+    val homepage: String? = null,
+    val always: Boolean,
+    val disabled: Boolean,
+    val blockedByAllowlist: Boolean,
+    val eligible: Boolean,
+    val requirements: SkillRequires? = null,
+    val missing: SkillRequires? = null,
+    val configChecks: List<SkillConfigCheck>,
+    val install: List<SkillInstallOption>
+)
+
+/**
+ * Config Check Result
+ */
+data class SkillConfigCheck(
+    val path: String,
+    val exists: Boolean,
+    val value: Any? = null
+)
+
+/**
+ * Available Install Option
+ */
+data class SkillInstallOption(
+    val installId: String,
+    val kind: InstallKind,
+    val label: String,
+    val available: Boolean,
+    val reason: String? = null
+)
+
+// ==================== Requirements Check ====================
+
+/**
+ * Requirements check result
+ */
+sealed class RequirementsCheckResult {
+    object Satisfied : RequirementsCheckResult()
+
+    data class Unsatisfied(
+        val missingBins: List<String>,
+        val missingAnyBins: List<String> = emptyList(),
+        val missingEnv: List<String>,
+        val missingConfig: List<String>
+    ) : RequirementsCheckResult() {
+        fun getErrorMessage(): String {
+            val parts = mutableListOf<String>()
+            if (missingBins.isNotEmpty()) {
+                parts.add("缺少二进制工具: ${missingBins.joinToString()}")
+            }
+            if (missingAnyBins.isNotEmpty()) {
+                parts.add("至少需要一个: ${missingAnyBins.joinToString()}")
+            }
+            if (missingEnv.isNotEmpty()) {
+                parts.add("缺少环境变量: ${missingEnv.joinToString()}")
+            }
+            if (missingConfig.isNotEmpty()) {
+                parts.add("缺少配置项: ${missingConfig.joinToString()}")
+            }
+            return parts.joinToString("; ")
+        }
+    }
+}
+
+// ==================== Statistics ====================
+
+/**
+ * Skills statistics
+ */
+data class SkillsStatistics(
+    val totalSkills: Int,
+    val alwaysSkills: Int,
+    val onDemandSkills: Int,
+    val totalTokens: Int,
+    val alwaysTokens: Int
+) {
+    fun getReport(): String {
+        return """
+Skills 统计:
+  - 总计: $totalSkills 个
+  - Always: $alwaysSkills 个
+  - On-Demand: $onDemandSkills 个
+  - Token 总量: $totalTokens tokens
+  - Always Token: $alwaysTokens tokens
+        """.trimIndent()
+    }
+}
+
+// ==================== Status Builder ====================
 
 /**
  * Skill Status Builder
@@ -94,7 +209,7 @@ class SkillStatusBuilder(private val context: Context) {
             }
         }
 
-        Log.i(TAG, "✅ Loaded ${skillEntries.size} skills total")
+        Log.i(TAG, "Loaded ${skillEntries.size} skills total")
 
         return SkillStatusReport(
             workspaceDir = workspacePath,

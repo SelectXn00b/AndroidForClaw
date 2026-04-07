@@ -13,6 +13,8 @@ import com.xiaomo.androidforclaw.agent.subagent.SessionVisibilityGuard
 import com.xiaomo.androidforclaw.agent.subagent.SubagentRegistry
 import com.xiaomo.androidforclaw.agent.subagent.SubagentRunStatus
 import com.xiaomo.androidforclaw.agent.subagent.isActiveSubagentRun
+import com.xiaomo.androidforclaw.agent.subagent.buildIndexedList
+import com.xiaomo.androidforclaw.agent.subagent.countPendingDescendantRuns
 import com.xiaomo.androidforclaw.agent.subagent.resolveSubagentLabel
 import com.xiaomo.androidforclaw.providers.FunctionDefinition
 import com.xiaomo.androidforclaw.providers.ParametersSchema

@@ -13,6 +13,8 @@ import com.xiaomo.androidforclaw.agent.loop.AgentLoop
 import com.xiaomo.androidforclaw.agent.subagent.SessionAccessResult
 import com.xiaomo.androidforclaw.agent.subagent.SessionVisibilityGuard
 import com.xiaomo.androidforclaw.agent.subagent.SpawnMode
+import com.xiaomo.androidforclaw.agent.subagent.getRunByChildSessionKey
+import com.xiaomo.androidforclaw.agent.subagent.resolveTarget
 import com.xiaomo.androidforclaw.agent.subagent.SubagentSpawner
 import com.xiaomo.androidforclaw.providers.FunctionDefinition
 import com.xiaomo.androidforclaw.providers.ParametersSchema

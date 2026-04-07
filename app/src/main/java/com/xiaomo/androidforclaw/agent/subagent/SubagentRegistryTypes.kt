@@ -1,20 +1,16 @@
 /**
  * OpenClaw Source Reference:
- * - ../openclaw/src/agents/subagent-registry.types.ts (SubagentRunRecord)
- * - ../openclaw/src/agents/subagent-capabilities.ts (role, control scope, depth)
- * - ../openclaw/src/agents/subagent-lifecycle-events.ts (ended reason, ended outcome)
+ * - ../openclaw/src/agents/subagent-registry.types.ts (SubagentRunRecord, SubagentRunOutcome)
  * - ../openclaw/src/agents/subagent-spawn.ts (SpawnSubagentParams, SpawnSubagentResult, SpawnSubagentMode)
- * - ../openclaw/src/agents/subagent-announce.ts (SubagentRunOutcome)
- * - ../openclaw/src/agents/subagent-registry.ts (announce constants)
+ * - ../openclaw/src/agents/subagent-announce.ts (announce constants, retry delays)
  * - ../openclaw/src/agents/subagent-control.ts (steer/control constants)
  * - ../openclaw/src/agents/subagent-attachments.ts (attachment types)
+ *
+ * AndroidForClaw adaptation: core type definitions for the subagent registry system.
  */
 package com.xiaomo.androidforclaw.agent.subagent
 
 // ==================== Constants (aligned with OpenClaw) ====================
-
-/** Aligned with OpenClaw DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH = 1 */
-const val DEFAULT_MAX_SPAWN_DEPTH = 1
 
 /** Aligned with OpenClaw maxChildrenPerAgent default */
 const val DEFAULT_MAX_CHILDREN_PER_AGENT = 5
@@ -84,46 +80,7 @@ enum class SpawnStatus {
     val wireValue: String get() = name.lowercase()
 }
 
-// ==================== Role System ====================
-
-/**
- * Aligned with OpenClaw SubagentSessionRole.
- * Determined by spawn depth relative to maxSpawnDepth.
- */
-enum class SubagentSessionRole {
-    /** Depth 0: top-level agent. Can spawn children, can control children. */
-    MAIN,
-    /** 0 < depth < maxSpawnDepth: intermediate. Can spawn and control children. */
-    ORCHESTRATOR,
-    /** depth >= maxSpawnDepth: leaf worker. Cannot spawn further subagents. */
-    LEAF;
-
-    val wireValue: String get() = name.lowercase()
-}
-
-/**
- * Aligned with OpenClaw SubagentControlScope.
- * MAIN/ORCHESTRATOR get CHILDREN, LEAF gets NONE.
- */
-enum class SubagentControlScope {
-    CHILDREN,
-    NONE;
-
-    val wireValue: String get() = name.lowercase()
-}
-
-// ==================== Lifecycle ====================
-
-/** Aligned with OpenClaw SubagentLifecycleEndedReason */
-enum class SubagentLifecycleEndedReason {
-    SUBAGENT_COMPLETE,
-    SUBAGENT_ERROR,
-    SUBAGENT_KILLED,
-    SESSION_RESET,
-    SESSION_DELETE;
-
-    val wireValue: String get() = name.lowercase().replace('_', '-')
-}
+// ==================== Run Status ====================
 
 /** Aligned with OpenClaw SubagentRunOutcome.status */
 enum class SubagentRunStatus {
@@ -131,29 +88,6 @@ enum class SubagentRunStatus {
     ERROR,
     TIMEOUT,
     UNKNOWN;
-
-    val wireValue: String get() = name.lowercase()
-}
-
-/**
- * Aligned with OpenClaw lifecycle ended outcome values.
- * Separate from SubagentRunStatus — these are lifecycle event outcomes.
- */
-enum class SubagentLifecycleEndedOutcome {
-    OK,
-    ERROR,
-    TIMEOUT,
-    KILLED,
-    RESET,
-    DELETED;
-
-    val wireValue: String get() = name.lowercase()
-}
-
-/** Aligned with OpenClaw SUBAGENT_TARGET_KIND */
-enum class SubagentLifecycleTargetKind {
-    SUBAGENT,
-    ACP;
 
     val wireValue: String get() = name.lowercase()
 }
@@ -184,7 +118,7 @@ data class SubagentRunRecord(
     /** Who controls this subagent (can differ from requester in cross-agent scenarios) */
     val controllerSessionKey: String? = null,
     val requesterSessionKey: String,
-    /** Aligned with OpenClaw requesterOrigin — simplified for Android */
+    /** Aligned with OpenClaw requesterOrigin -- simplified for Android */
     val requesterDisplayKey: String = "",
     val task: String,
     val label: String,
@@ -222,7 +156,7 @@ data class SubagentRunRecord(
     var attachmentsDir: String? = null,
     var attachmentsRootDir: String? = null,
     var retainAttachmentsOnKeep: Boolean = false,
-    /** Spawn depth — stored for steer restart prompt rebuilding */
+    /** Spawn depth -- stored for steer restart prompt rebuilding */
     val depth: Int = 0,
 ) {
     val isActive: Boolean get() = endedAt == null
@@ -265,7 +199,7 @@ data class SpawnSubagentParams(
     val thinking: String? = null,
     val runTimeoutSeconds: Int? = null,
     val mode: SpawnMode = SpawnMode.RUN,
-    /** "delete" | "keep" — aligned with OpenClaw default "keep" */
+    /** "delete" | "keep" -- aligned with OpenClaw default "keep" */
     val cleanup: String = "keep",
     val expectsCompletionMessage: Boolean? = null,
     val thread: Boolean? = null,
@@ -273,7 +207,7 @@ data class SpawnSubagentParams(
     val attachments: List<InlineAttachment>? = null,
     val attachMountPath: String? = null,
     val cwd: String? = null,
-    /** "subagent" | "acp" — ACP not supported on Android, defaults to "subagent" */
+    /** "subagent" | "acp" -- ACP not supported on Android, defaults to "subagent" */
     val runtime: String? = null,
 )
 
@@ -289,60 +223,7 @@ data class SpawnSubagentResult(
     val attachments: AttachmentReceipt? = null,
 )
 
-/** Resolved capabilities for a given depth. Aligned with OpenClaw resolveSubagentCapabilities return. */
-data class SubagentCapabilities(
-    val depth: Int,
-    val role: SubagentSessionRole,
-    val controlScope: SubagentControlScope,
-    val canSpawn: Boolean,
-    val canControlChildren: Boolean,
-)
-
-// ==================== Capability Resolution ====================
-
-/**
- * Aligned with OpenClaw resolveSubagentRoleForDepth.
- * depth <= 0 → MAIN, depth < maxSpawnDepth → ORCHESTRATOR, else → LEAF.
- */
-fun resolveSubagentRole(depth: Int, maxSpawnDepth: Int = DEFAULT_MAX_SPAWN_DEPTH): SubagentSessionRole {
-    return when {
-        depth <= 0 -> SubagentSessionRole.MAIN
-        depth < maxSpawnDepth -> SubagentSessionRole.ORCHESTRATOR
-        else -> SubagentSessionRole.LEAF
-    }
-}
-
-/** Aligned with OpenClaw resolveSubagentControlScopeForRole */
-fun resolveSubagentControlScope(role: SubagentSessionRole): SubagentControlScope {
-    return if (role == SubagentSessionRole.LEAF) SubagentControlScope.NONE else SubagentControlScope.CHILDREN
-}
-
-/** Aligned with OpenClaw resolveSubagentCapabilities */
-fun resolveSubagentCapabilities(depth: Int, maxSpawnDepth: Int = DEFAULT_MAX_SPAWN_DEPTH): SubagentCapabilities {
-    val role = resolveSubagentRole(depth, maxSpawnDepth)
-    val controlScope = resolveSubagentControlScope(role)
-    return SubagentCapabilities(
-        depth = depth,
-        role = role,
-        controlScope = controlScope,
-        canSpawn = role == SubagentSessionRole.MAIN || role == SubagentSessionRole.ORCHESTRATOR,
-        canControlChildren = controlScope == SubagentControlScope.CHILDREN,
-    )
-}
-
-/**
- * Aligned with OpenClaw resolveLifecycleOutcomeFromRunOutcome.
- * Maps SubagentRunOutcome to SubagentLifecycleEndedOutcome.
- */
-fun resolveLifecycleOutcome(outcome: SubagentRunOutcome?): SubagentLifecycleEndedOutcome {
-    // Aligned with OpenClaw resolveLifecycleOutcomeFromRunOutcome:
-    // Only error/timeout are explicit; everything else (including unknown/null) → OK.
-    return when (outcome?.status) {
-        SubagentRunStatus.ERROR -> SubagentLifecycleEndedOutcome.ERROR
-        SubagentRunStatus.TIMEOUT -> SubagentLifecycleEndedOutcome.TIMEOUT
-        else -> SubagentLifecycleEndedOutcome.OK
-    }
-}
+// ==================== Utility Functions ====================
 
 /**
  * Cap frozen result text to FROZEN_RESULT_TEXT_MAX_BYTES (100KB).
@@ -387,11 +268,9 @@ const val SPAWN_SESSION_ACCEPTED_NOTE = "thread-bound session stays active after
 /** Maximum recentMinutes for subagent list queries (24 hours). Aligned with OpenClaw MAX_RECENT_MINUTES. */
 const val MAX_RECENT_MINUTES = 24 * 60
 
-// ==================== Utility Functions ====================
-
 /**
  * Resolve display label from a run record.
- * Falls back through label → task → childSessionKey → "subagent".
+ * Falls back through label -> task -> childSessionKey -> "subagent".
  * Aligned with OpenClaw resolveSubagentLabel.
  */
 fun resolveSubagentLabel(entry: SubagentRunRecord): String {
@@ -431,26 +310,6 @@ fun runOutcomesEqual(a: SubagentRunOutcome?, b: SubagentRunOutcome?): Boolean {
     if (a.status != b.status) return false
     if (a.status == SubagentRunStatus.ERROR && a.error != b.error) return false
     return true
-}
-
-/**
- * Resolve the cleanup completion reason from a run record.
- * Aligned with OpenClaw resolveCleanupCompletionReason.
- */
-fun resolveCleanupCompletionReason(record: SubagentRunRecord): SubagentLifecycleEndedReason {
-    return record.endedReason ?: SubagentLifecycleEndedReason.SUBAGENT_COMPLETE
-}
-
-/**
- * Resolve session-ended reason to outcome.
- * Aligned with OpenClaw resolveSubagentSessionEndedOutcome.
- */
-fun resolveSubagentSessionEndedOutcome(reason: SubagentLifecycleEndedReason): SubagentLifecycleEndedOutcome {
-    return when (reason) {
-        SubagentLifecycleEndedReason.SESSION_RESET -> SubagentLifecycleEndedOutcome.RESET
-        SubagentLifecycleEndedReason.SESSION_DELETE -> SubagentLifecycleEndedOutcome.DELETED
-        else -> SubagentLifecycleEndedOutcome.DELETED
-    }
 }
 
 /**

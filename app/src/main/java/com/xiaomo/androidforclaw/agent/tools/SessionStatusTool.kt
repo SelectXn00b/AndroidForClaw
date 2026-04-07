@@ -11,6 +11,9 @@ package com.xiaomo.androidforclaw.agent.tools
 import com.xiaomo.androidforclaw.agent.subagent.SessionAccessResult
 import com.xiaomo.androidforclaw.agent.subagent.SessionVisibilityGuard
 import com.xiaomo.androidforclaw.agent.subagent.SubagentRegistry
+import com.xiaomo.androidforclaw.agent.subagent.countActiveRunsForSession
+import com.xiaomo.androidforclaw.agent.subagent.getRunByChildSessionKey
+import com.xiaomo.androidforclaw.agent.subagent.listRunsForController
 import com.xiaomo.androidforclaw.agent.subagent.resolveSubagentLabel
 import com.xiaomo.androidforclaw.agent.subagent.resolveSubagentSessionStatus
 import com.xiaomo.androidforclaw.config.ConfigLoader

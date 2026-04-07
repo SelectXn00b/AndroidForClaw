@@ -12,6 +12,7 @@ package com.xiaomo.androidforclaw.agent.tools
 
 import com.xiaomo.androidforclaw.agent.subagent.SessionAccessResult
 import com.xiaomo.androidforclaw.agent.subagent.SessionVisibilityGuard
+import com.xiaomo.androidforclaw.agent.subagent.resolveTarget
 import com.xiaomo.androidforclaw.agent.subagent.SubagentRegistry
 import com.xiaomo.androidforclaw.logging.SensitiveTextRedactor
 import com.xiaomo.androidforclaw.providers.FunctionDefinition

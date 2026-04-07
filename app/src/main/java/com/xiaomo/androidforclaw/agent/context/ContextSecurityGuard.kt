@@ -35,7 +35,7 @@ object ContextSecurityGuard {
      * @param channelContext The current channel context (null = local Android app = not shared)
      * @return true if the context is shared (group chat, channel, thread)
      */
-    fun isSharedContext(channelContext: ContextBuilder.ChannelContext?): Boolean {
+    fun isSharedContext(channelContext: ChannelContext?): Boolean {
         if (channelContext == null) return false
         val chatType = channelContext.chatType?.lowercase() ?: return false
         // Normalize "p2p" → not shared
@@ -52,7 +52,7 @@ object ContextSecurityGuard {
      * @param channelContext The current channel context
      * @return true if MEMORY.md should be loaded (private/DM context)
      */
-    fun shouldLoadMemory(channelContext: ContextBuilder.ChannelContext?): Boolean {
+    fun shouldLoadMemory(channelContext: ChannelContext?): Boolean {
         val shared = isSharedContext(channelContext)
         if (shared) {
             Log.i(TAG, "MEMORY.md blocked in shared context (chatType=${channelContext?.chatType})")

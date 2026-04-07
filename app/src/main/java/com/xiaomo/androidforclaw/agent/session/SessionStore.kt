@@ -2,9 +2,10 @@ package com.xiaomo.androidforclaw.agent.session
 
 /**
  * OpenClaw Source Reference:
- * - ../openclaw/src/agents/session-dirs.ts, command/session-store.ts
+ * - ../openclaw/src/commands/session-store.ts
  *
  * AndroidForClaw adaptation: persist and restore agent sessions on Android.
+ * Session directory helpers moved to SessionDirs.kt (← session-dirs.ts).
  */
 
 
@@ -55,14 +56,6 @@ class SessionManager(
 ) {
     companion object {
         private const val TAG = "SessionManager"
-        private const val SESSIONS_DIR = "sessions"
-        private const val SESSIONS_INDEX = "sessions.json"
-        private const val AUTO_PRUNE_DAYS = 30        // Auto clean sessions older than 30 days
-
-        @JvmStatic
-        internal fun ensureSessionFileParentExists(sessionFile: File) {
-            sessionFile.parentFile?.mkdirs()
-        }
     }
 
     private val gson: Gson = GsonBuilder().create()  // No pretty printing for JSONL
@@ -638,12 +631,7 @@ class SessionManager(
     }
 
     private fun getSessionJSONLFile(sessionId: String): File {
-        return File(sessionsDir, "$sessionId.jsonl")
-    }
-
-    private fun currentTimestamp(): String {
-        return SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
-            .format(Date())
+        return getSessionJSONLFile(sessionsDir, sessionId)
     }
 }
 

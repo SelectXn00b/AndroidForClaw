@@ -15,7 +15,11 @@ import com.xiaomo.androidforclaw.agent.subagent.SubagentRegistry
 import com.xiaomo.androidforclaw.agent.subagent.SubagentSpawner
 import com.xiaomo.androidforclaw.agent.subagent.getSubagentSessionStartedAt
 import com.xiaomo.androidforclaw.agent.subagent.isActiveSubagentRun
+import com.xiaomo.androidforclaw.agent.subagent.countPendingDescendantRuns
+import com.xiaomo.androidforclaw.agent.subagent.countPendingDescendantRunsExcludingRun
+import com.xiaomo.androidforclaw.agent.subagent.listRunsForController
 import com.xiaomo.androidforclaw.agent.subagent.resolveSubagentLabel
+import com.xiaomo.androidforclaw.agent.subagent.resolveTarget
 import com.xiaomo.androidforclaw.providers.FunctionDefinition
 import com.xiaomo.androidforclaw.providers.ParametersSchema
 import com.xiaomo.androidforclaw.providers.PropertySchema

@@ -11,12 +11,10 @@ import com.xiaomo.androidforclaw.util.ReasoningTagFilter
 /**
  * OpenClaw Source Reference:
  * - ../openclaw/src/agents/pi-embedded-runner/run.ts (core: runEmbeddedPiAgent loop, overflow recovery, auth failover)
- * - ../openclaw/src/agents/agent-command.ts (session entry, model resolve, fallback orchestration)
- * - ../openclaw/src/agents/pi-embedded-subscribe.ts (streaming tool execution callbacks — not yet implemented here)
  *
  * AndroidForClaw adaptation: iterative agent loop, tool calling, progress updates.
- * Note: OpenClaw splits the loop across run.ts (retry/overflow) and subscribe.ts (streaming/tool dispatch);
- * AndroidForClaw merges both into this single class with non-streaming batch calls.
+ * Types (AgentResult, ProgressUpdate) → AgentCommand.kt (agent-command.ts)
+ * Streaming helpers (sanitizeToolCalls, scrubRefusal) → Subscribe.kt (pi-embedded-subscribe.ts)
  */
 
 
@@ -146,9 +144,6 @@ class AgentLoop(
         private const val SOFT_TRIM_TAIL_CHARS = 1_500
         private const val HARD_CLEAR_PLACEHOLDER = "[Old tool result content cleared]"
 
-        // Anthropic refusal magic string scrub (aligned with OpenClaw scrubAnthropicRefusalMagic)
-        private const val ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL"
-        private const val ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)"
     }
 
     private val gson = Gson()
@@ -1442,111 +1437,14 @@ class AgentLoop(
         writeLog("✅ Pruned: ${messages.size} messages, ${ToolResultContextGuard.estimateContextChars(messages)} chars after $iterations iterations")
     }
 
-    // ===== Anthropic Refusal Magic Scrub (aligned with OpenClaw scrubAnthropicRefusalMagic) =====
+    // scrubAnthropicRefusalMagic moved to Subscribe.kt (aligned with pi-embedded-subscribe.ts)
 
-    /**
-     * Scrub Anthropic refusal magic string from system prompt messages.
-     * Aligned with OpenClaw scrubAnthropicRefusalMagic:
-     * Replaces "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL" (which triggers Anthropic's
-     * refusal filter) with a redacted version.
-     * Only applied to system messages (the system prompt).
-     */
-    private fun scrubAnthropicRefusalMagic(messages: List<Message>): List<Message> {
-        // Fast path: no magic string present
-        val hasMagic = messages.any { it.role == "system" && it.content?.contains(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL) == true }
-        if (!hasMagic) return messages
+    // sanitizeToolCalls and repairMalformedJsonFallback moved to Subscribe.kt (aligned with pi-embedded-subscribe.ts)
 
-        return messages.map { msg ->
-            if (msg.role == "system" && msg.content?.contains(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL) == true) {
-                msg.copy(content = msg.content.replace(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL, ANTHROPIC_MAGIC_STRING_REPLACEMENT))
-            } else {
-                msg
-            }
-        }
-    }
-
-    // ===== Tool Call Sanitization (aligned with OpenClaw stream wrapper chain) =====
-
-    /**
-     * Sanitize and repair tool calls from LLM response.
-     * 对齐 OpenClaw stream wrapper chain:
-     * 1. ToolCallNormalization.normalizeToolCallNameForDispatch — 工具名规范化（候选名 + toolId 推断）
-     * 2. ToolCallArgumentRepair.tryExtractUsableToolCallArguments — 参数修复（平衡 JSON 提取）
-     * 3. ToolCallArgumentRepair.decodeHtmlEntitiesInObject — HTML 实体解码
-     */
+    /** Delegate to package-level sanitizeToolCalls (Subscribe.kt) */
     private fun sanitizeToolCalls(toolCalls: List<LLMToolCall>): List<LLMToolCall> {
-        // 构建允许的工具名集合（用于规范化匹配）
         val allowedToolNames = allToolDefinitions.map { it.function.name }.toSet()
-
-        return toolCalls.map { tc ->
-            // 1. 工具名规范化（对齐 OpenClaw normalizeToolCallNameForDispatch）
-            val normalizedName = normalizeToolCallNameForDispatch(
-                rawName = tc.name,
-                allowedToolNames = allowedToolNames,
-                rawToolCallId = tc.id
-            )
-
-            // 2. 参数修复（对齐 OpenClaw tryExtractUsableToolCallArguments）
-            val repairedArgs = if (tc.arguments.isBlank()) {
-                tc.arguments
-            } else {
-                val repairResult = tryExtractUsableToolCallArguments(tc.arguments)
-                if (repairResult != null && repairResult.kind == "repaired") {
-                    writeLog("🔧 Repaired tool arguments for $normalizedName " +
-                        "(leading: ${repairResult.leadingPrefix.length} chars, " +
-                        "trailing: ${repairResult.trailingSuffix.length} chars)")
-                    com.google.gson.Gson().toJson(repairResult.args)
-                } else if (repairResult != null) {
-                    tc.arguments  // preserved, no change needed
-                } else {
-                    // Fallback: 旧版修复逻辑（补充缺失括号）
-                    repairMalformedJsonFallback(tc.arguments)
-                }
-            }
-
-            // 3. HTML 实体解码（对齐 OpenClaw decodeHtmlEntitiesInObject）
-            val decodedArgs = if (repairedArgs.contains("&#") || repairedArgs.contains("&amp;") ||
-                repairedArgs.contains("&lt;") || repairedArgs.contains("&gt;")) {
-                val decoded = decodeHtmlEntities(repairedArgs)
-                if (decoded != repairedArgs) writeLog("🔧 Decoded HTML entities in tool call args for $normalizedName")
-                decoded
-            } else {
-                repairedArgs
-            }
-
-            if (normalizedName != tc.name) {
-                writeLog("🔧 Normalized tool name: '${tc.name}' → '${normalizedName}'")
-            }
-
-            LLMToolCall(id = tc.id, name = normalizedName, arguments = decodedArgs)
-        }
-    }
-
-    /**
-     * Fallback JSON repair — 仅在 tryExtractUsableToolCallArguments 失败时使用。
-     * 补充缺失的闭合括号/花括号。
-     */
-    private fun repairMalformedJsonFallback(arguments: String): String {
-        val trimmed = arguments.trim()
-        try {
-            com.google.gson.JsonParser.parseString(trimmed)
-            return trimmed
-        } catch (_: Exception) { /* continue */ }
-
-        var repaired = trimmed
-        val openBraces = repaired.count { it == '{' }
-        val closeBraces = repaired.count { it == '}' }
-        val openBrackets = repaired.count { it == '[' }
-        val closeBrackets = repaired.count { it == ']' }
-        repaired += "}".repeat((openBraces - closeBraces).coerceAtLeast(0))
-        repaired += "]".repeat((openBrackets - closeBrackets).coerceAtLeast(0))
-
-        try {
-            com.google.gson.JsonParser.parseString(repaired)
-            return repaired
-        } catch (_: Exception) { /* give up */ }
-
-        return trimmed
+        return com.xiaomo.androidforclaw.agent.loop.sanitizeToolCalls(toolCalls, allowedToolNames, ::writeLog)
     }
 
     /**
@@ -1576,80 +1474,4 @@ class AgentLoop(
     }
 }
 
-/**
- * Agent execution result
- */
-data class AgentResult(
-    val finalContent: String,
-    val toolsUsed: List<String>,
-    val messages: List<Message>,
-    val iterations: Int
-)
-
-/**
- * Progress update
- */
-sealed class ProgressUpdate {
-    /** Start new iteration */
-    data class Iteration(val number: Int) : ProgressUpdate()
-
-    /** Thinking step X (intermediate feedback) */
-    data class Thinking(val iteration: Int) : ProgressUpdate()
-
-    /** Reasoning thinking process */
-    data class Reasoning(val content: String, val llmDuration: Long) : ProgressUpdate()
-
-    /** Tool call */
-    data class ToolCall(val name: String, val arguments: Map<String, Any?>) : ProgressUpdate()
-
-    /** Tool result */
-    data class ToolResult(val name: String, val result: String, val execDuration: Long) : ProgressUpdate()
-
-    /** Iteration complete */
-    data class IterationComplete(val number: Int, val iterationDuration: Long, val llmDuration: Long, val execDuration: Long) : ProgressUpdate()
-
-    /** Context overflow */
-    data class ContextOverflow(val message: String) : ProgressUpdate()
-
-    /** Context recovered successfully */
-    data class ContextRecovered(val strategy: String, val attempt: Int) : ProgressUpdate()
-
-    /** Error */
-    data class Error(val message: String) : ProgressUpdate()
-
-    /** Loop detected */
-    data class LoopDetected(
-        val detector: String,
-        val count: Int,
-        val message: String,
-        val critical: Boolean
-    ) : ProgressUpdate()
-
-    /**
-     * Intermediate text reply (block reply).
-     *
-     * Aligned with OpenClaw's blockReplyBreak="text_end" mechanism:
-     * When LLM returns text + tool_calls in the same response,
-     * the text is emitted immediately as an intermediate reply
-     * (not held until the final answer).
-     */
-    data class BlockReply(val text: String, val iteration: Int) : ProgressUpdate()
-
-    /** A steer message was injected into the conversation mid-run */
-    data class SteerMessageInjected(val content: String) : ProgressUpdate()
-
-    /** A subagent was spawned (for observability) */
-    data class SubagentSpawned(val runId: String, val label: String, val childSessionKey: String) : ProgressUpdate()
-
-    /** A subagent completed and its result was announced to the parent */
-    data class SubagentAnnounced(val runId: String, val label: String, val status: String) : ProgressUpdate()
-
-    /** The agent loop yielded (sessions_yield) to wait for subagent results */
-    data object Yielded : ProgressUpdate()
-
-    /** Streaming: incremental reasoning/thinking token */
-    data class ReasoningDelta(val text: String) : ProgressUpdate()
-
-    /** Streaming: incremental content token */
-    data class ContentDelta(val text: String) : ProgressUpdate()
-}
+// AgentResult and ProgressUpdate moved to AgentCommand.kt (aligned with agent-command.ts)

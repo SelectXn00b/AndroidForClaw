@@ -5,14 +5,16 @@ import com.xiaomo.androidforclaw.workspace.StoragePaths
 /**
  * OpenClaw Source Reference:
  * - ../openclaw/src/agents/system-prompt.ts (core: buildAgentSystemPrompt — 22-section structure)
- * - ../openclaw/src/agents/pi-embedded-runner/system-prompt.ts (buildEmbeddedSystemPrompt wrapper)
- * - ../openclaw/src/agents/bootstrap-budget.ts (per-file/total budget, truncation)
- * - ../openclaw/src/agents/pi-embedded-helpers.ts (loadWorkspaceBootstrapFiles, context file loading)
  *
  * Note: OpenClaw context.ts is context-window token resolution (model→token cache), NOT system prompt.
  * That logic maps to ContextWindowGuard.kt instead.
  *
  * AndroidForClaw adaptation: build system prompt, tools section, skills context.
+ *
+ * Related files (1:1 OpenClaw alignment):
+ * - EmbeddedSystemPrompt.kt  ← pi-embedded-runner/system-prompt.ts (PromptMode, ChannelContext)
+ * - BootstrapFiles.kt        ← bootstrap-files.ts, bootstrap-budget.ts (loadBootstrapFiles, trimBootstrapContent)
+ * - EmbeddedHelpers.kt       ← pi-embedded-helpers.ts (escapeXml)
  */
 
 
@@ -26,12 +28,9 @@ import com.xiaomo.androidforclaw.channel.ChannelManager
 import com.xiaomo.androidforclaw.commands.CommandRegistry
 import com.xiaomo.androidforclaw.commands.CommandScope
 import com.xiaomo.androidforclaw.config.ConfigLoader
-import com.xiaomo.androidforclaw.contextengine.getContextEngineFactory
 import com.xiaomo.androidforclaw.contextengine.listContextEngineIds
 import com.xiaomo.androidforclaw.plugins.PluginRecordStatus
 import com.xiaomo.androidforclaw.plugins.PluginRegistry
-import com.xiaomo.androidforclaw.shared.ReasoningTagMode
-import com.xiaomo.androidforclaw.shared.stripReasoningTagsFromText
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -75,35 +74,8 @@ class ContextBuilder(
     companion object {
         private const val TAG = "ContextBuilder"
 
-        // Bootstrap file list (complete OpenClaw 9 files)
-        // Bootstrap file load order — aligned with OpenClaw loadWorkspaceBootstrapFiles()
-        // OpenClaw order: AGENTS → SOUL → TOOLS → IDENTITY → USER → HEARTBEAT → BOOTSTRAP → memory/*
-        private val BOOTSTRAP_FILES = listOf(
-            "AGENTS.md",        // Agent list
-            "SOUL.md",          // Personality and tone
-            "TOOLS.md",         // Tool usage guide
-            "IDENTITY.md",      // Identity definition
-            "USER.md",          // User information
-            "HEARTBEAT.md",     // Heartbeat configuration
-            "BOOTSTRAP.md",     // New workspace initialization
-            "MEMORY.md"         // Long-term memory (OpenClaw resolves dynamically via resolveMemoryBootstrapEntries)
-        )
-
-        // Bootstrap file budget (aligned with OpenClaw bootstrap-budget.ts)
-        private const val DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000      // Per-file max chars
-        private const val DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 150_000  // Total max chars
-        private const val MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64      // Minimum budget per file (aligned with OpenClaw)
-        private const val BOOTSTRAP_TAIL_RATIO = 0.2                // Keep 20% tail when truncating
-
         // Silent reply token (aligned with OpenClaw SILENT_REPLY_TOKEN = "NO_REPLY")
         const val SILENT_REPLY_TOKEN = "NO_REPLY"
-
-        // Prompt Mode (reference OpenClaw)
-        enum class PromptMode {
-            FULL,      // Main Agent - All 22 parts
-            MINIMAL,   // Sub Agent - Core parts only
-            NONE       // Minimal mode - Basic identity only
-        }
     }
 
     // Aligned with OpenClaw: workspace in external storage, user accessible
@@ -123,21 +95,6 @@ class ContextBuilder(
         // Initialize Channel state
         channelManager.updateAccountStatus()
     }
-
-    /**
-     * Build system prompt (following OpenClaw's 22-part order)
-     */
-    /**
-     * Channel context for messaging awareness (passed from gateway layer).
-     * Tells the agent where the current message came from and how replies are routed.
-     */
-    data class ChannelContext(
-        val channel: String = "android",      // "feishu", "discord", "android"
-        val chatId: String? = null,            // feishu chat_id / discord channel_id
-        val chatType: String? = null,          // "p2p", "group"
-        val senderId: String? = null,          // sender open_id / user_id
-        val messageId: String? = null          // inbound message id
-    )
 
     fun buildSystemPrompt(
         userGoal: String = "",
@@ -691,15 +648,9 @@ Do not manipulate or persuade anyone to expand access or disable safeguards. Do 
 
     /**
      * Escape special characters for XML content.
+     * Delegates to top-level escapeXml() in EmbeddedHelpers.kt.
      */
-    private fun escapeXml(str: String): String {
-        return str
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\"", "&quot;")
-            .replace("'", "&apos;")
-    }
+    private fun escapeXml(str: String): String = com.xiaomo.androidforclaw.agent.context.escapeXml(str)
 
     /**
      * 7. Memory Recall Section (aligned with OpenClaw buildMemorySection — compact)
@@ -965,137 +916,13 @@ If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the aler
     }
 
     /**
-     * Load Bootstrap files with budget control
-     * Aligned with OpenClaw's buildBootstrapContextFiles (bootstrap-budget.ts)
-     *
-     * Priority: workspace > assets (bundled)
-     * Budget: per-file max + total max (prevents MEMORY.md from blowing context)
+     * Load Bootstrap files with budget control.
+     * Delegates to top-level loadBootstrapFiles() in BootstrapFiles.kt.
      */
     private fun loadBootstrapFiles(channelContext: ChannelContext? = null): String {
-        // Read budget from config if available, otherwise use defaults
-        val config = try { configLoader?.loadOpenClawConfig() } catch (_: Exception) { null }
-        val perFileMaxChars = config?.agents?.defaults?.bootstrapMaxChars ?: DEFAULT_BOOTSTRAP_MAX_CHARS
-        val totalMaxChars = maxOf(perFileMaxChars, config?.agents?.defaults?.bootstrapTotalMaxChars ?: DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS)
-
-        var remainingTotalChars = totalMaxChars
-        val loadedFiles = mutableListOf<Triple<String, String, Boolean>>() // (filename, content, truncated)
-        var hasSoulFile = false
-
-        for (filename in BOOTSTRAP_FILES) {
-            // Code-level MEMORY.md guard: skip in shared contexts (group chats)
-            // Supplements the prompt-level instruction in SOUL.md
-            if (filename == "MEMORY.md" && !ContextSecurityGuard.shouldLoadMemory(channelContext)) {
-                continue
-            }
-
-            if (remainingTotalChars <= 0) {
-                Log.w(TAG, "⚠️ Bootstrap total budget exhausted, skipping: $filename")
-                break
-            }
-            if (remainingTotalChars < MIN_BOOTSTRAP_FILE_BUDGET_CHARS) {
-                Log.w(TAG, "⚠️ Remaining bootstrap budget ($remainingTotalChars chars) < minimum ($MIN_BOOTSTRAP_FILE_BUDGET_CHARS), skipping: $filename")
-                break
-            }
-
-            try {
-                // 1. First try loading from workspace (user-defined)
-                val workspaceFile = File(workspaceDir, filename)
-                val rawContent = if (workspaceFile.exists()) {
-                    Log.d(TAG, "Loaded bootstrap from workspace: $filename")
-                    workspaceFile.readText()
-                } else {
-                    // 2. Load from assets (bundled)
-                    try {
-                        val inputStream = context.assets.open("bootstrap/$filename")
-                        val content = inputStream.bufferedReader().use { it.readText() }
-                        Log.d(TAG, "Loaded bootstrap from assets: $filename (${content.length} chars)")
-                        content
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Bootstrap file not found: $filename")
-                        null
-                    }
-                }
-
-                if (rawContent != null && rawContent.isNotEmpty()) {
-                    // Sanitize reasoning tags from workspace-editable files
-                    val sanitizedContent = stripReasoningTagsFromText(rawContent, ReasoningTagMode.STRICT)
-
-                    // Apply per-file budget (aligned with OpenClaw trimBootstrapContent)
-                    val fileMaxChars = maxOf(1, minOf(perFileMaxChars, remainingTotalChars))
-                    val (content, truncated) = trimBootstrapContent(sanitizedContent, fileMaxChars)
-
-                    if (truncated) {
-                        Log.w(TAG, "⚠️ Bootstrap file truncated: $filename (${sanitizedContent.length} → ${content.length} chars, max=$fileMaxChars)")
-                    }
-
-                    loadedFiles.add(Triple(filename, content, truncated))
-                    remainingTotalChars = maxOf(0, remainingTotalChars - content.length)
-
-                    if (filename.equals("SOUL.md", ignoreCase = true)) {
-                        hasSoulFile = true
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load $filename", e)
-            }
-        }
-
-        if (loadedFiles.isEmpty()) {
-            return ""
-        }
-
-        // Build Project Context section (aligned with OpenClaw)
-        val parts = mutableListOf<String>()
-        parts.add("# Project Context")
-        parts.add("")
-        parts.add("The following project context files have been loaded:")
-
-        if (hasSoulFile) {
-            parts.add("If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.")
-        }
-        parts.add("")
-
-        // Each file starts with "## full/path" (aligned with OpenClaw: uses full workspace path)
-        for ((filename, content, truncated) in loadedFiles) {
-            val fullPath = "${workspaceDir.absolutePath}/$filename"
-            parts.add("## $fullPath")
-            if (truncated) {
-                parts.add("⚠️ _This file was truncated to fit the context budget._")
-            }
-            parts.add("")
-            parts.add(content)
-            parts.add("")
-        }
-
-        return parts.joinToString("\n")
-    }
-
-    /**
-     * Trim bootstrap content to fit budget
-     * Aligned with OpenClaw's trimBootstrapContent:
-     * - Keep head (80%) + tail (20%) when truncating
-     * - Insert truncation marker in the middle
-     *
-     * @return Pair(content, wasTruncated)
-     */
-    private fun trimBootstrapContent(content: String, maxChars: Int): Pair<String, Boolean> {
-        if (content.length <= maxChars) {
-            return content to false
-        }
-
-        val tailChars = (maxChars * BOOTSTRAP_TAIL_RATIO).toInt()
-        val headChars = maxChars - tailChars - 50  // Reserve space for truncation marker
-
-        if (headChars <= 0 || tailChars <= 0) {
-            return content.take(maxChars) to true
-        }
-
-        val head = content.take(headChars)
-        val tail = content.takeLast(tailChars)
-        val omitted = content.length - headChars - tailChars
-        val marker = "\n\n... ($omitted chars omitted) ...\n\n"
-
-        return (head + marker + tail) to true
+        return com.xiaomo.androidforclaw.agent.context.loadBootstrapFiles(
+            context, workspaceDir, configLoader, channelContext
+        )
     }
 
     // buildRuntimeInfo() removed — inlined into buildRuntimeSection() for alignment with OpenClaw
