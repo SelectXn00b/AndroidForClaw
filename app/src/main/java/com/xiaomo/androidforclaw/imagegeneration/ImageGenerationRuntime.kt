@@ -15,10 +15,30 @@ object ImageGenerationRuntime {
         request: ImageGenerationRequest,
         config: OpenClawConfig? = null
     ): ImageGenerationResult {
-        TODO("Generate image with fallback across providers")
+        val providers = if (request.provider != null) {
+            val p = ImageGenerationProviderRegistry.getProvider(request.provider, config)
+                ?: throw IllegalStateException("Image generation provider not found: ${request.provider}")
+            listOf(p)
+        } else {
+            ImageGenerationProviderRegistry.listProviders(config)
+        }
+
+        if (providers.isEmpty()) {
+            throw IllegalStateException("No image generation providers registered")
+        }
+
+        var lastError: Throwable? = null
+        for (provider in providers) {
+            try {
+                return provider.generate(request)
+            } catch (e: Throwable) {
+                lastError = e
+            }
+        }
+        throw lastError ?: IllegalStateException("All image generation providers failed")
     }
 
     fun listRuntimeProviders(config: OpenClawConfig? = null): List<ImageGenerationProvider> {
-        TODO("List runtime-available image generation providers")
+        return ImageGenerationProviderRegistry.listProviders(config)
     }
 }

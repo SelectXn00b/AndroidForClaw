@@ -3,10 +3,25 @@ package com.xiaomo.androidforclaw.videogeneration
 import com.xiaomo.androidforclaw.config.OpenClawConfig
 
 object VideoGenerationProviderRegistry {
-    fun listProviders(config: OpenClawConfig? = null): List<VideoGenerationProvider> {
-        TODO("List registered video generation providers")
+
+    private val providers = java.util.concurrent.ConcurrentHashMap<String, VideoGenerationProvider>()
+
+    fun register(provider: VideoGenerationProvider) {
+        providers[provider.id] = provider
+        provider.aliases.forEach { alias -> providers[alias.lowercase()] = provider }
     }
+
+    fun unregister(providerId: String) {
+        val provider = providers.remove(providerId)
+        provider?.aliases?.forEach { providers.remove(it.lowercase()) }
+    }
+
+    fun listProviders(config: OpenClawConfig? = null): List<VideoGenerationProvider> {
+        return providers.values.distinctBy { it.id }
+    }
+
     fun getProvider(providerId: String?, config: OpenClawConfig? = null): VideoGenerationProvider? {
-        TODO("Get video generation provider by ID")
+        if (providerId == null) return providers.values.firstOrNull()
+        return providers[providerId] ?: providers[providerId.lowercase()]
     }
 }

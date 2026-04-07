@@ -16,13 +16,25 @@ data class TtsConfig(
 )
 
 fun isTtsEnabled(config: OpenClawConfig): Boolean {
-    TODO("Check if TTS is enabled in config")
+    val ttsSkill = config.skills.entries["tts"]
+    return ttsSkill?.enabled ?: false
 }
 
 fun isTtsProviderConfigured(config: OpenClawConfig): Boolean {
-    TODO("Check if a TTS provider is configured")
+    val ttsSkill = config.skills.entries["tts"]
+    val providerName = ttsSkill?.config?.get("provider") as? String
+    return !providerName.isNullOrBlank() &&
+        TtsProviderRegistry.getSpeechProvider(providerName) != null
 }
 
 fun resolveTtsConfig(config: OpenClawConfig): TtsConfig {
-    TODO("Resolve TTS config from OpenClawConfig")
+    val ttsSkill = config.skills.entries["tts"]
+    val skillConfig = ttsSkill?.config ?: emptyMap()
+    return TtsConfig(
+        enabled = ttsSkill?.enabled ?: false,
+        provider = skillConfig["provider"] as? String,
+        voice = skillConfig["voice"] as? String,
+        autoMode = (skillConfig["autoMode"] as? String) ?: "off",
+        maxLength = (skillConfig["maxLength"] as? Number)?.toInt() ?: 4000
+    )
 }

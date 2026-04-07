@@ -3,13 +3,33 @@ package com.xiaomo.androidforclaw.realtimevoice
 import com.xiaomo.androidforclaw.config.OpenClawConfig
 
 object RealtimeVoiceRuntime {
+
+    private val providers = java.util.concurrent.ConcurrentHashMap<String, RealtimeVoiceProvider>()
+
+    fun register(provider: RealtimeVoiceProvider) {
+        providers[provider.id] = provider
+        provider.aliases.forEach { alias -> providers[alias.lowercase()] = provider }
+    }
+
+    fun unregister(providerId: String) {
+        val provider = providers.remove(providerId)
+        provider?.aliases?.forEach { providers.remove(it.lowercase()) }
+    }
+
     fun listProviders(config: OpenClawConfig? = null): List<RealtimeVoiceProvider> {
-        TODO("List registered realtime voice providers")
+        return providers.values.distinctBy { it.id }
     }
+
     fun getProvider(providerId: String?, config: OpenClawConfig? = null): RealtimeVoiceProvider? {
-        TODO("Get realtime voice provider by ID")
+        if (providerId == null) return providers.values.firstOrNull()
+        return providers[providerId] ?: providers[providerId.lowercase()]
     }
+
     fun canonicalizeProviderId(providerId: String?, config: OpenClawConfig? = null): String? {
-        TODO("Canonicalize realtime voice provider ID")
+        if (providerId == null) return null
+        val normalized = providerId.lowercase().trim()
+        val provider = providers[normalized]
+            ?: providers.values.find { p -> p.aliases.any { it.lowercase() == normalized } }
+        return provider?.id
     }
 }

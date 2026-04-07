@@ -10,16 +10,42 @@ import com.xiaomo.androidforclaw.pluginsdk.PluginManifest
  */
 object PluginLoader {
 
+    /** In-memory list of known/bundled plugin manifests. Plugins can be added via [registerBundledManifest]. */
+    private val bundledManifests = java.util.concurrent.CopyOnWriteArrayList<PluginManifest>()
+
+    fun registerBundledManifest(manifest: PluginManifest) {
+        bundledManifests.add(manifest)
+    }
+
     suspend fun discoverPlugins(): List<PluginManifest> {
-        TODO("Scan plugin directories / bundled manifests, return discovered manifests")
+        // Return all bundled manifests; in the future this could also scan filesystem paths.
+        return bundledManifests.toList()
     }
 
     suspend fun loadPlugin(manifest: PluginManifest): PluginInfo {
-        TODO("Validate manifest, resolve entry point, initialize plugin, return PluginInfo")
+        val errors = validateManifest(manifest)
+        if (errors.isNotEmpty()) {
+            val info = PluginInfo(
+                manifest = manifest,
+                state = PluginState.ERROR,
+                errorMessage = errors.joinToString("; ")
+            )
+            PluginRegistry.register(info)
+            return info
+        }
+        val info = PluginInfo(
+            manifest = manifest,
+            state = PluginState.LOADED,
+            loadedAt = System.currentTimeMillis()
+        )
+        PluginRegistry.register(info)
+        return info
     }
 
     suspend fun unloadPlugin(pluginId: String): Boolean {
-        TODO("Tear down plugin, invoke onUnload hook, return success")
+        val existing = PluginRegistry.get(pluginId) ?: return false
+        PluginRegistry.unregister(pluginId)
+        return true
     }
 
     fun validateManifest(manifest: PluginManifest): List<String> {

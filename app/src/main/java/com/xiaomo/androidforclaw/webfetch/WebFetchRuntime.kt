@@ -9,34 +9,61 @@ package com.xiaomo.androidforclaw.webfetch
  */
 
 import com.xiaomo.androidforclaw.config.OpenClawConfig
+import com.xiaomo.androidforclaw.web.resolveWebProviderDefinition
+import com.xiaomo.androidforclaw.web.hasWebProviderEntryCredential
 
 object WebFetchRuntime {
+
+    /** Known web fetch provider IDs */
+    private val FETCH_PROVIDER_IDS = listOf("firecrawl", "jina")
 
     fun resolveWebFetchEnabled(
         fetchConfig: Map<String, Any?>?,
         sandboxed: Boolean? = null
     ): Boolean {
-        TODO("Resolve web fetch enabled state")
+        // Disabled in sandbox mode unless explicitly enabled
+        if (sandboxed == true) {
+            return fetchConfig?.get("enabled") == true
+        }
+        // Enabled by default when not sandboxed; can be explicitly disabled
+        return fetchConfig?.get("enabled") != false
     }
 
     fun listWebFetchProviders(config: OpenClawConfig? = null): List<WebFetchProviderEntry> {
-        TODO("List available web fetch providers")
+        return FETCH_PROVIDER_IDS.mapNotNull { id ->
+            val def = resolveWebProviderDefinition(id, config)
+            if (def != null) {
+                val configured = if (def.envKey != null) hasWebProviderEntryCredential(def.envKey) else true
+                WebFetchProviderEntry(id = id, label = def.label, configured = configured)
+            } else {
+                WebFetchProviderEntry(id = id, label = id, configured = false)
+            }
+        }
     }
 
     fun listConfiguredWebFetchProviders(config: OpenClawConfig? = null): List<WebFetchProviderEntry> {
-        TODO("List configured web fetch providers")
+        return listWebFetchProviders(config).filter { it.configured }
     }
 
     fun resolveWebFetchProviderId(
         config: OpenClawConfig? = null,
         preferredId: String? = null
     ): String? {
-        TODO("Resolve which web fetch provider to use")
+        if (preferredId != null) {
+            val providers = listConfiguredWebFetchProviders(config)
+            if (providers.any { it.id == preferredId }) return preferredId
+        }
+        // Return first configured provider
+        return listConfiguredWebFetchProviders(config).firstOrNull()?.id
     }
 
     fun resolveWebFetchDefinition(
         config: OpenClawConfig? = null
     ): WebFetchDefinitionResult? {
-        TODO("Resolve and create the active web fetch tool definition")
+        val providerId = resolveWebFetchProviderId(config) ?: return null
+        return WebFetchDefinitionResult(
+            providerId = providerId,
+            enabled = true
+        )
     }
 }

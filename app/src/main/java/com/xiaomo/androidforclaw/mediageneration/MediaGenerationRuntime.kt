@@ -22,7 +22,16 @@ fun resolveCapabilityModelCandidates(
     config: OpenClawConfig? = null,
     defaultModel: String? = null
 ): List<ParsedProviderModelRef> {
-    TODO("Resolve model candidates for media generation capability")
+    val candidates = mutableListOf<ParsedProviderModelRef>()
+    val seen = mutableSetOf<String>()
+    fun add(raw: String?) {
+        val parsed = raw?.let { parseProviderModelRef(it) } ?: return
+        val key = "${parsed.provider}/${parsed.model}"
+        if (seen.add(key)) candidates.add(parsed)
+    }
+    // Default fallback
+    add(defaultModel)
+    return candidates
 }
 
 fun buildNoCapabilityModelConfiguredMessage(capability: String): String =

@@ -1,6 +1,9 @@
 package com.xiaomo.androidforclaw.tasks
 
 import com.xiaomo.androidforclaw.flows.FlowContribution
+import com.xiaomo.androidforclaw.flows.FlowContributionKind
+import com.xiaomo.androidforclaw.flows.FlowContributionSurface
+import com.xiaomo.androidforclaw.flows.FlowOption
 
 /**
  * OpenClaw module: tasks
@@ -11,11 +14,25 @@ import com.xiaomo.androidforclaw.flows.FlowContribution
  */
 object TaskFlowRegistry {
 
+    private const val FLOW_PREFIX = "task:"
+
     fun contributeTaskFlows(registeredTasks: List<String>): List<FlowContribution> {
-        TODO("Map registered task names to FlowContribution entries")
+        return registeredTasks.map { taskName ->
+            FlowContribution(
+                id = "$FLOW_PREFIX$taskName",
+                kind = FlowContributionKind.CORE,
+                surface = FlowContributionSurface.HEALTH,
+                option = FlowOption(
+                    value = "$FLOW_PREFIX$taskName",
+                    label = taskName.replaceFirstChar { it.uppercase() }
+                )
+            )
+        }
     }
 
     fun resolveTaskFromFlowOption(optionValue: String): String? {
-        TODO("Reverse-lookup: flow option value → task name")
+        return if (optionValue.startsWith(FLOW_PREFIX)) {
+            optionValue.removePrefix(FLOW_PREFIX)
+        } else null
     }
 }

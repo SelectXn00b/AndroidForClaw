@@ -11,11 +11,44 @@ import com.xiaomo.androidforclaw.config.OpenClawConfig
 object WizardSetup {
 
     fun buildDefaultSteps(config: OpenClawConfig): List<WizardStep> {
-        TODO("Inspect config to determine which steps are needed (provider selection, API key, etc.)")
+        val steps = mutableListOf<WizardStep>()
+        steps.add(WizardStep(
+            id = "provider_select",
+            type = WizardStepType.PROVIDER_SELECT,
+            title = "Select Provider",
+            description = "Choose your AI model provider"
+        ))
+        steps.add(WizardStep(
+            id = "api_key",
+            type = WizardStepType.API_KEY_INPUT,
+            title = "API Key",
+            description = "Enter your provider API key"
+        ))
+        steps.add(WizardStep(
+            id = "model_select",
+            type = WizardStepType.MODEL_SELECT,
+            title = "Select Model",
+            description = "Choose a default model"
+        ))
+        steps.add(WizardStep(
+            id = "verify",
+            type = WizardStepType.VERIFICATION,
+            title = "Verify",
+            description = "Verify your configuration works",
+            required = false
+        ))
+        steps.add(WizardStep(
+            id = "done",
+            type = WizardStepType.DONE,
+            title = "Done",
+            required = false
+        ))
+        return steps
     }
 
     fun isSetupRequired(config: OpenClawConfig): Boolean {
-        TODO("Check if any provider is configured; if none, setup is required")
+        // Setup is required if no models are configured
+        return config.models == null
     }
 
     fun markSetupComplete(state: WizardSessionState): WizardSessionState {

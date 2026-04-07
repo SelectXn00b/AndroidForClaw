@@ -1,5 +1,8 @@
 package com.xiaomo.androidforclaw.pairing
 
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+
 /**
  * OpenClaw module: pairing
  * Source: OpenClaw/src/pairing/store.ts
@@ -8,35 +11,77 @@ package com.xiaomo.androidforclaw.pairing
  */
 object PairingStore {
 
+    private val requests = ConcurrentHashMap<String, PairingRequest>()
+    private val devices = ConcurrentHashMap<String, PairedDevice>()
+    /** Maps accountId -> set of deviceIds */
+    private val accountDevices = ConcurrentHashMap<String, MutableSet<String>>()
+
+    private fun generatePairingCode(): String {
+        // 6-digit numeric code
+        return (100_000..999_999).random().toString()
+    }
+
     suspend fun createPairingRequest(deviceName: String): PairingRequest {
-        TODO("Generate code, persist request, return PairingRequest")
+        val request = PairingRequest(
+            id = UUID.randomUUID().toString(),
+            code = generatePairingCode(),
+            deviceName = deviceName
+        )
+        requests[request.id] = request
+        return request
     }
 
     suspend fun getPairingRequest(id: String): PairingRequest? {
-        TODO("Lookup pairing request by ID")
+        return requests[id]
     }
 
     suspend fun upsertPairingRequest(request: PairingRequest) {
-        TODO("Insert or update pairing request")
+        requests[request.id] = request
     }
 
     suspend fun acceptPairing(requestId: String, accountId: String): PairedDevice {
-        TODO("Mark request as ACCEPTED, create PairedDevice record")
+        val request = requests[requestId]
+            ?: throw IllegalArgumentException("Pairing request not found: $requestId")
+        requests[requestId] = request.copy(
+            status = PairingStatus.ACCEPTED,
+            accountId = accountId
+        )
+        val now = System.currentTimeMillis()
+        val device = PairedDevice(
+            deviceId = UUID.randomUUID().toString(),
+            deviceName = request.deviceName,
+            pairedAt = now,
+            lastSeenAt = now
+        )
+        devices[device.deviceId] = device
+        accountDevices.getOrPut(accountId) { ConcurrentHashMap.newKeySet() }.add(device.deviceId)
+        return device
     }
 
     suspend fun rejectPairing(requestId: String) {
-        TODO("Mark request as REJECTED")
+        val request = requests[requestId] ?: return
+        requests[requestId] = request.copy(status = PairingStatus.REJECTED)
     }
 
     suspend fun listPairedDevices(accountId: String): List<PairedDevice> {
-        TODO("Return all devices paired to the given account")
+        val deviceIds = accountDevices[accountId] ?: return emptyList()
+        return deviceIds.mapNotNull { devices[it] }
     }
 
     suspend fun removePairedDevice(deviceId: String) {
-        TODO("Unpair and delete device record")
+        devices.remove(deviceId)
+        // Remove from all account mappings
+        accountDevices.values.forEach { it.remove(deviceId) }
     }
 
     suspend fun pruneExpiredRequests() {
-        TODO("Delete all requests past expiresAt")
+        val now = System.currentTimeMillis()
+        val iter = requests.entries.iterator()
+        while (iter.hasNext()) {
+            val entry = iter.next()
+            if (entry.value.expiresAt < now && entry.value.status == PairingStatus.PENDING) {
+                iter.remove()
+            }
+        }
     }
 }

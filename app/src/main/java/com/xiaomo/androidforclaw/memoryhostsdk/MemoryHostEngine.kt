@@ -23,23 +23,62 @@ object MemoryHostEngine {
         listeners.forEach { it(event) }
     }
 
+    /** In-memory store keyed by "scope:key" */
+    private val store = java.util.concurrent.ConcurrentHashMap<String, MemoryEntry>()
+
+    private fun storageKey(key: String, scope: MemoryScope): String = "${scope.name}:$key"
+
     suspend fun write(key: String, value: String, scope: MemoryScope = MemoryScope.SESSION): MemoryWriteResult {
-        TODO("Delegate to MemoryManager, emit Written event")
+        val sk = storageKey(key, scope)
+        val existing = store[sk]
+        val now = System.currentTimeMillis()
+        val entry = if (existing != null) {
+            existing.copy(value = value, updatedAt = now)
+        } else {
+            MemoryEntry(
+                id = java.util.UUID.randomUUID().toString(),
+                key = key,
+                value = value,
+                scope = scope,
+                createdAt = now,
+                updatedAt = now
+            )
+        }
+        store[sk] = entry
+        emit(MemoryHostEvent.Written(entry))
+        return MemoryWriteResult(id = entry.id, created = existing == null)
     }
 
     suspend fun read(key: String, scope: MemoryScope = MemoryScope.SESSION): MemoryEntry? {
-        TODO("Delegate to MemoryManager")
+        return store[storageKey(key, scope)]
     }
 
     suspend fun query(query: MemoryQuery): List<MemoryEntry> {
-        TODO("Delegate to MemoryManager, emit Queried event")
+        var entries = store.values.asSequence()
+        query.scope?.let { scope -> entries = entries.filter { it.scope == scope } }
+        query.keyPrefix?.let { prefix -> entries = entries.filter { it.key.startsWith(prefix) } }
+        val result = entries.drop(query.offset).take(query.limit).toList()
+        emit(MemoryHostEvent.Queried(query, result.size))
+        return result
     }
 
     suspend fun delete(key: String, scope: MemoryScope = MemoryScope.SESSION): Boolean {
-        TODO("Delegate to MemoryManager, emit Deleted event")
+        val sk = storageKey(key, scope)
+        val removed = store.remove(sk)
+        if (removed != null) {
+            emit(MemoryHostEvent.Deleted(removed.id, key))
+        }
+        return removed != null
     }
 
     suspend fun clear(scope: MemoryScope) {
-        TODO("Delete all entries in scope")
+        val iter = store.entries.iterator()
+        while (iter.hasNext()) {
+            val entry = iter.next()
+            if (entry.value.scope == scope) {
+                emit(MemoryHostEvent.Deleted(entry.value.id, entry.value.key))
+                iter.remove()
+            }
+        }
     }
 }

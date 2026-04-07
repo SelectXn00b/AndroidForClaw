@@ -26,6 +26,21 @@ object MarkdownChunking {
     }
 
     fun chunkMarkdownBlocks(blocks: List<MarkdownBlock>, maxChunkLength: Int = 4000): List<List<MarkdownBlock>> {
-        TODO("Chunk pre-parsed blocks by cumulative text length")
+        if (blocks.isEmpty()) return emptyList()
+        val chunks = mutableListOf<List<MarkdownBlock>>()
+        var current = mutableListOf<MarkdownBlock>()
+        var currentLen = 0
+        for (block in blocks) {
+            val blockLen = block.text.length + 2 // +2 for paragraph separator
+            if (currentLen + blockLen > maxChunkLength && current.isNotEmpty()) {
+                chunks.add(current)
+                current = mutableListOf()
+                currentLen = 0
+            }
+            current.add(block)
+            currentLen += blockLen
+        }
+        if (current.isNotEmpty()) chunks.add(current)
+        return chunks
     }
 }
