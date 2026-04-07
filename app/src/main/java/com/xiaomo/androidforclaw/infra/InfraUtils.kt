@@ -5,10 +5,20 @@ package com.xiaomo.androidforclaw.infra
  * Source: OpenClaw/src/infra/
  *
  * Hub re-export for infra sub-modules:
- *  - RetryPolicy / withRetry
- *  - BackoffPolicy / computeBackoffDelay
- *  - JsonFile (typed JSON file I/O)
- *  - SecureRandom (generateSecureToken / generateSecureHex / generateNumericCode)
+ *  - SecureRandom: generateSecureUuid, generateSecureToken, generateSecureHex,
+ *    generateSecureFraction, generateSecureInt, generateNumericCode,
+ *    sha256Hex, sha256, sha256Base64, hmacSha256, hmacSha256Hex,
+ *    safeEqual, safeEqualSecret, base64UrlEncode, base64UrlDecode
+ *  - BackoffPolicy: computeBackoff, sleepWithAbort
+ *  - RetryPolicy: withRetry
+ *  - JsonFile: loadJsonFile, saveJsonFile, writeJsonAtomic, writeTextAtomic, AsyncLock
+ *  - RateLimiter: FixedWindowRateLimiter, RateLimitResult
+ *  - DeviceIdentity: DeviceIdentityManager
+ *  - EventBus: EventBus, GlobalEventBus, Unsubscribe
+ *  - Archive: Archive, ArchiveExtractOptions, ArchiveSecurityException
+ *  - NetUtils: NetUtils, normalizeFingerprint
+ *  - MapUtils: pruneMapToMaxSize, jsonUtf8Bytes, isPathInside,
+ *    generatePairingToken, verifyPairingToken
  */
 object InfraUtils {
 
@@ -19,8 +29,10 @@ object InfraUtils {
             .replace(Regex("[^a-z0-9]+"), "-")
             .trim('-')
 
-    fun truncate(text: String, maxLength: Int, suffix: String = "…"): String {
+    fun truncate(text: String, maxLength: Int, suffix: String = "\u2026"): String {
         if (text.length <= maxLength) return text
-        return text.take(maxLength - suffix.length) + suffix
+        val cutoff = maxLength - suffix.length
+        if (cutoff <= 0) return suffix.take(maxLength)
+        return text.take(cutoff) + suffix
     }
 }
