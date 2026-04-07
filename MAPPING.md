@@ -84,7 +84,7 @@
 | `scripts/` | `scripts/` | ⬜ TEST_ONLY |
 | `secrets/` | `secrets/` | ✅ 已实现 |
 | `security/` | `security/` | ✅ 已实现 |
-| `sessions/` | `session/` | ✅ 已实现 |
+| `sessions/` | `sessions/` + `session/` + `agent/session/` | ✅ 已实现 |
 | `shared/` | `shared/` | ✅ API 对齐 |
 | `tasks/` | `tasks/` | ✅ API 对齐 |
 | `terminal/` | `terminal/` | ⬜ N/A (桌面专用) |
@@ -214,11 +214,20 @@
 
 | OpenClaw | AndroidForClaw | 状态 |
 |----------|----------------|------|
-| `src/sessions/` | `session/` + `agent/session/` | |
+| `src/sessions/` | `sessions/` + `session/` + `agent/session/` | |
 | `src/agents/session-dirs.ts` | `session/JsonlSessionStorage.kt` | ✅ |
 | `src/agents/command/session-store.ts` | `session/JsonlSessionStorage.kt` | ✅ |
-| `src/sessions/session-id.ts` | `agent/session/SessionManager.kt` | ✅ |
-| `src/sessions/session-lifecycle-events.ts` | `agent/session/SessionManager.kt` | ✅ 内联 |
+| `src/sessions/session-id.ts` | `sessions/SessionId.kt` | ✅ |
+| `src/sessions/session-label.ts` | `sessions/SessionLabel.kt` | ✅ |
+| `src/sessions/session-lifecycle-events.ts` | `sessions/SessionLifecycleEvents.kt` | ✅ |
+| `src/sessions/transcript-events.ts` | `sessions/TranscriptEvents.kt` | ✅ |
+| `src/sessions/input-provenance.ts` | `sessions/InputProvenance.kt` | ✅ |
+| `src/sessions/model-overrides.ts` | `sessions/ModelOverrides.kt` | ✅ |
+| `src/sessions/send-policy.ts` | `sessions/SendPolicy.kt` | ✅ |
+| `src/sessions/session-key-utils.ts` | `sessions/SessionKeyUtils.kt` | ✅ |
+| `src/sessions/session-chat-type.ts` | `sessions/SessionChatType.kt` | ✅ |
+| `src/sessions/session-id-resolution.ts` | `sessions/SessionIdResolution.kt` | ✅ |
+| `src/sessions/level-overrides.ts` | `sessions/LevelOverrides.kt` | ✅ |
 | - | `gateway/methods/SessionMethods.kt` | Android 独有 |
 
 ### Channels
