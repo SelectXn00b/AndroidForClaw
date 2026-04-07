@@ -2,7 +2,7 @@
 
 **纯粹的文件和文件夹映射关系,方便快速查找对应实现。**
 
-> 最后更新: 2026-03-27
+> 最后更新: 2026-04-07
 > OpenClaw 版本: 2026.3.11 (29dc654)
 
 ## 对齐统计
@@ -36,6 +36,71 @@
 | - | `app/src/androidTest/` | Android 测试 |
 | `docs/` | `docs/` | 文档目录 |
 | `apps/` | - | 多应用 (AClaw 单应用) |
+
+## src/ 模块 1:1 映射
+
+| OpenClaw `src/` 模块 | AndroidClaw 包 | 状态 |
+|---|---|---|
+| `acp/` | `acp/` | ✅ 已实现 |
+| `agents/` | `agent/` | ✅ 已实现 |
+| `auto-reply/` | `autoreply/` | ✅ API 对齐 |
+| `bindings/` | `bindings/` | ✅ API 对齐 |
+| `bootstrap/` | `bootstrap/` | ⬜ N/A (逻辑在 core/) |
+| `canvas-host/` | `canvas/` | ✅ 已实现 |
+| `channels/` | `channel/` | ✅ 已实现 |
+| `chat/` | `chat/` | ✅ API 对齐 |
+| `cli/` | `cli/` | ⬜ N/A (Android 用 UI) |
+| `commands/` | `commands/` | ✅ API 对齐 |
+| `compat/` | `compat/` | ✅ API 对齐 |
+| `config/` | `config/` | ✅ 已实现 |
+| `context-engine/` | `contextengine/` | ✅ API 对齐 |
+| `cron/` | `cron/` | ✅ 已实现 |
+| `daemon/` | `daemon/` | ⬜ N/A (Android Service) |
+| `docs/` | `docs/` | ⬜ TEST_ONLY |
+| `flows/` | `flows/` | ✅ API 对齐 |
+| `gateway/` | `gateway/` | ✅ 已实现 |
+| `hooks/` | `hooks/` | ✅ 已实现 |
+| `i18n/` | `i18n/` | ⬜ TEST_ONLY (Android res/) |
+| `image-generation/` | `imagegeneration/` | ✅ API 对齐 |
+| `infra/` | `infra/` | ✅ API 对齐 |
+| `interactive/` | `interactive/` | ✅ API 对齐 |
+| `link-understanding/` | `linkunderstanding/` | ✅ API 对齐 |
+| `logging/` | `logging/` | ✅ 已实现 |
+| `markdown/` | `markdown/` | ✅ API 对齐 |
+| `mcp/` | `mcp/` | ✅ 已实现 |
+| `media/` | `media/` | ✅ 已实现 |
+| `media-generation/` | `mediageneration/` | ✅ API 对齐 |
+| `media-understanding/` | `mediaunderstanding/` | ✅ API 对齐 |
+| `memory-host-sdk/` | `memoryhostsdk/` | ✅ API 对齐 |
+| `music-generation/` | `musicgeneration/` | ✅ API 对齐 |
+| `node-host/` | `nodehost/` | ⬜ N/A (Node.js 专用) |
+| `pairing/` | `pairing/` | ✅ API 对齐 (P0) |
+| `plugin-sdk/` | `pluginsdk/` | ✅ API 对齐 |
+| `plugins/` | `plugins/` | ✅ API 对齐 |
+| `process/` | `process/` | ✅ API 对齐 |
+| `realtime-transcription/` | `realtimetranscription/` | ✅ API 对齐 |
+| `realtime-voice/` | `realtimevoice/` | ✅ API 对齐 |
+| `routing/` | `routing/` | ✅ API 对齐 |
+| `scripts/` | `scripts/` | ⬜ TEST_ONLY |
+| `secrets/` | `secrets/` | ✅ 已实现 |
+| `security/` | `security/` | ✅ 已实现 |
+| `sessions/` | `session/` | ✅ 已实现 |
+| `shared/` | `shared/` | ✅ API 对齐 |
+| `tasks/` | `tasks/` | ✅ API 对齐 |
+| `terminal/` | `terminal/` | ⬜ N/A (桌面专用) |
+| `test-helpers/` | `testhelpers/` | ⬜ TEST_ONLY |
+| `test-utils/` | `testutils/` | ⬜ TEST_ONLY |
+| `tts/` | `tts/` | ✅ API 对齐 |
+| `tui/` | `tui/` | ⬜ N/A (桌面 TUI) |
+| `types/` | `types/` | ⬜ N/A (.d.ts) |
+| `utils/` | `util/` | ✅ 已实现 |
+| `video-generation/` | `videogeneration/` | ✅ API 对齐 |
+| `web/` | `web/` | ✅ API 对齐 |
+| `web-fetch/` | `webfetch/` | ✅ API 对齐 |
+| `web-search/` | `websearch/` | ✅ API 对齐 |
+| `wizard/` | `wizard/` | ✅ API 对齐 |
+
+> ✅ 已实现 (15) | ✅ API 对齐 (30) | ⬜ N/A/TEST_ONLY (13) | 总计 58 个模块全部对齐
 
 ---
 
