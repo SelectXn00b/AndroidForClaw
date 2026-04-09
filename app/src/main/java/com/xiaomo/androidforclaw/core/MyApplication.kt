@@ -22,6 +22,7 @@ import com.xiaomo.androidforclaw.logging.Log
 import android.widget.Toast
 import com.xiaomo.androidforclaw.accessibility.AccessibilityProxy
 import com.xiaomo.androidforclaw.accessibility.AccessibilityHealthMonitor
+import com.xiaomo.androidforclaw.DeviceController
 import com.xiaomo.androidforclaw.util.GlobalExceptionHandler
 import com.xiaomo.androidforclaw.workspace.StoragePaths
 import com.xiaomo.androidforclaw.util.SPHelper
@@ -259,6 +260,10 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
 
         // 初始化 ShizukuManager
         com.xiaomo.androidforclaw.accessibility.ShizukuManager.init()
+
+        // 初始化 Shizuku 前台操作确认设置
+        DeviceController.blockForegroundOps = getSharedPreferences("forclaw_shizuku", MODE_PRIVATE)
+            .getBoolean("block_fg_ops", false)
 
         // 初始化 CameraCaptureManager (对齐 OpenClaw camera.snap/clip)
         cameraCaptureManager = CameraCaptureManager(this)
