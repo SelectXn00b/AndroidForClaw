@@ -54,6 +54,7 @@ class PermissionActivity : Activity() {
     private var cachedAccessibilityEnabled = false
     private var cachedMediaProjectionAuthorized = false
     private var cachedStorageGranted = false
+    private var cachedShizukuAuthorized = false
     private var lastCheckTime = 0L
 
     // Status check job
@@ -65,7 +66,8 @@ class PermissionActivity : Activity() {
         val rootPresent: Boolean,
         val accessibilityEnabled: Boolean,
         val mediaProjectionAuthorized: Boolean,
-        val storageGranted: Boolean
+        val storageGranted: Boolean,
+        val shizukuAuthorized: Boolean
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -76,6 +78,9 @@ class PermissionActivity : Activity() {
         val workspace = File(getExternalFilesDir(null), "workspace")
         val screenshotDir = File(workspace, "screenshots")
         MediaProjectionHelper.initialize(this, screenshotDir)
+
+        // 初始化 ShizukuManager
+        ShizukuManager.init()
 
         binding = ActivityObserverPermissionsBinding.inflate(LayoutInflater.from(this))
         setContentView(binding.root)
@@ -149,6 +154,12 @@ class PermissionActivity : Activity() {
                 requestMediaProjectionPermission()
             }
 
+            // Shizuku 授权按钮
+            btnShizuku.setOnClickListener {
+                Log.d(TAG, "btnShizuku clicked")
+                requestShizukuPermission()
+            }
+
             // 一键授权按钮
             btnGrantAll.setOnClickListener {
                 Log.d(TAG, "btnGrantAll clicked")
@@ -179,13 +190,21 @@ class PermissionActivity : Activity() {
                     val accessibility = resolveAccessibilityEnabled()
                     val mediaProjection = MediaProjectionHelper.isAuthorized()
                     val storage = isStoragePermissionGranted()
+                    // Shizuku 状态
+                    ShizukuManager.refreshStatus()
+                    val shizukuAuth = try {
+                        rikka.shizuku.Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    } catch (e: Exception) {
+                        false
+                    }
                     PermissionCheckSnapshot(
                         settingsEnabled = settingsEnabled,
                         serviceInstancePresent = serviceInstancePresent,
                         rootPresent = rootPresent,
                         accessibilityEnabled = accessibility,
                         mediaProjectionAuthorized = mediaProjection,
-                        storageGranted = storage
+                        storageGranted = storage,
+                        shizukuAuthorized = shizukuAuth
                     )
                 }
 
@@ -204,6 +223,7 @@ class PermissionActivity : Activity() {
                 cachedAccessibilityEnabled = result.accessibilityEnabled
                 cachedMediaProjectionAuthorized = result.mediaProjectionAuthorized
                 cachedStorageGranted = result.storageGranted
+                cachedShizukuAuthorized = result.shizukuAuthorized
                 lastCheckTime = System.currentTimeMillis()
 
                 // 在主线程更新 UI
@@ -211,10 +231,12 @@ class PermissionActivity : Activity() {
                     updateAccessibilityUI(result.accessibilityEnabled)
                     updateMediaProjectionUI(result.mediaProjectionAuthorized)
                     updateStorageUI(result.storageGranted)
+                    updateShizukuUI(result.shizukuAuthorized)
                     updateAllPermissionsUI(
                         result.accessibilityEnabled,
                         result.mediaProjectionAuthorized,
-                        result.storageGranted
+                        result.storageGranted,
+                        result.shizukuAuthorized
                     )
                 }
 
@@ -395,22 +417,22 @@ class PermissionActivity : Activity() {
     /**
      * 更新总体状态 UI
      */
-    private fun updateAllPermissionsUI(accessibilityEnabled: Boolean, mediaProjectionAuthorized: Boolean, storageGranted: Boolean) {
-        val allGranted = accessibilityEnabled && mediaProjectionAuthorized && storageGranted
-        val grantedCount = listOf(accessibilityEnabled, mediaProjectionAuthorized, storageGranted).count { it }
+    private fun updateAllPermissionsUI(accessibilityEnabled: Boolean, mediaProjectionAuthorized: Boolean, storageGranted: Boolean, shizukuAuthorized: Boolean) {
+        val allGranted = accessibilityEnabled && mediaProjectionAuthorized && storageGranted && shizukuAuthorized
+        val grantedCount = listOf(accessibilityEnabled, mediaProjectionAuthorized, storageGranted, shizukuAuthorized).count { it }
 
         binding.apply {
             if (allGranted) {
-                tvAllStatus.text = "✅ 所有权限已授予 (3/3)"
+                tvAllStatus.text = "✅ 所有权限已授予 (4/4)"
                 tvAllStatus.setTextColor(getColor(android.R.color.holo_green_dark))
                 btnGrantAll.isEnabled = false
                 btnGrantAll.text = "全部已授权"
                 btnGrantAll.alpha = 0.5f
             } else {
-                tvAllStatus.text = "⚠️ 已授予 $grantedCount/3 个权限"
+                tvAllStatus.text = "⚠️ 已授予 $grantedCount/4 个权限"
                 tvAllStatus.setTextColor(getColor(android.R.color.holo_orange_dark))
                 btnGrantAll.isEnabled = true
-                btnGrantAll.text = "一键授权 (${grantedCount}/3)"
+                btnGrantAll.text = "一键授权 (${grantedCount}/4)"
                 btnGrantAll.alpha = 1.0f
             }
         }
@@ -527,6 +549,61 @@ class PermissionActivity : Activity() {
             requestStoragePermission()
         } else if (!cachedMediaProjectionAuthorized) {
             requestMediaProjectionPermission()
+        } else if (!ShizukuManager.isReady) {
+            requestShizukuPermission()
+        }
+    }
+
+    /**
+     * 更新 Shizuku 授权 UI
+     */
+    private fun updateShizukuUI(isAuthorized: Boolean) {
+        binding.apply {
+            if (isAuthorized) {
+                tvShizukuStatus.text = "✅ 已授权"
+                tvShizukuStatus.setTextColor(getColor(android.R.color.holo_green_dark))
+                btnShizuku.isEnabled = false
+                btnShizuku.text = "已授权"
+                btnShizuku.alpha = 0.5f
+
+                tvShizukuDesc.text = """
+                    ✅ Shizuku 已授权
+
+                    功能:
+                    • ADB 级别特权操作
+                    • Shell 命令执行
+                    • 高级设备控制
+                """.trimIndent()
+            } else {
+                tvShizukuStatus.text = "❌ 未授权"
+                tvShizukuStatus.setTextColor(getColor(android.R.color.holo_red_dark))
+                btnShizuku.isEnabled = true
+                btnShizuku.text = "授权 Shizuku"
+                btnShizuku.alpha = 1.0f
+
+                tvShizukuDesc.text = """
+                    ⚠️ 需要 Shizuku 授权
+
+                    说明:
+                    • 需要先安装 Shizuku 应用
+                    • Shizuku 需要通过 ADB 或无线调试启动
+                    • 授权后可使用特权级操作
+
+                    注意: 未授权将禁止前台操作
+                """.trimIndent()
+            }
+        }
+    }
+
+    /**
+     * 请求 Shizuku 授权
+     */
+    private fun requestShizukuPermission() {
+        try {
+            ShizukuManager.requestPermission()
+        } catch (e: Exception) {
+            Log.e(TAG, "请求 Shizuku 授权失败", e)
+            Toast.makeText(this, "请求 Shizuku 授权失败: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 

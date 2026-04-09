@@ -43,6 +43,15 @@
             android:name=".ObserverForegroundService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
-</application>
+
+        <!-- Shizuku Provider (必须声明，否则 Shizuku 无法识别本应用) -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+    </application>
 
 </manifest>

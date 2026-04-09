@@ -257,6 +257,9 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
         com.xiaomo.androidforclaw.config.ProviderRegistry.init(this)
         registerActivityLifecycleCallbacks(this)
 
+        // 初始化 ShizukuManager
+        com.xiaomo.androidforclaw.accessibility.ShizukuManager.init()
+
         // 初始化 CameraCaptureManager (对齐 OpenClaw camera.snap/clip)
         cameraCaptureManager = CameraCaptureManager(this)
 
