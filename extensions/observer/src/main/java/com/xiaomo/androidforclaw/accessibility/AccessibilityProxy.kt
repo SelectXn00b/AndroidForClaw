@@ -27,6 +27,9 @@ object AccessibilityProxy {
     private val _screenCaptureGranted = MutableLiveData(false)
     val screenCaptureGranted: LiveData<Boolean> = _screenCaptureGranted
 
+    /** 检查 Shizuku 是否可用且已授权（可选能力，不影响无障碍操作） */
+    fun isShizukuReady(): Boolean = ShizukuManager.isReady
+
     /** 从任意地方调用来刷新权限状态（PermissionActivity 授权后调用） */
     fun refreshPermissions(context: android.content.Context) {
         _overlayGranted.postValue(android.provider.Settings.canDrawOverlays(context))

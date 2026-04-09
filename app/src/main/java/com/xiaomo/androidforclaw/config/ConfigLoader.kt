@@ -596,7 +596,10 @@ class ConfigLoader private constructor() {
             reactionDedup = json.optBoolean("reactionDedup", true),
             debugMode = json.optBoolean("debugMode", false),
             accounts = accounts,
-            defaultAccount = if (json.has("defaultAccount")) json.optString("defaultAccount") else null
+            defaultAccount = if (json.has("defaultAccount")) json.optString("defaultAccount") else null,
+            thinkingLabel = json.optString("thinkingLabel", "*Thinking...*"),
+            showToolCalls = json.optBoolean("showToolCalls", true),
+            toolCallLabel = json.optString("toolCallLabel", "`Using: \${name}...` \${args}")
         )
     }
 
@@ -780,20 +783,26 @@ class ConfigLoader private constructor() {
     }
 
     private fun parsePluginsConfig(json: JSONObject): PluginsConfig {
-        val entriesJson = json.optJSONObject("entries") ?: return PluginsConfig()
         val map = mutableMapOf<String, PluginEntry>()
-        entriesJson.keys().forEach { key ->
-            entriesJson.optJSONObject(key)?.let { pe ->
-                val skills = pe.optJSONArray("skills")?.let { arr ->
-                    (0 until arr.length()).map { arr.getString(it) }
-                } ?: emptyList()
-                map[key] = PluginEntry(
-                    enabled = pe.optBoolean("enabled", false),
-                    skills = skills
-                )
+        json.optJSONObject("entries")?.let { entriesJson ->
+            entriesJson.keys().forEach { key ->
+                entriesJson.optJSONObject(key)?.let { pe ->
+                    val skills = pe.optJSONArray("skills")?.let { arr ->
+                        (0 until arr.length()).map { arr.getString(it) }
+                    } ?: emptyList()
+                    map[key] = PluginEntry(
+                        enabled = pe.optBoolean("enabled", false),
+                        skills = skills
+                    )
+                }
             }
         }
-        return PluginsConfig(entries = map)
+        val slots = json.optJSONObject("slots")?.let { slotsJson ->
+            PluginSlotsConfig(
+                contextEngine = slotsJson.optString("contextEngine", null)
+            )
+        } ?: PluginSlotsConfig()
+        return PluginsConfig(entries = map, slots = slots)
     }
 
     private fun parseToolsConfig(json: JSONObject): ToolsConfig {
@@ -990,6 +999,9 @@ class ConfigLoader private constructor() {
         feishu.requireMention?.let { feishuObj.put("requireMention", it) }
         feishuObj.put("groupCommandMentionBypass", feishu.groupCommandMentionBypass)
         feishuObj.put("allowMentionlessInMultiBotGroup", feishu.allowMentionlessInMultiBotGroup)
+        feishuObj.put("thinkingLabel", feishu.thinkingLabel)
+        feishuObj.put("showToolCalls", feishu.showToolCalls)
+        feishuObj.put("toolCallLabel", feishu.toolCallLabel)
         channelsObj.put("feishu", feishuObj)
 
         config.channels.discord?.let { discord ->

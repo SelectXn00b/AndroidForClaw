@@ -45,58 +45,8 @@ enum class InstallKind {
     APK         // Android APK (Android-specific)
 }
 
-/**
- * Skill Status Report (aligns with OpenClaw SkillStatusReport)
- */
-data class SkillStatusReport(
-    val workspaceDir: String,
-    val managedSkillsDir: String,
-    val skills: List<SkillStatusEntry>
-)
-
-/**
- * Skill Status Entry (aligns with OpenClaw SkillStatusEntry)
- */
-data class SkillStatusEntry(
-    val name: String,
-    val description: String,
-    val source: SkillSource,
-    val bundled: Boolean,
-    val filePath: String,
-    val baseDir: String,
-    val skillKey: String,
-    val primaryEnv: String? = null,
-    val emoji: String? = null,
-    val homepage: String? = null,
-    val always: Boolean,
-    val disabled: Boolean,
-    val blockedByAllowlist: Boolean,
-    val eligible: Boolean,
-    val requirements: SkillRequires? = null,
-    val missing: SkillRequires? = null,
-    val configChecks: List<SkillConfigCheck>,
-    val install: List<SkillInstallOption>
-)
-
-/**
- * Config Check Result
- */
-data class SkillConfigCheck(
-    val path: String,
-    val exists: Boolean,
-    val value: Any? = null
-)
-
-/**
- * Available Install Option
- */
-data class SkillInstallOption(
-    val installId: String,
-    val kind: InstallKind,
-    val label: String,
-    val available: Boolean,
-    val reason: String? = null
-)
+// Status-related types (SkillStatusReport, SkillStatusEntry, SkillConfigCheck,
+// SkillInstallOption) are in SkillStatus.kt (aligns with skills-status.ts)
 
 /**
  * Skills Limits Configuration (aligns with OpenClaw default limits)

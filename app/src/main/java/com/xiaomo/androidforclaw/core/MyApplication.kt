@@ -23,6 +23,7 @@ import com.xiaomo.androidforclaw.logging.Log
 import android.widget.Toast
 import com.xiaomo.androidforclaw.accessibility.AccessibilityProxy
 import com.xiaomo.androidforclaw.accessibility.AccessibilityHealthMonitor
+import com.xiaomo.androidforclaw.DeviceController
 import com.xiaomo.androidforclaw.util.GlobalExceptionHandler
 import com.xiaomo.androidforclaw.workspace.StoragePaths
 import com.xiaomo.androidforclaw.util.SPHelper
@@ -73,6 +74,7 @@ import com.xiaomo.androidforclaw.providers.llm.toNewMessage
 import com.xiaomo.androidforclaw.providers.llm.toLegacyMessage
 import com.xiaomo.androidforclaw.agent.tools.ToolRegistry
 import com.xiaomo.androidforclaw.agent.tools.AndroidToolRegistry
+import com.xiaomo.androidforclaw.agent.context.ChannelContext
 import com.xiaomo.androidforclaw.agent.context.ContextBuilder
 import com.xiaomo.androidforclaw.agent.loop.AgentLoop
 import com.xiaomo.androidforclaw.agent.loop.ProgressUpdate
@@ -259,6 +261,13 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
         MMKV.initialize(this)
         com.xiaomo.androidforclaw.config.ProviderRegistry.init(this)
         registerActivityLifecycleCallbacks(this)
+
+        // 初始化 ShizukuManager
+        com.xiaomo.androidforclaw.accessibility.ShizukuManager.init()
+
+        // 初始化 Shizuku 前台操作确认设置
+        DeviceController.blockForegroundOps = getSharedPreferences("forclaw_shizuku", MODE_PRIVATE)
+            .getBoolean("block_fg_ops", false)
 
         // 初始化 CameraCaptureManager (对齐 OpenClaw camera.snap/clip)
         cameraCaptureManager = CameraCaptureManager(this)
@@ -1213,6 +1222,39 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
     }
 
     /**
+     * 格式化工具调用参数为简短摘要，用于流式卡片显示。
+     * 不同工具提取最有意义的参数：exec→command, tap→text/x,y, type→text, read/write→path 等。
+     */
+    private fun formatToolCallArgs(toolName: String, args: Map<String, Any?>): String {
+        if (args.isEmpty()) return ""
+        val maxLen = 80
+        val summary = when (toolName) {
+            "exec" -> args["command"]?.toString()
+                ?: args["script"]?.toString()
+            "tap", "click" -> args["text"]?.toString()
+                ?: args["selector"]?.toString()
+                ?: args["x"]?.let { x -> args["y"]?.let { y -> "($x, $y)" } }
+            "type", "fill" -> args["text"]?.toString()
+            "read", "write", "edit" -> args["path"]?.toString()
+                ?: args["file"]?.toString()
+            "screenshot" -> args["source"]?.toString()
+            "swipe" -> args["direction"]?.toString()
+                ?: args["text"]?.toString()
+            "find", "findElement" -> args["text"]?.toString()
+                ?: args["selector"]?.toString()
+            "back", "home", "enter" -> null
+            else -> {
+                // 未知工具：取第一个非空值
+                args.values.firstOrNull { it != null }?.toString()
+            }
+        }
+        return if (summary != null) {
+            val cleaned = summary.replace("\n", " ").trim()
+            if (cleaned.length > maxLen) cleaned.take(maxLen) + "…" else cleaned
+        } else ""
+    }
+
+    /**
      * Process Feishu message - call Agent
      *
      * Create lightweight AgentLoop call and return result directly
@@ -1335,7 +1377,7 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                 messageQueueManager.setActiveAgentLoop(steerQueueKey, agentLoop)
 
                 // Build system prompt (with channel context for messaging awareness)
-                val channelCtx = ContextBuilder.ChannelContext(
+                val channelCtx = ChannelContext(
                     channel = "feishu",
                     chatId = event.chatId,
                     chatType = event.chatType,
@@ -1353,6 +1395,11 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                 // Aligned with OpenClaw reply-dispatcher.ts + streaming-card.ts
                 val blockRepliesSent = mutableListOf<String>()
                 val streamingCard = feishuChannel?.createStreamingCard()
+                // 自定义流式卡片文案（openclaw.json → channels.feishu.thinkingLabel / toolCallLabel）
+                val feishuUiConfig = try { configLoader.loadOpenClawConfig().channels.feishu } catch (_: Exception) { null }
+                val thinkingLabel = feishuUiConfig?.thinkingLabel ?: "*Thinking...*"
+                val showToolCalls = feishuUiConfig?.showToolCalls ?: true
+                val toolCallLabel = feishuUiConfig?.toolCallLabel ?: "`Using: \${name}...` \${args}"
                 var streamingCardMessageId: String? = null
                 var streamingFailed = false
 
@@ -1362,7 +1409,7 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                             // Start streaming card on first Thinking event
                             update is ProgressUpdate.Thinking && streamingCard != null && !streamingFailed && streamingCard.cardId == null -> {
                                 try {
-                                    val startResult = streamingCard.start("*Thinking...*")
+                                    val startResult = streamingCard.start(thinkingLabel)
                                     if (startResult.isSuccess) {
                                         val cardId = startResult.getOrNull()!!
                                         val sender = feishuChannel?.sender
@@ -1395,10 +1442,14 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                                 }
                             }
 
-                            // Update streaming card with tool call info
-                            update is ProgressUpdate.ToolCall && streamingCard?.isActive() == true -> {
+                            // Update streaming card with tool call info（仅 showToolCalls=true 时显示）
+                            update is ProgressUpdate.ToolCall && showToolCalls && streamingCard?.isActive() == true -> {
                                 try {
-                                    streamingCard.appendText("`Using: ${update.name}...`\n\n")
+                                    val argsSummary = formatToolCallArgs(update.name, update.arguments)
+                                    val text = toolCallLabel
+                                        .replace("\${name}", update.name)
+                                        .replace("\${args}", argsSummary)
+                                    streamingCard.appendText(text + "\n\n")
                                 } catch (e: Exception) { /* ignore */ }
                             }
 
@@ -2178,7 +2229,7 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
             // Register with MessageQueueManager (channel-agnostic stop/steer support)
             messageQueueManager.setActiveAgentLoop(queueKey, agentLoop)
 
-            val channelCtx = ContextBuilder.ChannelContext(
+            val channelCtx = ChannelContext(
                 channel = "weixin",
                 chatId = msg.fromUserId,
                 chatType = "p2p",

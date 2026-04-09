@@ -7,6 +7,7 @@
  */
 package com.xiaomo.androidforclaw.agent.tools
 
+import com.xiaomo.androidforclaw.agent.subagent.resolveTarget
 import com.xiaomo.androidforclaw.agent.subagent.SubagentSpawner
 import com.xiaomo.androidforclaw.providers.FunctionDefinition
 import com.xiaomo.androidforclaw.providers.ParametersSchema

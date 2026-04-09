@@ -16,6 +16,9 @@ import java.util.concurrent.TimeUnit
 /**
  * LarkCli Tool — Execute lark-cli (飞书官方 CLI) commands.
  *
+ * OpenClaw Source Reference:
+ * - Android 平台特有，无直接 OpenClaw 对应（飞书官方路径，OpenClaw 不走 Termux CLI）
+ *
  * The binary is bundled as liblark-cli.so in jniLibs and extracted to nativeLibraryDir
  * at install time. Authentication is auto-configured from openclaw.json's
  * channels.feishu.appId / appSecret.

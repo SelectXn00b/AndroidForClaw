@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.xiaomo.androidforclaw.R
 import com.xiaomo.androidforclaw.accessibility.AccessibilityProxy
+import com.xiaomo.androidforclaw.DeviceController
 import com.xiaomo.androidforclaw.agent.skills.SkillsLoader
 import com.xiaomo.androidforclaw.config.ConfigLoader
 import com.xiaomo.androidforclaw.workspace.StoragePaths
@@ -329,6 +330,7 @@ fun ForClawSettingsTab() {
             AvatarToggleItem()
             RiveAvatarToggleItem()
             FloatWindowToggleItem()
+            ShizukuForegroundConfirmToggleItem()
         }
 
         // ── 应用 ─────────────────────────────────────────────────
@@ -668,6 +670,49 @@ private fun FloatWindowToggleItem() {
                     enabled = v
                     SessionFloatWindow.setEnabled(context, v)
                 }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ShizukuForegroundConfirmToggleItem() {
+    val context = LocalContext.current
+    val prefs = context.getSharedPreferences("forclaw_shizuku", Context.MODE_PRIVATE)
+    var enabled by remember { mutableStateOf(prefs.getBoolean("block_fg_ops", false)) }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Default.Security,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text("前台操作确认", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "Shizuku 授权后，前台操作需确认才执行",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = enabled,
+                onCheckedChange = { v ->
+                    enabled = v
+                    prefs.edit().putBoolean("block_fg_ops", v).apply()
+                    DeviceController.blockForegroundOps = v
+                },
             )
         }
     }

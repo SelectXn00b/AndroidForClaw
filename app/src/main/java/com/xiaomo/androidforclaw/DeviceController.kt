@@ -12,6 +12,7 @@ import com.xiaomo.androidforclaw.logging.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import android.graphics.BitmapFactory
 import com.xiaomo.androidforclaw.accessibility.AccessibilityProxy
+import com.xiaomo.androidforclaw.accessibility.ShizukuManager
 import com.xiaomo.androidforclaw.accessibility.service.ViewNode
 import com.xiaomo.androidforclaw.accessibility.service.Point
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +22,12 @@ import kotlinx.coroutines.runBlocking
 
 object DeviceController {
     private val TAG = "agent1Controller"
+
+    /** 检查 Shizuku 是否可用且已授权（可选能力，后台命令操作） */
+    fun isShizukuReady(): Boolean = ShizukuManager.isReady
+
+    /** Shizuku 模式下禁止前台操作（需要用户确认后手动关闭） */
+    @Volatile var blockForegroundOps = false
 
 
     /** Capture a screenshot of the device via AccessibilityProxy */
@@ -184,8 +191,17 @@ object DeviceController {
         return nodes
     }
 
+    /** 检查是否应该阻断前台操作（Shizuku 已授权 + 用户开启了确认模式） */
+    private fun shouldBlockForeground(): Boolean {
+        return isShizukuReady() && blockForegroundOps
+    }
+
     /** Simulate a tap on the screen at coordinates (x, y) via Accessibility gesture. */
     fun tap(x: Int, y: Int) {
+        if (shouldBlockForeground()) {
+            Log.w(TAG, "⚠️ Shizuku 模式下禁止前台操作 tap($x,$y)，需用户确认")
+            return
+        }
         runBlocking {
             AccessibilityProxy.tap(x, y)
         }
@@ -193,6 +209,10 @@ object DeviceController {
 
     /** Simulate a swipe from (x1, y1) to (x2, y2) via Accessibility gesture. */
     fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long = 500) {
+        if (shouldBlockForeground()) {
+            Log.w(TAG, "⚠️ Shizuku 模式下禁止前台操作 swipe，需用户确认")
+            return
+        }
         runBlocking {
             AccessibilityProxy.swipe(x1, y1, x2, y2, durationMs)
         }
@@ -200,16 +220,28 @@ object DeviceController {
 
     /** Input text into the currently focused element (e.g., an input box). */
     fun inputText(text: String, context: Context) {
+        if (shouldBlockForeground()) {
+            Log.w(TAG, "⚠️ Shizuku 模式下禁止前台操作 inputText，需用户确认")
+            return
+        }
         AccessibilityProxy.inputText(text)
     }
 
     /** Simulate a Back button press. */
     fun pressBack() {
+        if (shouldBlockForeground()) {
+            Log.w(TAG, "⚠️ Shizuku 模式下禁止前台操作 pressBack，需用户确认")
+            return
+        }
         AccessibilityProxy.pressBack()
     }
 
     /** Return to the Home screen. */
     fun pressHome() {
+        if (shouldBlockForeground()) {
+            Log.w(TAG, "⚠️ Shizuku 模式下禁止前台操作 pressHome，需用户确认")
+            return
+        }
         AccessibilityProxy.pressHome()
     }
 

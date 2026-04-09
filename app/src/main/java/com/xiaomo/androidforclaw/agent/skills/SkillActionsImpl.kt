@@ -10,7 +10,10 @@ import java.util.Locale
 
 /**
  * Concrete SkillActions backed by the existing SkillLockManager + filesystem.
- * Reuses the same paths and lock format as SkillInstaller / ClawHub.
+ *
+ * OpenClaw Source Reference:
+ * - Android 平台特有，无直接 OpenClaw 对应（SkillActions 接口实现）
+ * - 对齐 ../openclaw/src/agents/skills.ts 的 skill 生命周期管理模式
  */
 class SkillActionsImpl : SkillActions {
 

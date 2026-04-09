@@ -3,8 +3,9 @@ package com.xiaomo.androidforclaw.agent.tools
 /**
  * Android API Skill — 暴露 Android 系统 API 给 Agent
  *
- * 让 Agent 通过 API 直接操作系统功能，而不是靠 UI 自动化硬刚。
- * 对齐 OpenClaw 的 tool 模式：单一工具 + action 参数路由。
+ * OpenClaw Source Reference:
+ * - Android 平台特有，无直接 OpenClaw 对应
+ * - 对齐 OpenClaw tool 模式：单一工具 + action 参数路由
  *
  * 支持的操作：
  * - 闹钟/定时器：set_alarm, set_timer

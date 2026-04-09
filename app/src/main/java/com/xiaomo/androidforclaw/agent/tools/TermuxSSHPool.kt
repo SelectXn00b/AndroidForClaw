@@ -17,6 +17,9 @@ import java.util.concurrent.TimeUnit
 /**
  * Singleton SSH connection pool for Termux.
  *
+ * OpenClaw Source Reference:
+ * - Android 平台特有，无直接 OpenClaw 对应（OpenClaw 用 PTY/Sandbox，不用 Termux SSH）
+ *
  * Maintains a single persistent SSH connection to Termux sshd (localhost:8022),
  * with automatic reconnection, keepalive, and retry with backoff.
  */

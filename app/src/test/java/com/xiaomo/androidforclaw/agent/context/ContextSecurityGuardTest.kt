@@ -21,49 +21,49 @@ class ContextSecurityGuardTest {
 
     @Test
     fun `isSharedContext local android app is not shared`() {
-        val ctx = ContextBuilder.ChannelContext(channel = "android")
+        val ctx = ChannelContext(channel = "android")
         assertFalse(ContextSecurityGuard.isSharedContext(ctx))
     }
 
     @Test
     fun `isSharedContext p2p is not shared`() {
-        val ctx = ContextBuilder.ChannelContext(channel = "feishu", chatType = "p2p")
+        val ctx = ChannelContext(channel = "feishu", chatType = "p2p")
         assertFalse(ContextSecurityGuard.isSharedContext(ctx))
     }
 
     @Test
     fun `isSharedContext direct is not shared`() {
-        val ctx = ContextBuilder.ChannelContext(channel = "discord", chatType = "direct")
+        val ctx = ChannelContext(channel = "discord", chatType = "direct")
         assertFalse(ContextSecurityGuard.isSharedContext(ctx))
     }
 
     @Test
     fun `isSharedContext group is shared`() {
-        val ctx = ContextBuilder.ChannelContext(channel = "feishu", chatType = "group")
+        val ctx = ChannelContext(channel = "feishu", chatType = "group")
         assertTrue(ContextSecurityGuard.isSharedContext(ctx))
     }
 
     @Test
     fun `isSharedContext channel is shared`() {
-        val ctx = ContextBuilder.ChannelContext(channel = "discord", chatType = "channel")
+        val ctx = ChannelContext(channel = "discord", chatType = "channel")
         assertTrue(ContextSecurityGuard.isSharedContext(ctx))
     }
 
     @Test
     fun `isSharedContext thread is shared`() {
-        val ctx = ContextBuilder.ChannelContext(channel = "discord", chatType = "thread")
+        val ctx = ChannelContext(channel = "discord", chatType = "thread")
         assertTrue(ContextSecurityGuard.isSharedContext(ctx))
     }
 
     @Test
     fun `isSharedContext is case insensitive`() {
-        val ctx = ContextBuilder.ChannelContext(channel = "feishu", chatType = "GROUP")
+        val ctx = ChannelContext(channel = "feishu", chatType = "GROUP")
         assertTrue(ContextSecurityGuard.isSharedContext(ctx))
     }
 
     @Test
     fun `isSharedContext null chatType is not shared`() {
-        val ctx = ContextBuilder.ChannelContext(channel = "feishu", chatType = null)
+        val ctx = ChannelContext(channel = "feishu", chatType = null)
         assertFalse(ContextSecurityGuard.isSharedContext(ctx))
     }
 
@@ -76,31 +76,31 @@ class ContextSecurityGuardTest {
 
     @Test
     fun `shouldLoadMemory true for DM`() {
-        val ctx = ContextBuilder.ChannelContext(channel = "feishu", chatType = "p2p")
+        val ctx = ChannelContext(channel = "feishu", chatType = "p2p")
         assertTrue(ContextSecurityGuard.shouldLoadMemory(ctx))
     }
 
     @Test
     fun `shouldLoadMemory false for group`() {
-        val ctx = ContextBuilder.ChannelContext(channel = "feishu", chatType = "group")
+        val ctx = ChannelContext(channel = "feishu", chatType = "group")
         assertFalse(ContextSecurityGuard.shouldLoadMemory(ctx))
     }
 
     @Test
     fun `shouldLoadMemory false for channel`() {
-        val ctx = ContextBuilder.ChannelContext(channel = "discord", chatType = "channel")
+        val ctx = ChannelContext(channel = "discord", chatType = "channel")
         assertFalse(ContextSecurityGuard.shouldLoadMemory(ctx))
     }
 
     @Test
     fun `shouldLoadMemory false for thread`() {
-        val ctx = ContextBuilder.ChannelContext(channel = "discord", chatType = "thread")
+        val ctx = ChannelContext(channel = "discord", chatType = "thread")
         assertFalse(ContextSecurityGuard.shouldLoadMemory(ctx))
     }
 
     @Test
     fun `shouldLoadMemory true for local android`() {
-        val ctx = ContextBuilder.ChannelContext(channel = "android")
+        val ctx = ChannelContext(channel = "android")
         assertTrue(ContextSecurityGuard.shouldLoadMemory(ctx))
     }
 

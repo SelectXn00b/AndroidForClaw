@@ -130,7 +130,14 @@ data class FeishuChannelConfig(
     val debugMode: Boolean = false,
     // 多账号
     val accounts: Map<String, FeishuAccountConfig>? = null,
-    val defaultAccount: String? = null
+    val defaultAccount: String? = null,
+    // 流式卡片自定义文案（Android 扩展）
+    /** 流式卡片启动文案，支持 Markdown。默认 "*Thinking...*" */
+    val thinkingLabel: String = "*Thinking...*",
+    /** 是否在流式卡片中显示工具调用信息。默认 true */
+    val showToolCalls: Boolean = true,
+    /** 工具调用文案模板（showToolCalls=true 时生效），\${name} 替换为工具名，\${args} 替换为参数摘要 */
+    val toolCallLabel: String = "`Using: \${name}...` \${args}"
 )
 
 data class FeishuToolsConfig(
@@ -376,7 +383,12 @@ data class SkillConfig(
 // ============ plugins（对齐 types.plugins.d.ts）============
 
 data class PluginsConfig(
-    val entries: Map<String, PluginEntry> = emptyMap()
+    val entries: Map<String, PluginEntry> = emptyMap(),
+    val slots: PluginSlotsConfig = PluginSlotsConfig()
+)
+
+data class PluginSlotsConfig(
+    val contextEngine: String? = null
 )
 
 data class PluginEntry(

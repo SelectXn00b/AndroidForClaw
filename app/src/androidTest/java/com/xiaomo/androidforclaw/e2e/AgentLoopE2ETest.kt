@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import com.xiaomo.androidforclaw.agent.context.ContextBuilder
+import com.xiaomo.androidforclaw.agent.context.PromptMode
 import com.xiaomo.androidforclaw.agent.loop.AgentLoop
 import com.xiaomo.androidforclaw.agent.loop.AgentResult
 import com.xiaomo.androidforclaw.agent.loop.ProgressUpdate
@@ -186,7 +187,7 @@ class AgentLoopE2ETest {
             }
 
             val systemPrompt = contextBuilder.buildSystemPrompt(
-                promptMode = ContextBuilder.Companion.PromptMode.FULL
+                promptMode = PromptMode.FULL
             )
 
             val result = runBlocking {

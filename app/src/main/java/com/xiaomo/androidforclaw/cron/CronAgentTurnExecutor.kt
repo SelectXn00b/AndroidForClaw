@@ -9,6 +9,7 @@
 package com.xiaomo.androidforclaw.cron
 
 import android.content.Context
+import com.xiaomo.androidforclaw.agent.context.ChannelContext
 import com.xiaomo.androidforclaw.agent.context.ContextBuilder
 import com.xiaomo.androidforclaw.agent.context.ContextManager
 import com.xiaomo.androidforclaw.agent.loop.AgentLoop
@@ -101,7 +102,7 @@ object CronAgentTurnExecutor {
             }
 
             // Build system prompt
-            val channelCtx = ContextBuilder.ChannelContext(
+            val channelCtx = ChannelContext(
                 channel = channel ?: "cron",
                 chatId = to ?: "",
                 chatType = "p2p",

@@ -11,7 +11,7 @@ class SessionManagerDirectoryTest {
         val root = createTempDirectory("session-manager-test-").toFile()
         try {
             val target = File(root, "sessions/test.jsonl")
-            SessionManager.ensureSessionFileParentExists(target)
+            ensureSessionFileParentExists(target)
             assertTrue(target.parentFile?.exists() == true)
         } finally {
             root.deleteRecursively()

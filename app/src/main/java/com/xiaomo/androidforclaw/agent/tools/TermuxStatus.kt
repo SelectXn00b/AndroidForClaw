@@ -1,5 +1,12 @@
 package com.xiaomo.androidforclaw.agent.tools
 
+/**
+ * Termux setup status types.
+ *
+ * OpenClaw Source Reference:
+ * - Android 平台特有，无直接 OpenClaw 对应（OpenClaw 用 PTY/Sandbox，不用 Termux）
+ */
+
 enum class TermuxSetupStep {
     TERMUX_NOT_INSTALLED,
     KEYPAIR_MISSING,

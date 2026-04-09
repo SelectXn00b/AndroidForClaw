@@ -5,7 +5,9 @@ import com.xiaomo.androidforclaw.logging.Log
 
 /**
  * Model Fallback Manager — Multi-model fallback with provider rotation.
- * Aligned with OpenClaw runWithModelFallback().
+ *
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/agents/model-fallback.ts (runWithModelFallback, runWithImageModelFallback)
  *
  * Key behaviors from OpenClaw:
  * - resolveFallbackCandidates(): build candidate list (primary + fallbacks)
