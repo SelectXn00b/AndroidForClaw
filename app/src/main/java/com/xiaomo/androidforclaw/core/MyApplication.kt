@@ -1370,7 +1370,14 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                     androidToolRegistry = androidToolRegistry,
                     contextManager = contextManager,
                     maxIterations = maxIterations,
-                    modelRef = null
+                    modelRef = run {
+                        // 对齐 OpenClaw bindings[]: 根据 channel + accountId 路由到 agent
+                        val feishuAppId = config.channels.feishu.appId
+                        val accountId = configLoader.resolveChannelAccountId("feishu", feishuAppId)
+                        configLoader.resolveAgentModelRef("feishu", accountId)?.also {
+                            Log.i(TAG, "🔗 Binding route: feishu/$accountId → model=$it")
+                        }
+                    }
                 )
 
                 // Register AgentLoop for STEER mode mid-run message injection

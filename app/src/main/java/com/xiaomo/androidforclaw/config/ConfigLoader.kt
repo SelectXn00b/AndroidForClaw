@@ -1075,6 +1075,65 @@ class ConfigLoader private constructor() {
     }
 
     /**
+     * 根据 channel + accountId 查找匹配的 binding，返回 agent 的 model reference。
+     *
+     * 对齐 OpenClaw 的 binding 路由逻辑：
+     * 1. 遍历 bindings，匹配 channel + accountId
+     * 2. 找到 agentId 后，查 agents.list 获取 agent 的 model
+     * 3. 返回 "providerId/modelId" 格式的 modelRef，找不到返回 null
+     *
+     * @param channel 渠道名 (feishu / telegram / discord / ...)
+     * @param accountId 账号标识 (appId / botToken / 为空则匹配所有)
+     * @param chatId 聊天 ID (可选，用于 peer 级别的精确匹配)
+     */
+    fun resolveAgentModelRef(channel: String, accountId: String = "", chatId: String? = null): String? {
+        val config = loadOpenClawConfig()
+        val bindings = config.bindings ?: return null
+
+        // Find matching binding: prefer exact accountId match, then wildcard
+        val matchedBinding = bindings.firstOrNull { b ->
+            b.match.channel == channel &&
+            (b.match.accountId == accountId || b.match.accountId.isBlank() || accountId.isBlank())
+        } ?: return null
+
+        // Look up agent in agents.list
+        val agentList = config.agents?.list ?: return null
+        val agent = agentList.firstOrNull { it.id == matchedBinding.agentId } ?: return null
+
+        // Return agent's model reference (providerId/modelId format)
+        return agent.model?.primary
+    }
+
+    /**
+     * 解析渠道消息的 accountId：根据 channel 配置找到 account key。
+     * 用于把消息和 binding 中的 accountId 对应起来。
+     *
+     * @param channel 渠道名
+     * @param appIdOrToken 当前使用的 appId (feishu) 或 botToken (telegram/discord)
+     * @return 匹配的 account key（如 "agent-coder"），未匹配则返回空字符串
+     */
+    fun resolveChannelAccountId(channel: String, appIdOrToken: String): String {
+        if (appIdOrToken.isBlank()) return ""
+        val config = loadOpenClawConfig()
+
+        return when (channel) {
+            "feishu" -> {
+                val feishu = config.channels.feishu
+                feishu.accounts?.entries?.find { it.value.appId == appIdOrToken }?.key ?: ""
+            }
+            "telegram" -> {
+                val tg = config.channels.telegram ?: return ""
+                tg.accounts?.entries?.find { it.value.botToken == appIdOrToken }?.key ?: ""
+            }
+            "discord" -> {
+                val dc = config.channels.discord ?: return ""
+                dc.accounts?.entries?.find { it.value.token == appIdOrToken }?.key ?: ""
+            }
+            else -> ""
+        }
+    }
+
+    /**
      * 保存配置 - 用 JSONObject 序列化（不依赖 Gson）
      */
     fun saveOpenClawConfig(config: OpenClawConfig): Boolean {

@@ -32,6 +32,8 @@ interface ChannelAdapter {
     fun getSessionKey(): String   // e.g. "telegram_${chatId}"
     fun getSenderId(): String = ""   // sender's open_id / user_id for routing
     fun getChatId(): String = ""     // chat/group ID for routing
+    /** Account identifier for multi-account routing (e.g. appId for feishu, bot token for telegram) */
+    val accountId: String get() = ""
 
     // --- System prompt ---
     fun buildSystemPrompt(): String

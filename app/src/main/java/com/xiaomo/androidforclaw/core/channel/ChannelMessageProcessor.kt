@@ -10,6 +10,7 @@ import com.xiaomo.androidforclaw.autoreply.isHeartbeatUserMessage
 import com.xiaomo.androidforclaw.autoreply.isSilentReplyText
 import com.xiaomo.androidforclaw.autoreply.stripSilentToken
 import com.xiaomo.androidforclaw.commands.CommandRegistry
+import com.xiaomo.androidforclaw.config.ConfigLoader
 import com.xiaomo.androidforclaw.core.MainEntryNew
 import com.xiaomo.androidforclaw.core.MyApplication
 import com.xiaomo.androidforclaw.data.model.TaskDataManager
@@ -139,13 +140,23 @@ class ChannelMessageProcessor(private val app: MyApplication) {
                 cameraCaptureManager = MyApplication.getCameraCaptureManager()
             )
 
+            // 5. AgentLoop — resolve per-agent model via binding routing (对齐 OpenClaw bindings[])
+            val configLoader = ConfigLoader(app)
+            val agentModelRef = configLoader.resolveAgentModelRef(
+                channel = adapter.channelName,
+                accountId = adapter.accountId
+            )
+            if (agentModelRef != null) {
+                Log.i(TAG, "🔗 Binding route: ${adapter.channelName}/${adapter.accountId} → model=$agentModelRef")
+            }
+
             val agentLoop = AgentLoop(
                 llmProvider = llmProvider,
                 toolRegistry = toolRegistry,
                 androidToolRegistry = androidToolRegistry,
                 contextManager = contextManager,
                 maxIterations = 40,
-                modelRef = null
+                modelRef = agentModelRef
             )
 
             val result = agentLoop.run(

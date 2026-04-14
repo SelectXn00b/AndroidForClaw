@@ -7,6 +7,7 @@ package com.xiaomo.androidforclaw.gateway
 import android.app.Application
 import com.xiaomo.androidforclaw.logging.Log
 import com.xiaomo.androidforclaw.agent.context.ContextBuilder
+import com.xiaomo.androidforclaw.config.ConfigLoader
 import com.xiaomo.androidforclaw.agent.loop.AgentLoop
 import com.xiaomo.androidforclaw.agent.loop.ProgressUpdate
 import com.xiaomo.androidforclaw.autoreply.isSilentReplyText
@@ -89,7 +90,14 @@ class MainEntryAgentHandler(
 
                 Log.d(TAG, "System prompt ready (${finalSystemPrompt.length} chars)")
 
-                // 2. Create AgentLoop (with context management)
+                // 2. Create AgentLoop (with context management + binding-based model resolution)
+                val configLoader = ConfigLoader(application)
+                val agentModelRef = configLoader.resolveAgentModelRef(
+                    channel = "gateway",
+                    accountId = ""
+                )
+                Log.d(TAG, "Agent modelRef: ${agentModelRef ?: "default"}")
+
                 val contextManager = com.xiaomo.androidforclaw.agent.context.ContextManager(llmProvider)
                 val agentLoop = AgentLoop(
                     llmProvider = llmProvider,
@@ -97,7 +105,7 @@ class MainEntryAgentHandler(
                     androidToolRegistry = androidToolRegistry,
                     contextManager = contextManager,
                     maxIterations = maxIterations,
-                    modelRef = null  // Use default model, can be read from config
+                    modelRef = agentModelRef
                 )
 
                 // 3. Listen to progress
