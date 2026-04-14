@@ -1124,7 +1124,10 @@ class ConfigLoader private constructor() {
         return when (channel) {
             "feishu" -> {
                 val feishu = config.channels.feishu
-                feishu.accounts?.entries?.find { it.value.appId == appIdOrToken }?.key ?: ""
+                // 1. 先在 accounts map 中查找包含此 appId 的 account key
+                feishu.accounts?.entries?.find { it.value.appId == appIdOrToken }?.key
+                    // 2. 没找到说明是顶层 appId（单 account 模式），返回空字符串
+                    ?: ""
             }
             "telegram" -> {
                 val tg = config.channels.telegram ?: return ""

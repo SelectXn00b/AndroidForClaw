@@ -696,21 +696,15 @@ private fun saveAgent(
 
     // ── 3. 更新 channels accounts ─────────────────────────
     val channels = config.channels
-
-    // Feishu
-    val feishuAccounts = (channels.feishu.accounts?.toMutableMap() ?: mutableMapOf()).apply {
+    // Feishu: 不创建独立 account entry（WebSocket 只连顶层 appId），
+    // binding 使用空 accountId 匹配顶层 feishu bot
+    val feishuAccounts = channels.feishu.accounts?.toMutableMap()?.apply {
         if (oldId != null && oldId != view.id) remove(providerKey(oldId))
-        if (view.feishuEnabled && view.feishuAppId.isNotBlank()) {
-            put(pkey, FeishuAccountConfig(
-                enabled = true,
-                name = view.name,
-                appId = view.feishuAppId,
-                appSecret = view.feishuAppSecret.ifBlank { null }
-            ))
-        } else {
-            remove(pkey)
-        }
+        // 如果之前在 account 里创建了 entry，清除它
+        remove(pkey)
     }
+    // 如果没有其他 account entries，设为 null 清空
+    val cleanedFeishuAccounts = feishuAccounts?.takeIf { it.isNotEmpty() }
 
     // Telegram
     val telegramConfig = channels.telegram?.let { tg ->
@@ -747,7 +741,7 @@ private fun saveAgent(
     }
 
     val updatedChannels = channels.copy(
-        feishu = channels.feishu.copy(accounts = feishuAccounts),
+        feishu = channels.feishu.copy(accounts = cleanedFeishuAccounts),
         telegram = telegramConfig,
         discord = discordConfig
     )
@@ -762,9 +756,11 @@ private fun saveAgent(
 
     // 添加新 binding
     if (view.feishuEnabled && view.feishuAppId.isNotBlank()) {
+        // feishu binding: 用空 accountId 匹配顶层 feishu bot（单 bot 模式）
+        // 多 bot 模式由 FeishuChannelActivity 处理
         bindings.add(BindingEntry(
             agentId = view.id,
-            match = BindingMatch(channel = "feishu", accountId = pkey)
+            match = BindingMatch(channel = "feishu", accountId = "")
         ))
     }
     if (view.telegramEnabled && view.telegramToken.isNotBlank()) {
