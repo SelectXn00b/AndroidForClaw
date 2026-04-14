@@ -59,16 +59,10 @@ data class AgentView(
     val providerApiKey: String,
     val providerApi: String,
     val modelId: String,
-    // Feishu channel
+    // Channel bindings（只决定是否启用，不用填 bot 凭据）
     val feishuEnabled: Boolean,
-    val feishuAppId: String,
-    val feishuAppSecret: String,
-    // Telegram channel
     val telegramEnabled: Boolean,
-    val telegramToken: String,
-    // Discord channel
     val discordEnabled: Boolean,
-    val discordToken: String,
 )
 
 private fun providerKey(agentId: String) = "agent-$agentId"
@@ -78,10 +72,6 @@ private fun buildAgentViews(config: OpenClawConfig): List<AgentView> {
     val agents = config.agents?.list ?: return emptyList()
     val providers = config.resolveProviders()
     val bindings = config.bindings
-    val feishuAccts = config.channels.feishu.accounts
-    val telegramAccts = config.channels.telegram?.accounts
-    val discordAccts = config.channels.discord?.accounts
-
     return agents.map { agent ->
         val pkey = providerKey(agent.id)
         val prov = providers[pkey]
@@ -90,9 +80,6 @@ private fun buildAgentViews(config: OpenClawConfig): List<AgentView> {
             ?.takeIf { it != agent.model?.primary }
             ?: prov?.models?.firstOrNull()?.id
             ?: ""
-        val feishuAcct = feishuAccts?.get(pkey)
-        val tgAcct = telegramAccts?.get(pkey)
-        val dcAcct = discordAccts?.get(pkey)
 
         AgentView(
             id = agent.id,
@@ -102,13 +89,9 @@ private fun buildAgentViews(config: OpenClawConfig): List<AgentView> {
             providerApiKey = prov?.apiKey ?: "",
             providerApi = prov?.api ?: "openai-completions",
             modelId = modelId,
-            feishuEnabled = feishuAcct != null && (feishuAcct.enabled),
-            feishuAppId = feishuAcct?.appId ?: "",
-            feishuAppSecret = feishuAcct?.appSecret ?: "",
-            telegramEnabled = tgAcct != null && (tgAcct.enabled == true),
-            telegramToken = tgAcct?.botToken ?: "",
-            discordEnabled = dcAcct != null && (dcAcct.enabled == true),
-            discordToken = dcAcct?.token ?: "",
+            feishuEnabled = bindings.any { it.agentId == agent.id && it.match.channel == "feishu" },
+            telegramEnabled = bindings.any { it.agentId == agent.id && it.match.channel == "telegram" },
+            discordEnabled = bindings.any { it.agentId == agent.id && it.match.channel == "discord" },
         )
     }
 }
@@ -386,22 +369,15 @@ private fun AgentEditDialog(
 
     // Feishu
     var feishuEnabled by remember { mutableStateOf(existing?.feishuEnabled ?: false) }
-    var feishuAppId by remember { mutableStateOf(existing?.feishuAppId ?: "") }
-    var feishuAppSecret by remember { mutableStateOf(existing?.feishuAppSecret ?: "") }
 
     // Telegram
     var telegramEnabled by remember { mutableStateOf(existing?.telegramEnabled ?: false) }
-    var telegramToken by remember { mutableStateOf(existing?.telegramToken ?: "") }
 
     // Discord
     var discordEnabled by remember { mutableStateOf(existing?.discordEnabled ?: false) }
-    var discordToken by remember { mutableStateOf(existing?.discordToken ?: "") }
 
     // 折叠区
     var llmExpanded by remember { mutableStateOf(true) }
-    var feishuExpanded by remember { mutableStateOf(false) }
-    var telegramExpanded by remember { mutableStateOf(false) }
-    var discordExpanded by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -500,61 +476,37 @@ private fun AgentEditDialog(
 
                 HorizontalDivider()
 
-                // ── Feishu ────────────────────────────────────
-                CollapsibleSection(
-                    title = "飞书 Bot",
-                    expanded = feishuExpanded,
-                    onToggle = { feishuExpanded = !feishuExpanded },
-                    enabled = feishuEnabled,
-                    onEnabledChange = { feishuEnabled = it }
+                // ── Channel 绑定（只控制路由开关，不填 bot 凭据）─────
+                Text("Channel 绑定", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Bot 凭据在 Channels 设置页面配置",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedTextField(
-                        value = feishuAppId, onValueChange = { feishuAppId = it },
-                        label = { Text("App ID") },
-                        singleLine = true, modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = feishuAppSecret, onValueChange = { feishuAppSecret = it },
-                        label = { Text("App Secret") },
-                        singleLine = true, modifier = Modifier.fillMaxWidth(),
-                        visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation()
-                    )
+                    Text("飞书", style = MaterialTheme.typography.bodyMedium)
+                    Switch(checked = feishuEnabled, onCheckedChange = { feishuEnabled = it })
                 }
-
-                HorizontalDivider()
-
-                // ── Telegram ──────────────────────────────────
-                CollapsibleSection(
-                    title = "Telegram Bot",
-                    expanded = telegramExpanded,
-                    onToggle = { telegramExpanded = !telegramExpanded },
-                    enabled = telegramEnabled,
-                    onEnabledChange = { telegramEnabled = it }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedTextField(
-                        value = telegramToken, onValueChange = { telegramToken = it },
-                        label = { Text("Bot Token") },
-                        singleLine = true, modifier = Modifier.fillMaxWidth(),
-                        visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation()
-                    )
+                    Text("Telegram", style = MaterialTheme.typography.bodyMedium)
+                    Switch(checked = telegramEnabled, onCheckedChange = { telegramEnabled = it })
                 }
-
-                HorizontalDivider()
-
-                // ── Discord ───────────────────────────────────
-                CollapsibleSection(
-                    title = "Discord Bot",
-                    expanded = discordExpanded,
-                    onToggle = { discordExpanded = !discordExpanded },
-                    enabled = discordEnabled,
-                    onEnabledChange = { discordEnabled = it }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedTextField(
-                        value = discordToken, onValueChange = { discordToken = it },
-                        label = { Text("Bot Token") },
-                        singleLine = true, modifier = Modifier.fillMaxWidth(),
-                        visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation()
-                    )
+                    Text("Discord", style = MaterialTheme.typography.bodyMedium)
+                    Switch(checked = discordEnabled, onCheckedChange = { discordEnabled = it })
                 }
             }
         },
@@ -570,12 +522,8 @@ private fun AgentEditDialog(
                             providerApi = providerApi,
                             modelId = modelId.trim(),
                             feishuEnabled = feishuEnabled,
-                            feishuAppId = feishuAppId.trim(),
-                            feishuAppSecret = feishuAppSecret.trim(),
                             telegramEnabled = telegramEnabled,
-                            telegramToken = telegramToken.trim(),
                             discordEnabled = discordEnabled,
-                            discordToken = discordToken.trim(),
                         )
                     )
                 },
@@ -694,54 +642,29 @@ private fun saveAgent(
         defaults = config.agents?.defaults ?: AgentDefaultsConfig()
     )
 
-    // ── 3. 更新 channels accounts ─────────────────────────
+    // ── 3. 更新 bindings（不再创建独立 channel account entries）─────
     val channels = config.channels
-    // Feishu: 不创建独立 account entry（WebSocket 只连顶层 appId），
-    // binding 使用空 accountId 匹配顶层 feishu bot
+
+    // 清理旧 account entries（兼容旧版本创建的）
     val feishuAccounts = channels.feishu.accounts?.toMutableMap()?.apply {
         if (oldId != null && oldId != view.id) remove(providerKey(oldId))
-        // 如果之前在 account 里创建了 entry，清除它
         remove(pkey)
-    }
-    // 如果没有其他 account entries，设为 null 清空
-    val cleanedFeishuAccounts = feishuAccounts?.takeIf { it.isNotEmpty() }
-
-    // Telegram
+    }?.takeIf { it.isNotEmpty() }
     val telegramConfig = channels.telegram?.let { tg ->
-        val tgAccounts = (tg.accounts?.toMutableMap() ?: mutableMapOf()).apply {
+        tg.copy(accounts = tg.accounts?.toMutableMap()?.apply {
             if (oldId != null && oldId != view.id) remove(providerKey(oldId))
-            if (view.telegramEnabled && view.telegramToken.isNotBlank()) {
-                put(pkey, TelegramAccountConfig(
-                    enabled = true,
-                    name = view.name,
-                    botToken = view.telegramToken
-                ))
-            } else {
-                remove(pkey)
-            }
-        }
-        tg.copy(accounts = tgAccounts)
+            remove(pkey)
+        }?.takeIf { it.isNotEmpty() })
     }
-
-    // Discord
     val discordConfig = channels.discord?.let { dc ->
-        val dcAccounts = (dc.accounts?.toMutableMap() ?: mutableMapOf()).apply {
+        dc.copy(accounts = dc.accounts?.toMutableMap()?.apply {
             if (oldId != null && oldId != view.id) remove(providerKey(oldId))
-            if (view.discordEnabled && view.discordToken.isNotBlank()) {
-                put(pkey, DiscordAccountPolicyConfig(
-                    enabled = true,
-                    name = view.name,
-                    token = view.discordToken
-                ))
-            } else {
-                remove(pkey)
-            }
-        }
-        dc.copy(accounts = dcAccounts)
+            remove(pkey)
+        }?.takeIf { it.isNotEmpty() })
     }
 
     val updatedChannels = channels.copy(
-        feishu = channels.feishu.copy(accounts = cleanedFeishuAccounts),
+        feishu = channels.feishu.copy(accounts = feishuAccounts),
         telegram = telegramConfig,
         discord = discordConfig
     )
@@ -754,25 +677,23 @@ private fun saveAgent(
     }
     bindings.removeAll { it.agentId == pkey }
 
-    // 添加新 binding
-    if (view.feishuEnabled && view.feishuAppId.isNotBlank()) {
-        // feishu binding: 用空 accountId 匹配顶层 feishu bot（单 bot 模式）
-        // 多 bot 模式由 FeishuChannelActivity 处理
+    // 添加新 binding（单 bot 模式：空 accountId 匹配所有消息）
+    if (view.feishuEnabled) {
         bindings.add(BindingEntry(
             agentId = view.id,
             match = BindingMatch(channel = "feishu", accountId = "")
         ))
     }
-    if (view.telegramEnabled && view.telegramToken.isNotBlank()) {
+    if (view.telegramEnabled) {
         bindings.add(BindingEntry(
             agentId = view.id,
-            match = BindingMatch(channel = "telegram", accountId = pkey)
+            match = BindingMatch(channel = "telegram", accountId = "")
         ))
     }
-    if (view.discordEnabled && view.discordToken.isNotBlank()) {
+    if (view.discordEnabled) {
         bindings.add(BindingEntry(
             agentId = view.id,
-            match = BindingMatch(channel = "discord", accountId = pkey)
+            match = BindingMatch(channel = "discord", accountId = "")
         ))
     }
 
