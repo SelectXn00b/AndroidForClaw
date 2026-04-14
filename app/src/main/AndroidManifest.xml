@@ -50,6 +50,8 @@
         tools:ignore="ProtectedPermissions" />
 
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <uses-permission android:name="android.permission.SET_ALARM" />
     <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
@@ -134,6 +136,13 @@
         <!-- Feishu Channel 配置页面 -->
         <activity
             android:name="com.xiaomo.androidforclaw.ui.activity.FeishuChannelActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.PhoneClaw" />
+
+        <!-- Agent 配置页面（独立 Agent 管理） -->
+        <activity
+            android:name="com.xiaomo.androidforclaw.ui.activity.AgentConfigActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.PhoneClaw" />

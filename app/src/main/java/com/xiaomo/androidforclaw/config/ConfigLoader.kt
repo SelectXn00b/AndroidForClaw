@@ -212,6 +212,29 @@ class ConfigLoader private constructor() {
         val agentsJson = root.optJSONObject("agents")
         val agents = agentsJson?.let { parseAgentsConfig(it) }
 
+        // Bindings (对齐 OpenClaw bindings[])
+        val bindings = root.optJSONArray("bindings")?.let { arr ->
+            (0 until arr.length()).mapNotNull { i ->
+                arr.optJSONObject(i)?.let { binding ->
+                    val matchJson = binding.optJSONObject("match")
+                    val peerJson = matchJson?.optJSONObject("peer")
+                    BindingEntry(
+                        agentId = binding.optString("agentId", ""),
+                        match = BindingMatch(
+                            channel = matchJson?.optString("channel", "") ?: "",
+                            accountId = matchJson?.optString("accountId", "") ?: "",
+                            peer = peerJson?.let {
+                                BindingPeer(
+                                    kind = it.optString("kind", "group"),
+                                    id = it.optString("id", null)?.takeIf { id -> id.isNotBlank() }
+                                )
+                            }
+                        )
+                    )
+                }
+            }
+        } ?: emptyList()
+
         // Agent (Android extension, legacy)
         val agentJson = root.optJSONObject("agent")
         val agent = agentJson?.let { parseAgentConfig(it) } ?: AgentConfig()
@@ -285,9 +308,14 @@ class ConfigLoader private constructor() {
             ModelAllowlistConfig(allow = allow, block = block)
         }
 
+        // Multi-Agent Profiles
+        val multiAgentJson = root.optJSONObject("multiAgent")
+        val multiAgent = multiAgentJson?.let { parseMultiAgentConfig(it) } ?: MultiAgentConfig()
+
         return OpenClawConfig(
             models = models,
             agents = agents,
+            bindings = bindings,
             channels = channels,
             gateway = gateway,
             skills = skills,
@@ -302,6 +330,7 @@ class ConfigLoader private constructor() {
             modelAllowlist = modelAllowlist,
             agent = agent,
             rive = rive,
+            multiAgent = multiAgent,
             providers = legacyProviders
         )
     }
@@ -421,6 +450,28 @@ class ConfigLoader private constructor() {
     }
 
     private fun parseAgentsConfig(json: JSONObject): AgentsConfig {
+        // Parse agents.list (multi-agent support, 对齐 OpenClaw agents.list)
+        val list = json.optJSONArray("list")?.let { arr ->
+            (0 until arr.length()).mapNotNull { i ->
+                arr.optJSONObject(i)?.let { entry ->
+                    val modelJson = entry.optJSONObject("model")
+                    AgentEntry(
+                        id = entry.optString("id", ""),
+                        name = entry.optString("name", ""),
+                        agentDir = entry.optString("agentDir", null)?.takeIf { it.isNotBlank() },
+                        model = modelJson?.let {
+                            ModelSelectionConfig(
+                                primary = it.optString("primary", null),
+                                fallbacks = it.optJSONArray("fallbacks")?.let { fa ->
+                                    (0 until fa.length()).map { fi -> fa.getString(fi) }
+                                }
+                            )
+                        }
+                    )
+                }
+            }
+        }
+
         val defaultsJson = json.optJSONObject("defaults")
         val defaults = if (defaultsJson != null) {
             val modelJson = defaultsJson.optJSONObject("model")
@@ -450,7 +501,7 @@ class ConfigLoader private constructor() {
                 subagents = subagents
             )
         } else AgentDefaultsConfig()
-        return AgentsConfig(defaults = defaults)
+        return AgentsConfig(list = list, defaults = defaults)
     }
 
     private fun parseAgentConfig(json: JSONObject): AgentConfig {
@@ -877,6 +928,100 @@ class ConfigLoader private constructor() {
         )
     }
 
+    // ============ Multi-Agent Profile Parsers ============
+
+    private fun parseMultiAgentConfig(json: JSONObject): MultiAgentConfig {
+        val enabled = json.optBoolean("enabled", false)
+        val defaultProfile = json.optString("defaultProfile", "").ifEmpty { null }
+
+        val profiles = mutableListOf<AgentProfile>()
+        val profilesArray = json.optJSONArray("profiles")
+        if (profilesArray != null) {
+            for (i in 0 until profilesArray.length()) {
+                val profileJson = profilesArray.optJSONObject(i) ?: continue
+                profiles.add(parseAgentProfile(profileJson))
+            }
+        }
+
+        return MultiAgentConfig(
+            enabled = enabled,
+            profiles = profiles,
+            defaultProfile = defaultProfile
+        )
+    }
+
+    private fun parseAgentProfile(json: JSONObject): AgentProfile {
+        val name = json.optString("name", "unnamed")
+        val displayName = json.optString("displayName", name)
+        val model = json.optString("model", "").ifEmpty { null }
+        val apiKey = json.optString("apiKey", "").ifEmpty { null }
+        val systemPrompt = json.optString("systemPrompt", "").ifEmpty { null }
+        val enabled = json.optBoolean("enabled", true)
+        val priority = json.optInt("priority", 0)
+
+        val tools = mutableListOf<String>()
+        json.optJSONArray("tools")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                arr.optString(i).takeIf { it.isNotEmpty() }?.let { tools.add(it) }
+            }
+        }
+
+        val routingJson = json.optJSONObject("routing")
+        val routing = if (routingJson != null) parseAgentRoutingRule(routingJson) else AgentRoutingRule()
+
+        return AgentProfile(
+            name = name,
+            displayName = displayName,
+            model = model,
+            apiKey = apiKey,
+            systemPrompt = systemPrompt,
+            tools = tools,
+            enabled = enabled,
+            routing = routing,
+            priority = priority
+        )
+    }
+
+    private fun parseAgentRoutingRule(json: JSONObject): AgentRoutingRule {
+        val keywords = mutableListOf<String>()
+        json.optJSONArray("keywords")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                arr.optString(i).takeIf { it.isNotEmpty() }?.let { keywords.add(it) }
+            }
+        }
+
+        val patterns = mutableListOf<String>()
+        json.optJSONArray("patterns")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                arr.optString(i).takeIf { it.isNotEmpty() }?.let { patterns.add(it) }
+            }
+        }
+
+        val prefix = json.optString("prefix", "").ifEmpty { null }
+
+        val senderIds = mutableListOf<String>()
+        json.optJSONArray("senderIds")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                arr.optString(i).takeIf { it.isNotEmpty() }?.let { senderIds.add(it) }
+            }
+        }
+
+        val chatIds = mutableListOf<String>()
+        json.optJSONArray("chatIds")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                arr.optString(i).takeIf { it.isNotEmpty() }?.let { chatIds.add(it) }
+            }
+        }
+
+        return AgentRoutingRule(
+            keywords = keywords,
+            patterns = patterns,
+            prefix = prefix,
+            senderIds = senderIds,
+            chatIds = chatIds
+        )
+    }
+
     // ============ Public API ============
 
     fun getProviderConfig(providerName: String): ProviderConfig? {
@@ -969,6 +1114,23 @@ class ConfigLoader private constructor() {
         // Agents
         config.agents?.let { a ->
             val agentsObj = root.optJSONObject("agents") ?: JSONObject()
+            // agents.list (multi-agent)
+            a.list?.let { agentList ->
+                val listArr = JSONArray()
+                agentList.forEach { entry ->
+                    val entryObj = JSONObject()
+                    entryObj.put("id", entry.id)
+                    entryObj.put("name", entry.name)
+                    entry.agentDir?.let { entryObj.put("agentDir", it) }
+                    entry.model?.let { model ->
+                        val modelObj = JSONObject()
+                        model.primary?.let { modelObj.put("primary", it) }
+                        entryObj.put("model", modelObj)
+                    }
+                    listArr.put(entryObj)
+                }
+                agentsObj.put("list", listArr)
+            }
             val defaultsObj = JSONObject()
             a.defaults.model?.let { model ->
                 val modelObj = JSONObject()
@@ -977,6 +1139,27 @@ class ConfigLoader private constructor() {
             }
             agentsObj.put("defaults", defaultsObj)
             root.put("agents", agentsObj)
+        }
+
+        // Bindings (对齐 OpenClaw bindings[])
+        if (config.bindings.isNotEmpty()) {
+            val bindingsArr = JSONArray()
+            config.bindings.forEach { binding ->
+                val bindingObj = JSONObject()
+                bindingObj.put("agentId", binding.agentId)
+                val matchObj = JSONObject()
+                matchObj.put("channel", binding.match.channel)
+                matchObj.put("accountId", binding.match.accountId)
+                binding.match.peer?.let { peer ->
+                    val peerObj = JSONObject()
+                    peerObj.put("kind", peer.kind)
+                    peer.id?.let { peerObj.put("id", it) }
+                    matchObj.put("peer", peerObj)
+                }
+                bindingObj.put("match", matchObj)
+                bindingsArr.put(bindingObj)
+            }
+            root.put("bindings", bindingsArr)
         }
 
         // Agent (Android extension)
@@ -988,7 +1171,7 @@ class ConfigLoader private constructor() {
         // Channels (对齐 OpenClaw: channels.feishu)
         val channelsObj = root.optJSONObject("channels") ?: JSONObject()
         val feishu = config.channels.feishu
-        val feishuObj = JSONObject()
+        val feishuObj = channelsObj.optJSONObject("feishu") ?: JSONObject()
         feishuObj.put("enabled", feishu.enabled)
         feishuObj.put("appId", feishu.appId)
         feishuObj.put("appSecret", feishu.appSecret)
@@ -1002,6 +1185,28 @@ class ConfigLoader private constructor() {
         feishuObj.put("thinkingLabel", feishu.thinkingLabel)
         feishuObj.put("showToolCalls", feishu.showToolCalls)
         feishuObj.put("toolCallLabel", feishu.toolCallLabel)
+        // Multi-account support (对齐 OpenClaw channels.feishu.accounts)
+        feishu.accounts?.let { accounts ->
+            if (accounts.isNotEmpty()) {
+                val accountsObj = JSONObject()
+                accounts.forEach { (key, account) ->
+                    val accountObj = JSONObject()
+                    accountObj.put("enabled", account.enabled)
+                    account.name?.let { accountObj.put("name", it) }
+                    account.appId?.let { accountObj.put("appId", it) }
+                    account.appSecret?.let { accountObj.put("appSecret", it) }
+                    account.domain?.let { accountObj.put("domain", it) }
+                    account.connectionMode?.let { accountObj.put("connectionMode", it) }
+                    account.webhookPath?.let { accountObj.put("webhookPath", it) }
+                    accountsObj.put(key, accountObj)
+                }
+                feishuObj.put("accounts", accountsObj)
+            } else {
+                feishuObj.remove("accounts")
+            }
+        } ?: feishuObj.remove("accounts")
+        feishu.defaultAccount?.let { feishuObj.put("defaultAccount", it) }
+            ?: feishuObj.remove("defaultAccount")
         channelsObj.put("feishu", feishuObj)
 
         config.channels.discord?.let { discord ->

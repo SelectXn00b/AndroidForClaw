@@ -141,6 +141,70 @@ object ShizukuManager {
         }
     }
 
+    // ===== Shell 命令执行 =====
+
+    /**
+     * 通过 Shizuku 执行 shell 命令（特权级）。
+     * Shizuku API 13 将 newProcess 标记为 private，需要通过反射调用。
+     * @return Pair(stdout, exitCode)
+     */
+    fun exec(cmd: String): Pair<String, Int> {
+        if (!isReady) return Pair("Shizuku 未就绪", -1)
+        return try {
+            val clazz = Class.forName("rikka.shizuku.Shizuku")
+            val method = clazz.getDeclaredMethod(
+                "newProcess",
+                Array<String>::class.java,
+                Array<String>::class.java,
+                String::class.java
+            )
+            method.isAccessible = true
+            val process = method.invoke(null, arrayOf("sh", "-c", cmd), null, null) as Process
+            val stdout = process.inputStream.bufferedReader().readText()
+            val stderr = process.errorStream.bufferedReader().readText()
+            val exitCode = process.waitFor()
+            val output = if (stderr.isNotBlank()) "$stdout\n$stderr".trim() else stdout.trim()
+            Log.d(TAG, "exec: $cmd → exit=$exitCode")
+            Pair(output, exitCode)
+        } catch (e: Exception) {
+            Log.e(TAG, "exec failed: $cmd", e)
+            Pair("执行失败: ${e.message}", -1)
+        }
+    }
+
+    /**
+     * 通过 Shizuku 启动 Activity（后台，不拉起前台）。
+     * @param action Intent action (如 android.intent.action.SET_ALARM)
+     * @param extras 额外参数列表，格式: listOf("--es key value", "--ei key value")
+     * @param packageName 目标包名（可选）
+     */
+    fun startActivityViaShell(
+        action: String,
+        extras: List<String> = emptyList(),
+        packageName: String? = null
+    ): Pair<String, Int> {
+        val cmd = buildString {
+            append("am start -a $action --user 0")
+            if (packageName != null) append(" -p $packageName")
+            extras.forEach { append(" $it") }
+        }
+        return exec(cmd)
+    }
+
+    /**
+     * 通过 Shizuku 启动指定 App。
+     * @param packageName 应用包名
+     * @param activity 完整 Activity 类名（可选，不填则用 monkey 启动）
+     */
+    fun startAppViaShell(packageName: String, activity: String? = null): Pair<String, Int> {
+        val cmd = if (activity != null) {
+            "am start -n $packageName/$activity --user 0"
+        } else {
+            "monkey -p $packageName -c android.intent.category.LAUNCHER 1"
+        }
+        return exec(cmd)
+    }
+
     // ===== 状态描述 =====
 
     /**

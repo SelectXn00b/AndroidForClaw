@@ -22,19 +22,17 @@ package com.xiaomo.androidforclaw.agent.tools
 
 
 
-import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
 import android.media.AudioManager
-
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Environment
 import android.os.StatFs
 import android.provider.Settings
 import android.hardware.camera2.CameraManager
+import com.xiaomo.androidforclaw.accessibility.ShizukuManager
 import com.xiaomo.androidforclaw.logging.Log
 import com.xiaomo.androidforclaw.providers.FunctionDefinition
 import com.xiaomo.androidforclaw.providers.ParametersSchema
@@ -145,17 +143,18 @@ class AndroidApiSkill(private val context: Context) : Skill {
         val minute = (args["minute"] as? Number)?.toInt() ?: return SkillResult.error("Missing 'minute'")
         val message = args["message"] as? String ?: "AndroidClaw 闹钟"
 
-        val intent = Intent("android.intent.action.SET_ALARM").apply {
-            putExtra("android.intent.extra.alarm.HOUR", hour)
-            putExtra("android.intent.extra.alarm.MINUTES", minute)
-            putExtra("android.intent.extra.alarm.MESSAGE", message)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        return try {
-            context.startActivity(intent)
+        if (!ShizukuManager.isReady) return SkillResult.error("Shizuku 未就绪，无法设置闹钟")
+
+        val extras = listOf(
+            "--ei android.intent.extra.alarm.HOUR $hour",
+            "--ei android.intent.extra.alarm.MINUTES $minute",
+            "--es android.intent.extra.alarm.MESSAGE \"$message\""
+        )
+        val (output, code) = ShizukuManager.startActivityViaShell("android.intent.action.SET_ALARM", extras)
+        return if (code == 0) {
             SkillResult.success("已设置闹钟: ${hour}时${minute}分 - $message")
-        } catch (e: ActivityNotFoundException) {
-            SkillResult.error("未找到时钟应用")
+        } else {
+            SkillResult.error("设置闹钟失败: $output")
         }
     }
 
@@ -163,17 +162,18 @@ class AndroidApiSkill(private val context: Context) : Skill {
         val seconds = (args["seconds"] as? Number)?.toInt() ?: return SkillResult.error("Missing 'seconds'")
         val message = args["message"] as? String ?: "AndroidClaw 定时器"
 
-        val intent = Intent("android.intent.action.SET_TIMER").apply {
-            putExtra("android.intent.extra.alarm.LENGTH", seconds)
-            putExtra("android.intent.extra.alarm.MESSAGE", message)
-            putExtra("android.intent.extra.alarm.SKIP_UI", true)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        return try {
-            context.startActivity(intent)
+        if (!ShizukuManager.isReady) return SkillResult.error("Shizuku 未就绪，无法设置定时器")
+
+        val extras = listOf(
+            "--ei android.intent.extra.alarm.LENGTH $seconds",
+            "--es android.intent.extra.alarm.MESSAGE \"$message\"",
+            "--ez android.intent.extra.alarm.SKIP_UI true"
+        )
+        val (output, code) = ShizukuManager.startActivityViaShell("android.intent.action.SET_TIMER", extras)
+        return if (code == 0) {
             SkillResult.success("已设置定时器: ${seconds}秒 - $message")
-        } catch (e: ActivityNotFoundException) {
-            SkillResult.error("未找到时钟应用")
+        } else {
+            SkillResult.error("设置定时器失败: $output")
         }
     }
 
@@ -333,11 +333,15 @@ class AndroidApiSkill(private val context: Context) : Skill {
 
     private fun startApp(args: Map<String, Any?>): SkillResult {
         val packageName = args["package"] as? String ?: return SkillResult.error("Missing 'package'")
-        val intent = context.packageManager.getLaunchIntentForPackage(packageName)
-            ?: return SkillResult.error("未找到应用: $packageName")
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(intent)
-        return SkillResult.success("已启动: $packageName")
+
+        if (!ShizukuManager.isReady) return SkillResult.error("Shizuku 未就绪，无法启动应用")
+
+        val (output, code) = ShizukuManager.startAppViaShell(packageName)
+        return if (code == 0) {
+            SkillResult.success("已启动: $packageName")
+        } else {
+            SkillResult.error("启动应用失败: $output")
+        }
     }
 
     private fun startActivity(args: Map<String, Any?>): SkillResult {
@@ -345,16 +349,15 @@ class AndroidApiSkill(private val context: Context) : Skill {
         val data = args["data"] as? String
         val pkg = args["package"] as? String
 
-        val intent = Intent(action).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            if (data != null) setData(android.net.Uri.parse(data))
-            if (pkg != null) setPackage(pkg)
-        }
-        return try {
-            context.startActivity(intent)
+        if (!ShizukuManager.isReady) return SkillResult.error("Shizuku 未就绪，无法启动 Activity")
+
+        val extras = mutableListOf<String>()
+        if (data != null) extras.add("-d \"$data\"")
+        val (output, code) = ShizukuManager.startActivityViaShell(action, extras, pkg)
+        return if (code == 0) {
             SkillResult.success("已启动 Activity: $action")
-        } catch (e: ActivityNotFoundException) {
-            SkillResult.error("未找到目标 Activity: $action")
+        } else {
+            SkillResult.error("启动 Activity 失败: $output")
         }
     }
 
@@ -364,11 +367,18 @@ class AndroidApiSkill(private val context: Context) : Skill {
         val action = args["action"] as? String ?: return SkillResult.error("Missing 'action'")
         val pkg = args["package"] as? String
 
-        val intent = Intent(action).apply {
-            if (pkg != null) setPackage(pkg)
+        if (!ShizukuManager.isReady) return SkillResult.error("Shizuku 未就绪，无法发送广播")
+
+        val cmd = buildString {
+            append("am broadcast -a $action --user 0")
+            if (pkg != null) append(" -p $pkg")
         }
-        context.sendBroadcast(intent)
-        return SkillResult.success("已发送广播: $action")
+        val (output, code) = ShizukuManager.exec(cmd)
+        return if (code == 0) {
+            SkillResult.success("已发送广播: $action")
+        } else {
+            SkillResult.error("发送广播失败: $output")
+        }
     }
 
     // ========== 屏幕超时 ==========
@@ -376,18 +386,15 @@ class AndroidApiSkill(private val context: Context) : Skill {
     private fun setScreenTimeout(args: Map<String, Any?>): SkillResult {
         val seconds = (args["seconds"] as? Number)?.toInt() ?: return SkillResult.error("Missing 'seconds'")
 
-        // Use Intent to open screen timeout settings (direct write needs WRITE_SETTINGS which we may not have)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.System.canWrite(context)) {
-            // Fall back to opening settings
-            val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(intent)
-            return SkillResult.error("需要 WRITE_SETTINGS 权限，已打开授权页面")
-        }
+        if (!ShizukuManager.isReady) return SkillResult.error("Shizuku 未就绪，无法设置屏幕超时")
 
-        Settings.System.putInt(context.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, seconds * 1000)
-        return SkillResult.success("已设置屏幕超时: ${seconds}秒")
+        // 通过 Shizuku 写入系统设置（无需 WRITE_SETTINGS 权限）
+        val (_, code) = ShizukuManager.exec("settings put system screen_off_timeout ${seconds * 1000}")
+        return if (code == 0) {
+            SkillResult.success("已设置屏幕超时: ${seconds}秒")
+        } else {
+            SkillResult.error("设置屏幕超时失败")
+        }
     }
 
     // ========== 设置页跳转 ==========
@@ -406,12 +413,13 @@ class AndroidApiSkill(private val context: Context) : Skill {
             else -> return SkillResult.error("Unknown settings page: $page")
         }
 
-        val intent = Intent(intentAction).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
-        return try {
-            context.startActivity(intent)
+        if (!ShizukuManager.isReady) return SkillResult.error("Shizuku 未就绪，无法打开设置页")
+
+        val (output, code) = ShizukuManager.startActivityViaShell(intentAction)
+        return if (code == 0) {
             SkillResult.success("已打开设置页面: $page")
-        } catch (e: ActivityNotFoundException) {
-            SkillResult.error("未找到设置页面: $page")
+        } else {
+            SkillResult.error("打开设置页失败: $output")
         }
     }
 }

@@ -354,7 +354,7 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
     }
 
     /**
-     * Start foreground service keep-alive
+     * Start foreground service keep-alive + WorkManager watchdog
      */
     private fun startForegroundServiceKeepAlive() {
         try {
@@ -370,6 +370,14 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
             Log.w(TAG, "⚠️ 前台服务启动受限（应用在后台），将在下次回到前台时重试")
         } catch (e: Exception) {
             Log.e(TAG, "❌ 前台服务启动失败", e)
+        }
+
+        // WorkManager watchdog: 每 15 分钟检查服务是否存活
+        try {
+            KeepAliveWorker.schedule(this)
+            Log.i(TAG, "📅 KeepAliveWorker 看门狗已调度")
+        } catch (e: Exception) {
+            Log.w(TAG, "KeepAliveWorker 调度失败: ${e.message}")
         }
     }
 
@@ -1377,12 +1385,32 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                     senderId = event.senderId,
                     messageId = event.messageId
                 )
-                val systemPrompt = contextBuilder.buildSystemPrompt(
+                var systemPrompt = contextBuilder.buildSystemPrompt(
                     userGoal = event.content,
                     packageName = "",
                     testMode = "chat",
                     channelContext = channelCtx
                 )
+
+                // Multi-Agent Profile Routing
+                val multiAgentConfig = config.multiAgent
+                if (multiAgentConfig.enabled) {
+                    val router = com.xiaomo.androidforclaw.config.AgentProfileRouter(multiAgentConfig)
+                    val routeResult = router.route(event.content, event.senderId, event.chatId)
+                    if (routeResult.matched && routeResult.profile != null) {
+                        val profile = routeResult.profile
+                        Log.i(TAG, "🤖 Agent Profile selected: ${profile.name} (${routeResult.matchReason})")
+                        if (profile.systemPrompt != null) {
+                            systemPrompt = systemPrompt + "\n\n" + profile.systemPrompt
+                        }
+                        if (profile.model != null) {
+                            agentLoop.setModelRef(profile.model)
+                        }
+                        if (profile.apiKey != null) {
+                            agentLoop.apiKeyOverride = profile.apiKey
+                        }
+                    }
+                }
 
                 // ✅ Streaming Card: real-time card updates during agent processing
                 // Aligned with OpenClaw reply-dispatcher.ts + streaming-card.ts
@@ -2229,12 +2257,32 @@ class MyApplication : ai.openclaw.app.NodeApp(), Application.ActivityLifecycleCa
                 senderId = msg.fromUserId,
                 messageId = msg.messageId?.toString() ?: ""
             )
-            val systemPrompt = contextBuilder.buildSystemPrompt(
+            var systemPrompt = contextBuilder.buildSystemPrompt(
                 userGoal = agentContent,
                 packageName = "",
                 testMode = "chat",
                 channelContext = channelCtx
             )
+
+            // Multi-Agent Profile Routing
+            val wxConfig = configLoader.loadOpenClawConfigFresh().multiAgent
+            if (wxConfig.enabled) {
+                val router = com.xiaomo.androidforclaw.config.AgentProfileRouter(wxConfig)
+                val routeResult = router.route(agentContent, msg.fromUserId, msg.fromUserId)
+                if (routeResult.matched && routeResult.profile != null) {
+                    val profile = routeResult.profile
+                    Log.i(TAG, "🤖 [Weixin] Agent Profile selected: ${profile.name} (${routeResult.matchReason})")
+                    if (profile.systemPrompt != null) {
+                        systemPrompt = systemPrompt + "\n\n" + profile.systemPrompt
+                    }
+                    if (profile.model != null) {
+                        agentLoop.setModelRef(profile.model)
+                    }
+                    if (profile.apiKey != null) {
+                        agentLoop.apiKeyOverride = profile.apiKey
+                    }
+                }
+            }
 
             // Collect intermediate progress updates — WeChat does NOT send BlockReply
             // as separate messages to avoid duplicate-looking output.

@@ -30,6 +30,8 @@ interface ChannelAdapter {
     fun isGroupContext(): Boolean
     fun getUserMessage(): String
     fun getSessionKey(): String   // e.g. "telegram_${chatId}"
+    fun getSenderId(): String = ""   // sender's open_id / user_id for routing
+    fun getChatId(): String = ""     // chat/group ID for routing
 
     // --- System prompt ---
     fun buildSystemPrompt(): String

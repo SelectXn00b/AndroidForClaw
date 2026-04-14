@@ -17,6 +17,7 @@ import android.content.Context
 import android.content.Intent
 import com.xiaomo.androidforclaw.logging.Log
 import com.xiaomo.androidforclaw.accessibility.AccessibilityProxy
+import com.xiaomo.androidforclaw.accessibility.ShizukuManager
 import com.xiaomo.androidforclaw.workspace.StoragePaths
 import com.xiaomo.androidforclaw.agent.tools.Tool
 import com.xiaomo.androidforclaw.agent.tools.ToolResult
@@ -455,23 +456,20 @@ class DeviceTool(private val context: Context) : Tool {
         val packageName = args["package_name"] as? String
             ?: return ToolResult.error("Missing package_name")
 
-        return try {
-            val intent = context.packageManager.getLaunchIntentForPackage(packageName)
-            if (intent != null) {
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(intent)
-                val appName = try {
-                    context.packageManager.getApplicationLabel(
-                        context.packageManager.getApplicationInfo(packageName, 0)
-                    ).toString()
-                } catch (_: Exception) { packageName }
-                kotlinx.coroutines.delay(POST_OPEN_DELAY_MS)
-                ToolResult.success("Opened $appName ($packageName)")
-            } else {
-                ToolResult.error("App not found: $packageName")
-            }
-        } catch (e: Exception) {
-            ToolResult.error("Failed to open app: ${e.message}")
+        if (!ShizukuManager.isReady) return ToolResult.error("Shizuku 未就绪，无法打开应用")
+
+        val appName = try {
+            context.packageManager.getApplicationLabel(
+                context.packageManager.getApplicationInfo(packageName, 0)
+            ).toString()
+        } catch (_: Exception) { packageName }
+
+        val (output, code) = ShizukuManager.startAppViaShell(packageName)
+        return if (code == 0) {
+            delay(POST_OPEN_DELAY_MS)
+            ToolResult.success("Opened $appName ($packageName)")
+        } else {
+            ToolResult.error("Failed to open app: $output")
         }
     }
 

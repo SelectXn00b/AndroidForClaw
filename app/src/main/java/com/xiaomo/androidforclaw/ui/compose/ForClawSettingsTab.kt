@@ -286,6 +286,12 @@ fun ForClawSettingsTab() {
         // ── 配置 ─────────────────────────────────────────────────
         SettingsSection(stringResource(R.string.settings_section_config)) {
             SettingsNavItem(
+                icon = Icons.Default.SmartToy,
+                title = "Agent 配置",
+                subtitle = "管理独立 Agent（模型、Workspace 等）",
+                onClick = { context.startActivity(Intent(context, AgentConfigActivity::class.java)) }
+            )
+            SettingsNavItem(
                 icon = Icons.Default.Terminal,
                 title = stringResource(R.string.settings_termux),
                 subtitle = stringResource(R.string.settings_termux_desc),

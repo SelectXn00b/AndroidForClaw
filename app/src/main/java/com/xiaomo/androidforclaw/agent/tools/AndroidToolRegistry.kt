@@ -61,6 +61,9 @@ class AndroidToolRegistry(
         // === Android System API (直接调用系统 API，替代 UI 自动化) ===
         register(AndroidApiSkill(context))
 
+        // === Tasker bridge (通过 Tasker 操作手机 UI) ===
+        register(TaskerTool(context))
+
         // === App management tools ===
         register(ListInstalledAppsSkill(context))  // List apps
         register(InstallAppSkill(context))         // Install APK

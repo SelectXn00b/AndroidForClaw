@@ -37,9 +37,13 @@ data class OpenClawConfig(
     val modelAliases: Map<String, String> = emptyMap(),
     val modelAllowlist: ModelAllowlistConfig? = null,
 
+    // ======= Bindings（对齐 OpenClaw bindings）=======
+    val bindings: List<BindingEntry> = emptyList(),
+
     // ======= Android 扩展 =======
     val agent: AgentConfig = AgentConfig(),
     val rive: RiveConfig = RiveConfig(),
+    val multiAgent: MultiAgentConfig = MultiAgentConfig(),
 
     // ======= Legacy =======
     val providers: Map<String, ProviderConfig> = emptyMap()
@@ -303,7 +307,38 @@ data class GatewayControlUiConfig(
 // ============ agents（对齐 types.agents.d.ts）============
 
 data class AgentsConfig(
+    /** 多 agent 列表（对齐 OpenClaw agents.list） */
+    val list: List<AgentEntry>? = null,
     val defaults: AgentDefaultsConfig = AgentDefaultsConfig()
+)
+
+/**
+ * Agent 条目 — 对齐 OpenClaw agents.list[i]
+ */
+data class AgentEntry(
+    val id: String,
+    val name: String,
+    val agentDir: String? = null,
+    val model: ModelSelectionConfig? = null
+)
+
+/**
+ * Binding 条目 — 对齐 OpenClaw bindings[i]
+ */
+data class BindingEntry(
+    val agentId: String,
+    val match: BindingMatch
+)
+
+data class BindingMatch(
+    val channel: String,
+    val accountId: String,
+    val peer: BindingPeer? = null
+)
+
+data class BindingPeer(
+    val kind: String = "group",  // "group" or "dm"
+    val id: String? = null
 )
 
 data class AgentDefaultsConfig(
