@@ -50,5 +50,6 @@ include ':extensions:observer'
 include ':live2d-core'
 include ':live2d-framework'
 include ':self-control'
+include ':hermes-android'
 // 移除：新架构不再使用 LangChain4j
 // include ':langchain4j-android'

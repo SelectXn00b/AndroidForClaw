@@ -58,6 +58,19 @@ android {
         multiDexEnabled true
     }
 
+    flavorDimensions "edition"
+    productFlavors {
+        standard {
+            dimension "edition"
+            // 默认，不改包名
+        }
+        hermes {
+            dimension "edition"
+            applicationIdSuffix ".hermes"
+            resValue "string", "app_name", "HermesClaw"
+        }
+    }
+
     testOptions {
         unitTests.returnDefaultValues = true
     }
@@ -152,7 +165,9 @@ android {
             def outputFile = output.outputFile
             if (outputFile != null && outputFile.name.endsWith('.apk')) {
                 // 生成文件名: AndroidForClaw-v1.0.0-release.apk
-                def fileName = "AndroidForClaw-v${defaultConfig.versionName}-${variant.buildType.name}.apk"
+                def flavorName = variant.flavorName ?: "standard"
+                def baseName = flavorName == "hermes" ? "HermesForClaw" : "AndroidForClaw"
+                def fileName = "${baseName}-v${defaultConfig.versionName}-${variant.buildType.name}.apk"
 
                 // 输出到项目根目录的 releases/
                 def releasesDir = project.rootProject.file("releases")
