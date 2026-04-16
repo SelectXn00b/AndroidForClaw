@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- App基本信息 -->
-    <string name="app_name">小龙虾</string>
+    <string name="app_name">Hermes</string>
 
     <!-- Shell命令相关 -->
     <string name="command_hint">Shell 命令</string>

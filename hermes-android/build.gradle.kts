@@ -8,7 +8,7 @@ plugins {
 }
 
 android {
-    namespace = "com.xiaomo.androidforclaw.hermes"
+    namespace = "com.xiaomo.hermes.hermes"
     compileSdk = 36
 
     defaultConfig {

@@ -1072,6 +1072,7 @@ class NodeRuntime(
   }
 
   private fun handleGatewayEvent(event: String, payloadJson: String?) {
+    android.util.Log.d("NodeRuntime", "handleGatewayEvent: event=$event, payload=${payloadJson?.take(100)}")
     micCapture.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)

@@ -6,7 +6,7 @@
         <!-- ContentProvider: 通过 content:// URI 调用 -->
         <provider
             android:name=".SelfControlProvider"
-            android:authorities="com.xiaomo.androidforclaw.selfcontrol"
+            android:authorities="com.xiaomo.hermes.selfcontrol"
             android:exported="true"
             android:enabled="true" />
 
@@ -16,7 +16,7 @@
             android:exported="true"
             android:enabled="true">
             <intent-filter>
-                <action android:name="com.xiaomo.androidforclaw.SELF_CONTROL" />
+                <action android:name="com.xiaomo.hermes.SELF_CONTROL" />
             </intent-filter>
         </receiver>
 

@@ -40,7 +40,7 @@
     </queries>
 
     <application
-        android:name="com.xiaomo.androidforclaw.core.MyApplication"
+        android:name="com.xiaomo.hermes.core.MyApplication"
         android:banner="@drawable/banner"
         android:extractNativeLibs="true"
         android:icon="@mipmap/ic_launcher"
@@ -57,7 +57,7 @@
 
         <!-- 主页 - 状态展示 (旧版，已废弃) -->
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.MainActivity"
+            android:name="com.xiaomo.hermes.ui.activity.MainActivity"
             android:exported="false"
             android:label="PhoneClaw Debug (Legacy)"
             android:theme="@style/Theme.PhoneClaw"
@@ -65,31 +65,31 @@
 
         <!-- 配置页面 -->
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.ConfigActivity"
+            android:name="com.xiaomo.hermes.ui.activity.ConfigActivity"
             android:exported="false"
             android:theme="@style/Theme.PhoneClaw" />
 
         <!-- Skills 管理页面 -->
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.SkillsActivity"
+            android:name="com.xiaomo.hermes.ui.activity.SkillsActivity"
             android:exported="false"
             android:theme="@style/Theme.PhoneClaw" />
 
         <!-- Agent 测试页面 -->
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.AgentTestActivity"
+            android:name="com.xiaomo.hermes.ui.activity.AgentTestActivity"
             android:exported="false"
             android:theme="@style/Theme.PhoneClaw" />
 
         <!-- 权限管理页面 -->
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.PermissionsActivity"
+            android:name="com.xiaomo.hermes.ui.activity.PermissionsActivity"
             android:exported="true"
             android:theme="@style/Theme.PhoneClaw" />
 
         <!-- QuickJS 测试页面 -->
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.QuickJSTestActivity"
+            android:name="com.xiaomo.hermes.ui.activity.QuickJSTestActivity"
             android:exported="true"
             android:label="QuickJS Test"
             android:theme="@style/Theme.PhoneClaw">
@@ -101,7 +101,7 @@
 
         <!-- 前台服务（保活） -->
         <service
-            android:name="com.xiaomo.androidforclaw.core.ForegroundService"
+            android:name="com.xiaomo.hermes.core.ForegroundService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="dataSync|mediaProjection"
@@ -109,7 +109,7 @@
 
         <!-- ADB输入法服务 -->
         <service
-            android:name="com.xiaomo.androidforclaw.service.AdbIME"
+            android:name="com.xiaomo.hermes.service.AdbIME"
             android:exported="false"
             android:permission="android.permission.BIND_INPUT_METHOD"
             tools:replace="android:exported">
@@ -125,30 +125,30 @@
             
 
         <!-- AI测试Activity -->
-        <activity android:name="com.xiaomo.androidforclaw.ui.activity.AITestActivity"
+        <activity android:name="com.xiaomo.hermes.ui.activity.AITestActivity"
             android:exported="false"
             android:theme="@style/Theme.PhoneClaw" />
         
         <!-- Web服务 -->
         <service
-            android:name="com.xiaomo.androidforclaw.service.WebService"
+            android:name="com.xiaomo.hermes.service.WebService"
             android:enabled="true"
             android:exported="false"
             tools:replace="android:exported" />
 
         <!-- Agent 消息接收器 -->
         <receiver
-            android:name="com.xiaomo.androidforclaw.core.AgentMessageReceiver"
+            android:name="com.xiaomo.hermes.core.AgentMessageReceiver"
             android:exported="true"
             android:enabled="true">
             <intent-filter>
-                <action android:name="com.xiaomo.androidforclaw.ACTION_EXECUTE_AGENT" />
+                <action android:name="com.xiaomo.hermes.ACTION_EXECUTE_AGENT" />
             </intent-filter>
         </receiver>
 
         <!-- 文件提供者 -->
         <provider
-            android:name="com.xiaomo.androidforclaw.ClawFileProvider"
+            android:name="com.xiaomo.hermes.ClawFileProvider"
             android:authorities="${applicationId}.provider"
             android:exported="false"
             android:grantUriPermissions="true">

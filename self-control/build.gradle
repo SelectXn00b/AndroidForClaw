@@ -29,7 +29,7 @@ android {
         jvmTarget = '17'
     }
 
-    namespace 'com.xiaomo.androidforclaw.selfcontrol'
+    namespace 'com.xiaomo.hermes.selfcontrol'
 }
 
 dependencies {

@@ -40,7 +40,7 @@ android {
         disable 'ProtectedPermissions'
     }
 
-    namespace 'com.xiaomo.androidforclaw.accessibility'
+    namespace 'com.xiaomo.hermes.accessibility'
 }
 
 dependencies {

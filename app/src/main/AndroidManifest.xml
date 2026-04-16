@@ -63,11 +63,11 @@
     <!-- Queries for specific apps can be added here if needed -->
     <queries>
         <!-- Example: <package android:name="com.android.settings" /> -->
-        <package android:name="com.xiaomo.androidforclaw.accessibility" />
+        <package android:name="com.xiaomo.hermes.accessibility" />
     </queries>
 
     <application
-        android:name="com.xiaomo.androidforclaw.core.MyApplication"
+        android:name="com.xiaomo.hermes.core.MyApplication"
         android:allowBackup="false"
         android:banner="@drawable/banner"
         android:extractNativeLibs="true"
@@ -80,7 +80,7 @@
         android:theme="@style/Theme.PhoneClaw">
         <!-- 主页 - Compose版本 -->
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.MainActivityCompose"
+            android:name="com.xiaomo.hermes.ui.activity.MainActivityCompose"
             android:exported="true"
             android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustNothing"
@@ -94,119 +94,119 @@
 
         <!-- 模型配置引导页（首次启动） -->
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.ModelSetupActivity"
+            android:name="com.xiaomo.hermes.ui.activity.ModelSetupActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.PhoneClaw" />
 
         <!-- 模型配置页面（两页式） -->
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.ModelConfigActivity"
+            android:name="com.xiaomo.hermes.ui.activity.ModelConfigActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.PhoneClaw" />
 
         <!-- Skills 管理页面 -->
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.SkillsActivity"
+            android:name="com.xiaomo.hermes.ui.activity.SkillsActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.PhoneClaw" />
 
         <!-- 权限管理页面 -->
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.PermissionsActivity"
+            android:name="com.xiaomo.hermes.ui.activity.PermissionsActivity"
             android:exported="true"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.PhoneClaw" />
 
         <!-- 相机权限请求（透明 Activity，CameraSkill 调用时弹出） -->
         <activity
-            android:name="com.xiaomo.androidforclaw.camera.CameraPermissionActivity"
+            android:name="com.xiaomo.hermes.camera.CameraPermissionActivity"
             android:exported="false"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <!-- Channel 列表页面 -->
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.ChannelListActivity"
+            android:name="com.xiaomo.hermes.ui.activity.ChannelListActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.PhoneClaw" />
 
         <!-- Feishu Channel 配置页面 -->
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.FeishuChannelActivity"
+            android:name="com.xiaomo.hermes.ui.activity.FeishuChannelActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.PhoneClaw" />
 
         <!-- Agent 配置页面（独立 Agent 管理） -->
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.AgentConfigActivity"
+            android:name="com.xiaomo.hermes.ui.activity.AgentConfigActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.PhoneClaw" />
 
         <!-- MCP Server 配置页面（给外部 Agent 用，与 AndroidForClaw 自身无关） -->
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.McpConfigActivity"
+            android:name="com.xiaomo.hermes.ui.activity.McpConfigActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.PhoneClaw" />
 
         <!-- Discord Channel 配置页面 -->
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.DiscordChannelActivity"
+            android:name="com.xiaomo.hermes.ui.activity.DiscordChannelActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.PhoneClaw" />
 
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.TelegramChannelActivity"
+            android:name="com.xiaomo.hermes.ui.activity.TelegramChannelActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.PhoneClaw" />
 
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.SlackChannelActivity"
+            android:name="com.xiaomo.hermes.ui.activity.SlackChannelActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.PhoneClaw" />
 
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.SignalChannelActivity"
+            android:name="com.xiaomo.hermes.ui.activity.SignalChannelActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.PhoneClaw" />
 
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.TermuxSetupActivity"
+            android:name="com.xiaomo.hermes.ui.activity.TermuxSetupActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.PhoneClaw" />
 
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.WhatsAppChannelActivity"
+            android:name="com.xiaomo.hermes.ui.activity.WhatsAppChannelActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.PhoneClaw" />
 
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.WeixinChannelActivity"
+            android:name="com.xiaomo.hermes.ui.activity.WeixinChannelActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.PhoneClaw" />
 
         <!-- Canvas (WebView) -->
         <activity
-            android:name="com.xiaomo.androidforclaw.canvas.CanvasActivity"
+            android:name="com.xiaomo.hermes.canvas.CanvasActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:theme="@style/Theme.PhoneClaw" />
 
         <!-- 法律条款页面 -->
         <activity
-            android:name="com.xiaomo.androidforclaw.ui.activity.LegalActivity"
+            android:name="com.xiaomo.hermes.ui.activity.LegalActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.PhoneClaw" />
@@ -214,7 +214,7 @@
 
         <!-- 前台服务（保活） -->
         <service
-            android:name="com.xiaomo.androidforclaw.core.ForegroundService"
+            android:name="com.xiaomo.hermes.core.ForegroundService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
@@ -249,7 +249,7 @@
 
         <!-- 观察能力(UI Tree + Screenshot)已移至独立模块 extensions/observer --> <!-- ADB输入法服务 - 系统级权限 -->
         <service
-            android:name="com.xiaomo.androidforclaw.service.ClawIME"
+            android:name="com.xiaomo.hermes.service.ClawIME"
             android:exported="true"
             android:permission="android.permission.BIND_INPUT_METHOD">
             <intent-filter>
@@ -263,7 +263,7 @@
 
         <!-- 文件提供者 - 系统级权限 -->
         <provider
-            android:name="com.xiaomo.androidforclaw.ClawFileProvider"
+            android:name="com.xiaomo.hermes.ClawFileProvider"
             android:authorities="${applicationId}.provider"
             android:exported="false"
             android:grantUriPermissions="true">
@@ -274,22 +274,22 @@
 
         <!-- APK安装结果广播接收器 -->
         <receiver
-            android:name="com.xiaomo.androidforclaw.util.InstallManager$InstallResultBroadcastReceiver"
+            android:name="com.xiaomo.hermes.util.InstallManager$InstallResultBroadcastReceiver"
             android:enabled="true"
             android:exported="true"
             tools:ignore="Instantiatable" />
         <!-- Agent消息广播接收器 -->
         <receiver
-            android:name="com.xiaomo.androidforclaw.core.AgentMessageReceiver"
+            android:name="com.xiaomo.hermes.core.AgentMessageReceiver"
             android:enabled="true"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.xiaomo.androidforclaw.ACTION_EXECUTE_AGENT" />
+                <action android:name="com.xiaomo.hermes.ACTION_EXECUTE_AGENT" />
             </intent-filter>
         </receiver>
         <!-- Chat消息广播接收器 (用于ADB测试) -->
         <receiver
-            android:name="com.xiaomo.androidforclaw.util.ChatBroadcastReceiver"
+            android:name="com.xiaomo.hermes.util.ChatBroadcastReceiver"
             android:enabled="true"
             android:exported="true">
             <intent-filter>

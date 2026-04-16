@@ -1,0 +1,270 @@
+/**
+ * OpenClaw Source Reference:
+ * - ../openclaw/src/gateway/server-chat.ts
+ */
+package com.xiaomo.hermes.gateway
+
+// ⚠️ DEPRECATED (2026-04-16): This file is deprecated by 方案A.
+// Chat UI now connects directly to hermes GatewayRunner via AppChatAdapter.
+// This file will be removed once migration is complete.
+
+import android.app.Application
+import com.xiaomo.hermes.logging.Log
+import com.xiaomo.hermes.agent.context.ContextBuilder
+import com.xiaomo.hermes.config.ConfigLoader
+import com.xiaomo.hermes.agent.loop.AgentLoop
+import com.xiaomo.hermes.agent.loop.ProgressUpdate
+import com.xiaomo.hermes.autoreply.isSilentReplyText
+import com.xiaomo.hermes.autoreply.stripSilentToken
+import com.xiaomo.hermes.providers.UnifiedLLMProvider
+import com.xiaomo.hermes.agent.tools.AndroidToolRegistry
+import com.xiaomo.hermes.agent.tools.ToolRegistry
+import com.xiaomo.hermes.data.model.TaskDataManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+
+/**
+ * AgentHandler implementation - connects GatewayService and AgentLoop
+ *
+ * Responsibilities:
+ * 1. Receive Gateway RPC requests
+ * 2. Call AgentLoop to execute tasks
+ * 3. Send back progress and results
+ */
+class MainEntryAgentHandler(
+    private val application: Application
+) : AgentHandler {
+
+    companion object {
+        private const val TAG = "MainEntryAgentHandler"
+    }
+
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val taskDataManager: TaskDataManager = TaskDataManager.getInstance()
+
+    // Core components - use unified LLM Provider
+    private val llmProvider: UnifiedLLMProvider by lazy {
+        UnifiedLLMProvider(application)
+    }
+
+    private val toolRegistry: ToolRegistry by lazy {
+        ToolRegistry(
+            context = application,
+            taskDataManager = taskDataManager
+        )
+    }
+
+    private val androidToolRegistry: AndroidToolRegistry by lazy {
+        AndroidToolRegistry(
+            context = application,
+            taskDataManager = taskDataManager,
+            cameraCaptureManager = com.xiaomo.hermes.core.MyApplication.getCameraCaptureManager(),
+        )
+    }
+
+    private val contextBuilder: ContextBuilder by lazy {
+        ContextBuilder(
+            context = application,
+            toolRegistry = toolRegistry,
+            androidToolRegistry = androidToolRegistry
+        )
+    }
+
+    override fun executeAgent(
+        sessionId: String,
+        userMessage: String,
+        systemPrompt: String?,
+        tools: List<Any>?,
+        maxIterations: Int,
+        progressCallback: (Map<String, Any>) -> Unit,
+        completeCallback: (Map<String, Any>) -> Unit
+    ) {
+        Log.d(TAG, "executeAgent called: session=$sessionId, message=$userMessage")
+
+        scope.launch {
+            try {
+                // 1. Build system prompt (if not provided)
+                val finalSystemPrompt = systemPrompt ?: contextBuilder.buildSystemPrompt(
+                    userGoal = userMessage,
+                    packageName = "",
+                    testMode = "exploration"
+                )
+
+                Log.d(TAG, "System prompt ready (${finalSystemPrompt.length} chars)")
+
+                // 2. Create AgentLoop (with context management + binding-based model resolution)
+                val configLoader = ConfigLoader(application)
+                val agentModelRef = configLoader.resolveAgentModelRef(
+                    channel = "gateway",
+                    accountId = ""
+                )
+                Log.d(TAG, "Agent modelRef: ${agentModelRef ?: "default"}")
+
+                val contextManager = com.xiaomo.hermes.agent.context.ContextManager(llmProvider)
+                val agentLoop = AgentLoop(
+                    llmProvider = llmProvider,
+                    toolRegistry = toolRegistry,
+                    androidToolRegistry = androidToolRegistry,
+                    contextManager = contextManager,
+                    maxIterations = maxIterations,
+                    modelRef = agentModelRef
+                )
+
+                // 3. Listen to progress
+                val progressJob = launch {
+                    agentLoop.progressFlow.collect { update ->
+                        val progressData = convertProgressToMap(update)
+                        progressCallback(progressData)
+                    }
+                }
+
+                // 4. Execute Agent
+                Log.d(TAG, "Starting AgentLoop execution...")
+                val result = agentLoop.run(
+                    systemPrompt = finalSystemPrompt,
+                    userMessage = userMessage,
+                    reasoningEnabled = true  // Enable reasoning by default
+                )
+
+                Log.d(TAG, "AgentLoop completed: ${result.iterations} iterations")
+
+                // 5. Process reply — detect and handle silent tokens
+                val rawContent = result.finalContent
+                val isSilent = isSilentReplyText(rawContent)
+                val cleanedContent = if (!isSilent) {
+                    stripSilentToken(rawContent)
+                } else {
+                    rawContent
+                }
+
+                if (isSilent) {
+                    Log.d(TAG, "Silent reply detected (NO_REPLY), suppressing content")
+                }
+
+                // 6. Return result
+                val resultMap = mutableMapOf<String, Any>(
+                    "success" to true,
+                    "iterations" to result.iterations,
+                    "toolsUsed" to result.toolsUsed,
+                    "sessionId" to sessionId,
+                    "isSilentReply" to isSilent
+                )
+                if (!isSilent) {
+                    resultMap["finalContent"] = cleanedContent
+                }
+                completeCallback(resultMap)
+
+                progressJob.cancel()
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Agent execution failed", e)
+                completeCallback(mapOf(
+                    "success" to false,
+                    "error" to (e.message ?: "Unknown error"),
+                    "sessionId" to sessionId
+                ))
+            }
+        }
+    }
+
+    /**
+     * Convert ProgressUpdate to Map (for JSON serialization)
+     */
+    private fun convertProgressToMap(update: ProgressUpdate): Map<String, Any> {
+        return when (update) {
+            is ProgressUpdate.Iteration -> mapOf(
+                "type" to "iteration",
+                "number" to update.number
+            )
+
+            is ProgressUpdate.Thinking -> mapOf(
+                "type" to "thinking",
+                "iteration" to update.iteration
+            )
+
+            is ProgressUpdate.Reasoning -> mapOf(
+                "type" to "reasoning",
+                "content" to update.content,
+                "duration" to update.llmDuration
+            )
+
+            is ProgressUpdate.ToolCall -> mapOf(
+                "type" to "tool_call",
+                "name" to update.name,
+                "arguments" to update.arguments
+            )
+
+            is ProgressUpdate.ToolResult -> mapOf(
+                "type" to "tool_result",
+                "result" to update.result,
+                "duration" to update.execDuration
+            )
+
+            is ProgressUpdate.IterationComplete -> mapOf(
+                "type" to "iteration_complete",
+                "number" to update.number,
+                "iterationDuration" to update.iterationDuration,
+                "llmDuration" to update.llmDuration,
+                "execDuration" to update.execDuration
+            )
+
+            is ProgressUpdate.ContextOverflow -> mapOf(
+                "type" to "context_overflow",
+                "message" to update.message
+            )
+
+            is ProgressUpdate.ContextRecovered -> mapOf(
+                "type" to "context_recovered",
+                "strategy" to update.strategy,
+                "attempt" to update.attempt
+            )
+
+            is ProgressUpdate.LoopDetected -> mapOf(
+                "type" to "loop_detected",
+                "detector" to update.detector,
+                "count" to update.count,
+                "message" to update.message,
+                "critical" to update.critical
+            )
+
+            is ProgressUpdate.Error -> mapOf(
+                "type" to "error",
+                "message" to update.message
+            )
+            is ProgressUpdate.BlockReply -> mapOf(
+                "type" to "block_reply",
+                "text" to update.text,
+                "iteration" to update.iteration
+            )
+            is ProgressUpdate.SteerMessageInjected -> mapOf(
+                "type" to "steer_message_injected",
+                "content" to update.content
+            )
+            is ProgressUpdate.SubagentSpawned -> mapOf(
+                "type" to "subagent_spawned",
+                "runId" to update.runId,
+                "label" to update.label,
+                "childSessionKey" to update.childSessionKey
+            )
+            is ProgressUpdate.SubagentAnnounced -> mapOf(
+                "type" to "subagent_announced",
+                "runId" to update.runId,
+                "label" to update.label,
+                "status" to update.status
+            )
+            is ProgressUpdate.Yielded -> mapOf(
+                "type" to "yielded"
+            )
+            is ProgressUpdate.ReasoningDelta -> mapOf(
+                "type" to "reasoning_delta",
+                "text" to update.text
+            )
+            is ProgressUpdate.ContentDelta -> mapOf(
+                "type" to "content_delta",
+                "text" to update.text
+            )
+        }
+    }
+}

@@ -42,7 +42,7 @@ android {
     compileSdk 36
 
     defaultConfig {
-        applicationId "com.xiaomo.androidforclaw"
+        applicationId "com.xiaomo.hermes"
         minSdk 26
         targetSdk 36
         versionCode 31
@@ -66,8 +66,8 @@ android {
         }
         hermes {
             dimension "edition"
-            applicationIdSuffix ".hermes"
-            resValue "string", "app_name", "HermesClaw"
+            // 基础包名已是 com.xiaomo.hermes，不再需要 suffix
+            resValue "string", "app_name", "Hermes"
         }
     }
 
@@ -157,16 +157,15 @@ android {
         buildConfig true
     }
 
-    namespace 'com.xiaomo.androidforclaw'
+    namespace 'com.xiaomo.hermes'
 
     // 配置 APK 输出路径到根目录的 releases/
     applicationVariants.all { variant ->
         variant.outputs.all { output ->
             def outputFile = output.outputFile
             if (outputFile != null && outputFile.name.endsWith('.apk')) {
-                // 生成文件名: AndroidForClaw-v1.0.0-release.apk
-                def flavorName = variant.flavorName ?: "standard"
-                def baseName = flavorName == "hermes" ? "HermesForClaw" : "AndroidForClaw"
+                // 生成文件名: Hermes-v1.0.0-release.apk
+                def baseName = "Hermes"
                 def fileName = "${baseName}-v${defaultConfig.versionName}-${variant.buildType.name}.apk"
 
                 // 输出到项目根目录的 releases/

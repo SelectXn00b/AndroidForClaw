@@ -14,7 +14,7 @@ package com.xiaomo.feishu.tools.doc
  * 运行方式（通过 ADB）：
  * ```
  * adb shell am instrument -w -e class com.xiaomo.feishu.tools.doc.DocCreateE2ETest \
- *   com.xiaomo.androidforclaw.test/androidx.test.runner.AndroidJUnitRunner
+ *   com.xiaomo.hermes.test/androidx.test.runner.AndroidJUnitRunner
  * ```
  *
  * 或通过 GatewayServer HTTP 接口触发（需要在 app 中注册）。
@@ -44,7 +44,7 @@ class DocCreateE2ETest {
     private fun loadFeishuConfig(): FeishuConfig? {
         return try {
             // 尝试从设备上的配置文件读取
-            val configFile = File("/data/data/com.xiaomo.androidforclaw/files/openclaw/openclaw.json")
+            val configFile = File("/data/data/com.xiaomo.hermes/files/openclaw/openclaw.json")
             if (!configFile.exists()) {
                 Log.e(TAG, "Config file not found: ${configFile.absolutePath}")
                 return null
