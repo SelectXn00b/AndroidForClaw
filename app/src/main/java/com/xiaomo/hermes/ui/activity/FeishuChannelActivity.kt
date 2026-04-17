@@ -82,8 +82,8 @@ fun FeishuChannelScreen(
                                     val config = configLoader.loadOpenClawConfig()
                                     val updatedFeishu = config.channels.feishu.copy(
                                         enabled = enabled,
-                                        appId = appId,
-                                        appSecret = appSecret,
+                                        appId = appId.trim(),
+                                        appSecret = appSecret.trim(),
                                         dmPolicy = dmPolicy,
                                         groupPolicy = groupPolicy,
                                         requireMention = requireMention
