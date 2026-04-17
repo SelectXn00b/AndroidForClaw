@@ -38,7 +38,7 @@ class FirstInstallChatE2ETest {
         private const val PACKAGE_NAME = "com.xiaomo.hermes"
         private const val TIMEOUT = 15_000L
         private const val RESPONSE_TIMEOUT = 45_000L
-        private const val TEST_PROMPT = "请只回复：ANDROIDFORCLAW_TEST_OK"
+        private const val TEST_PROMPT = "请只回复：HERMES_TEST_OK"
         private val ERROR_KEYWORDS = listOf(
             "Provider not found",
             "LLM request failed",
@@ -71,7 +71,7 @@ class FirstInstallChatE2ETest {
 
         assertTrue(
             "Assistant reply should contain success marker. Actual: $assistantReply",
-            assistantReply.contains("ANDROIDFORCLAW_TEST_OK", ignoreCase = true)
+            assistantReply.contains("HERMES_TEST_OK", ignoreCase = true)
         )
     }
 
@@ -87,7 +87,7 @@ class FirstInstallChatE2ETest {
 
         assertTrue(
             "Assistant reply should contain success marker after skip flow. Actual: $assistantReply",
-            assistantReply.contains("ANDROIDFORCLAW_TEST_OK", ignoreCase = true)
+            assistantReply.contains("HERMES_TEST_OK", ignoreCase = true)
         )
     }
 
@@ -95,7 +95,7 @@ class FirstInstallChatE2ETest {
         val mmkv = MMKV.defaultMMKV()
         mmkv.encode("model_setup_completed", false)
 
-        val configFile = File("/sdcard/.androidforclaw/openclaw.json")
+        val configFile = File("/sdcard/.hermes/openclaw.json")
         if (configFile.exists()) {
             configFile.delete()
         }
@@ -161,7 +161,7 @@ class FirstInstallChatE2ETest {
                 throw AssertionError("Chat returned error keyword '$matchedError' instead of success. Full text:\n$joined")
             }
 
-            val successLine = allText.lastOrNull { it.contains("ANDROIDFORCLAW_TEST_OK", ignoreCase = true) }
+            val successLine = allText.lastOrNull { it.contains("HERMES_TEST_OK", ignoreCase = true) }
             if (successLine != null) {
                 return successLine
             }

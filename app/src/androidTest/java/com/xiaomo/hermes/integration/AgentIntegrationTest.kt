@@ -50,7 +50,7 @@ class AgentIntegrationTest {
     }
 
     private fun setupTestConfig() {
-        val configDir = java.io.File("/sdcard/.androidforclaw/config")
+        val configDir = java.io.File("/sdcard/.hermes/config")
         if (!configDir.exists()) {
             configDir.mkdirs()
         }
@@ -62,7 +62,7 @@ class AgentIntegrationTest {
                 {
                     "version": "1.0.0",
                     "agent": {
-                        "name": "androidforclaw-test",
+                        "name": "hermes-test",
                         "maxIterations": 20
                     },
                     "thinking": {
@@ -242,7 +242,7 @@ class AgentIntegrationTest {
 
     @Test
     fun testWorkspace_directoryExists() {
-        val workspaceDir = java.io.File("/sdcard/.androidforclaw/workspace")
+        val workspaceDir = java.io.File("/sdcard/.hermes/workspace")
 
         if (!workspaceDir.exists()) {
             workspaceDir.mkdirs()
@@ -255,7 +255,7 @@ class AgentIntegrationTest {
 
     @Test
     fun testWorkspace_skillsDirectoryExists() {
-        val skillsDir = java.io.File("/sdcard/.androidforclaw/workspace/skills")
+        val skillsDir = java.io.File("/sdcard/.hermes/workspace/skills")
 
         if (!skillsDir.exists()) {
             skillsDir.mkdirs()
@@ -266,7 +266,7 @@ class AgentIntegrationTest {
 
     @Test
     fun testWorkspace_canCreateFile() {
-        val testFile = java.io.File("/sdcard/.androidforclaw/workspace/integration_test.txt")
+        val testFile = java.io.File("/sdcard/.hermes/workspace/integration_test.txt")
 
         try {
             testFile.writeText("Integration test content")

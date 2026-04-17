@@ -46,7 +46,7 @@ class MemoryIndexTest {
         memoryIndex = MemoryIndex(context, embeddingProvider = null)
 
         // Create test files
-        testDir = File("/sdcard/.androidforclaw/workspace/test_memory")
+        testDir = File("/sdcard/.hermes/workspace/test_memory")
         testDir.mkdirs()
     }
 

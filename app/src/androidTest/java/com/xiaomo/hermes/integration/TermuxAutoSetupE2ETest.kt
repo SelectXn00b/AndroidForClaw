@@ -91,7 +91,7 @@ class TermuxAutoSetupE2ETest {
     fun test04_statusPersistence_fileWritten() {
         bridge.getStatus()
 
-        val statusFile = java.io.File("/sdcard/.androidforclaw/termux_setup_status.json")
+        val statusFile = java.io.File("/sdcard/.hermes/termux_setup_status.json")
         if (statusFile.exists()) {
             val content = statusFile.readText()
             Log.i(TAG, "Status file content: $content")

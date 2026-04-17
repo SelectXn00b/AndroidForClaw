@@ -224,7 +224,7 @@ class AgentLoopE2ETest {
     fun test01_fileOps_createAndRead() {
         val report = runAgentWithCollection(
             testName = "文件操作: 创建并读取文件",
-            userMessage = "在 /sdcard/.androidforclaw/workspace/test_e2e.txt 中写入 'hello openclaw'，然后读取这个文件，告诉我文件内容"
+            userMessage = "在 /sdcard/.hermes/workspace/test_e2e.txt 中写入 'hello hermes'，然后读取这个文件，告诉我文件内容"
         )
         report.print()
 
@@ -249,7 +249,7 @@ class AgentLoopE2ETest {
         // exec tool may hang in instrument environment; use write_file as alternative shell test
         val report = runAgentWithCollection(
             testName = "Shell: 执行命令（via write_file fallback）",
-            userMessage = "用 write_file 在 /sdcard/.androidforclaw/workspace/exec_test.txt 写入当前时间戳 '20260315'，然后读取确认"
+            userMessage = "用 write_file 在 /sdcard/.hermes/workspace/exec_test.txt 写入当前时间戳 '20260315'，然后读取确认"
         )
         report.print()
 
@@ -406,7 +406,7 @@ class AgentLoopE2ETest {
         // exec may hang in instrument env; test multi-step with file ops only
         val report = runAgentWithCollection(
             testName = "组合: 多步文件操作",
-            userMessage = "创建文件 /sdcard/.androidforclaw/workspace/step1.txt 内容为 'hello'，再创建 step2.txt 内容为 'world'，然后读取两个文件告诉我内容"
+            userMessage = "创建文件 /sdcard/.hermes/workspace/step1.txt 内容为 'hello'，再创建 step2.txt 内容为 'world'，然后读取两个文件告诉我内容"
         )
         report.print()
 
@@ -516,7 +516,7 @@ class AgentLoopE2ETest {
     fun test14_errorRecovery_fileNotFound() {
         val report = runAgentWithCollection(
             testName = "错误恢复: 文件不存在",
-            userMessage = "读取文件 /sdcard/.androidforclaw/workspace/nonexistent_12345.txt，告诉我结果"
+            userMessage = "读取文件 /sdcard/.hermes/workspace/nonexistent_12345.txt，告诉我结果"
         )
         report.print()
 

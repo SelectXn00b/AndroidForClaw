@@ -16,10 +16,10 @@ import org.junit.runner.RunWith
 import org.junit.runners.MethodSorters
 
 /**
- * ForClaw 主界面 UI 主线测试
+ * Hermes 主界面 UI 主线测试
  *
  * 关键路径:
- * 1. Settings tab 显示 ForClaw 卡片（LLM API / Gateway / Channels / Skills / Permissions）
+ * 1. Settings tab 显示 Hermes 卡片（LLM API / Gateway / Channels / Skills / Permissions）
  * 2. Settings tab 显示模型配置等设置项；模型配置可跳转
  *
  * 底部导航: Chat | Voice | Screen | Settings
@@ -102,13 +102,13 @@ class ForClawMainTabsUITest {
 
     // ── Tests ────────────────────────────────────────────────────────────
 
-    /** Settings tab 显示 ForClaw 连接卡片 (LLM API / Local Gateway / Channels / Skills) */
+    /** Settings tab 显示 Hermes 连接卡片 (LLM API / Local Gateway / Channels / Skills) */
     @Test
     fun test01_settingsTab_connectionCards() {
         val settingsLabel = res.getString(OpenClawR.string.tab_settings)
         clickTab(settingsLabel)
 
-        // Verify connection status cards from ForClawSettingsTab
+        // Verify connection status cards from HermesSettingsTab
         val llmLabel = res.getString(R.string.connect_llm_api)
         val gatewayLabel = res.getString(R.string.connect_local_gateway)
         val channelsLabel = res.getString(R.string.connect_channels)
