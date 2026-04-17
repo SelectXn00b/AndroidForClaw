@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ForClaw 隐私政策</title>
+    <title>隐私政策 - ForClaw Privacy Policy</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -20,72 +20,202 @@
         .date { color: #666; font-size: 14px; margin-bottom: 24px; }
         ul { margin: 8px 0 16px 20px; }
         li { margin-bottom: 6px; font-size: 15px; }
+        .lang-switch {
+            position: absolute; top: 12px; right: 12px;
+            background: #f0f0f0; border: 1px solid #ddd; border-radius: 6px;
+            padding: 4px 12px; font-size: 13px; color: #555; cursor: pointer;
+            transition: background 0.2s;
+        }
+        .lang-switch:hover { background: #e0e0e0; }
+        .container { position: relative; }
+        [lang="en"] { display: none; }
     </style>
 </head>
 <body>
 <div class="container">
-    <h1>ForClaw 隐私政策</h1>
-    <p class="date">最后更新日期：2025年3月22日</p>
+    <button class="lang-switch" onclick="toggleLang()">English</button>
 
-    <h2>一、概述</h2>
-    <p>ForClaw（以下简称"本应用"）是一款 AI Agent 运行时工具，运行在 Android 设备上。我们非常重视您的隐私保护。本隐私政策旨在帮助您了解我们如何收集、使用和保护您的信息。</p>
+    <!-- Chinese -->
+    <div lang="zh">
+        <h1>ForClaw 隐私政策</h1>
+        <p class="date">最后更新日期：2026年4月16日</p>
 
-    <h2>二、信息收集与使用</h2>
-    <p>本应用在运行过程中可能涉及以下数据：</p>
-    <ul>
-        <li><strong>AI 对话数据：</strong>您与 AI 助手的对话内容仅存储在您的设备本地，不会上传至我们的服务器。对话内容会发送至您配置的第三方 AI 服务提供商（如 OpenAI、Anthropic 等）以获取 AI 回复。</li>
-        <li><strong>设备信息：</strong>为提供无障碍辅助功能，本应用可能读取屏幕内容和应用信息。这些数据仅在设备本地处理，不会上传。</li>
-        <li><strong>网络通信：</strong>本应用需要网络连接以调用 AI API 服务。网络请求仅包含您主动发送的对话内容和必要的 API 认证信息。</li>
-        <li><strong>文件访问：</strong>本应用可能读写设备存储中的配置文件和会话记录，所有文件均存储在应用专属目录或您授权的目录中。</li>
-    </ul>
+        <h2>一、概述</h2>
+        <p>ForClaw（以下简称"本应用"）是一款 AI Agent 运行时工具，运行在 Android 设备上。我们非常重视您的隐私保护。本隐私政策旨在帮助您了解我们如何收集、使用和保护您的信息。</p>
 
-    <h2>三、权限说明</h2>
-    <p>本应用申请以下权限及其用途：</p>
-    <ul>
-        <li><strong>无障碍服务：</strong>用于辅助操作手机界面，执行 AI Agent 的自动化任务。</li>
-        <li><strong>悬浮窗：</strong>用于显示 AI 会话悬浮窗口，方便您在使用其他应用时与 AI 交互。</li>
-        <li><strong>录屏/截图：</strong>用于获取屏幕内容，帮助 AI 理解当前界面状态。</li>
-        <li><strong>网络访问：</strong>用于调用 AI API 服务和消息渠道（飞书、Discord 等）。</li>
-        <li><strong>存储访问：</strong>用于读写配置文件、会话记录和工作空间文件。</li>
-        <li><strong>通知监听：</strong>用于读取和管理设备通知，支持通知相关的自动化任务。</li>
-        <li><strong>安装应用：</strong>用于应用内自动更新功能。</li>
-    </ul>
+        <h2>二、信息收集与使用</h2>
+        <p>本应用在运行过程中可能涉及以下数据：</p>
+        <ul>
+            <li><strong>AI 对话数据：</strong>您与 AI 助手的对话内容仅存储在您的设备本地，不会上传至我们的服务器。对话内容会发送至您配置的第三方 AI 服务提供商（如 OpenAI、Anthropic 等）以获取 AI 回复。</li>
+            <li><strong>设备信息：</strong>为提供无障碍辅助功能，本应用可能读取屏幕内容和应用信息。这些数据仅在设备本地处理，不会上传。</li>
+            <li><strong>网络通信：</strong>本应用需要网络连接以调用 AI API 服务。网络请求仅包含您主动发送的对话内容和必要的 API 认证信息。</li>
+            <li><strong>文件访问：</strong>本应用可能读写设备存储中的配置文件和会话记录，所有文件均存储在应用专属目录或您授权的目录中。</li>
+        </ul>
 
-    <h2>四、第三方服务</h2>
-    <p>本应用可能会将数据发送至以下第三方服务：</p>
-    <ul>
-        <li><strong>AI 服务提供商：</strong>包括但不限于 OpenAI、Anthropic、Google 等，用于处理您的 AI 对话请求。具体使用哪个服务取决于您的配置。</li>
-        <li><strong>消息渠道：</strong>包括飞书、Discord、Telegram、Slack 等，仅在您主动启用并配置相关渠道后才会使用。</li>
-    </ul>
-    <p>请注意，第三方服务的数据处理受其各自的隐私政策约束。</p>
+        <h2>三、权限说明</h2>
+        <p>本应用申请以下权限及其用途：</p>
+        <ul>
+            <li><strong>无障碍服务：</strong>用于辅助操作手机界面，执行 AI Agent 的自动化任务。</li>
+            <li><strong>悬浮窗：</strong>用于显示 AI 会话悬浮窗口，方便您在使用其他应用时与 AI 交互。</li>
+            <li><strong>录屏/截图：</strong>用于获取屏幕内容，帮助 AI 理解当前界面状态。</li>
+            <li><strong>网络访问：</strong>用于调用 AI API 服务和消息渠道（飞书、Discord 等）。</li>
+            <li><strong>存储访问：</strong>用于读写配置文件、会话记录和工作空间文件。</li>
+            <li><strong>通知监听：</strong>用于读取和管理设备通知，支持通知相关的自动化任务。</li>
+            <li><strong>安装应用：</strong>用于应用内自动更新功能。</li>
+        </ul>
 
-    <h2>五、数据存储与安全</h2>
-    <ul>
-        <li>所有用户数据均存储在您的设备本地。</li>
-        <li>API 密钥等敏感信息使用 Android EncryptedSharedPreferences 加密存储。</li>
-        <li>本应用不设立独立服务器，不收集、不存储任何用户数据到云端。</li>
-        <li>网络传输使用 HTTPS 加密（连接 AI API 时）。</li>
-    </ul>
+        <h2>四、第三方服务</h2>
+        <p>本应用可能会将数据发送至以下第三方服务：</p>
+        <ul>
+            <li><strong>AI 服务提供商：</strong>包括但不限于 OpenAI、Anthropic、Google 等，用于处理您的 AI 对话请求。具体使用哪个服务取决于您的配置。</li>
+            <li><strong>消息渠道：</strong>包括飞书、Discord、Telegram、Slack 等，仅在您主动启用并配置相关渠道后才会使用。</li>
+        </ul>
+        <p>请注意，第三方服务的数据处理受其各自的隐私政策约束。</p>
 
-    <h2>六、用户权利</h2>
-    <p>您可以随时：</p>
-    <ul>
-        <li>在应用设置中查看和修改您的配置信息。</li>
-        <li>清除应用数据以删除所有本地存储的对话记录和配置。</li>
-        <li>卸载应用以完全删除所有相关数据。</li>
-        <li>在系统设置中撤销本应用的任何权限。</li>
-    </ul>
+        <h2>五、数据存储与保留</h2>
+        <ul>
+            <li>所有用户数据均存储在您的设备本地。</li>
+            <li>API 密钥等敏感信息使用 Android EncryptedSharedPreferences 加密存储。</li>
+            <li>本应用不设立独立服务器，不收集、不存储任何用户数据到云端。</li>
+            <li>网络传输使用 HTTPS 加密（连接 AI API 时）。</li>
+            <li><strong>数据保留期限：</strong>您的对话记录、配置信息及其他本地数据将持续保留在您的设备上，直到您主动删除或卸载应用。本应用不会自动清除您的数据，您可以随时自行管理数据的保留与删除。</li>
+        </ul>
 
-    <h2>七、儿童隐私</h2>
-    <p>本应用不面向 13 岁以下的儿童。我们不会有意收集 13 岁以下儿童的个人信息。</p>
+        <h2>六、数据删除</h2>
+        <p>您可以通过以下方式删除您的数据：</p>
+        <ul>
+            <li><strong>删除对话记录：</strong>在应用内的会话列表中，左滑或长按对话即可删除单条对话记录。</li>
+            <li><strong>清除全部数据：</strong>前往手机"设置 → 应用 → ForClaw → 存储"，点击"清除数据"，即可删除所有本地存储的对话记录、配置和缓存。</li>
+            <li><strong>卸载应用：</strong>卸载 ForClaw 将自动删除应用专属目录中的所有数据。</li>
+        </ul>
+        <p>由于本应用不在云端存储任何用户数据，删除设备本地数据后，您的所有数据将被彻底、不可恢复地清除。</p>
 
-    <h2>八、隐私政策更新</h2>
-    <p>我们可能会不时更新本隐私政策。更新后的隐私政策将在应用内公布。继续使用本应用即表示您同意更新后的隐私政策。</p>
+        <h2>七、用户权利</h2>
+        <p>您可以随时：</p>
+        <ul>
+            <li>在应用设置中查看和修改您的配置信息。</li>
+            <li>清除应用数据以删除所有本地存储的对话记录和配置。</li>
+            <li>卸载应用以完全删除所有相关数据。</li>
+            <li>在系统设置中撤销本应用的任何权限。</li>
+        </ul>
 
-    <h2>九、联系我们</h2>
-    <p>如果您对本隐私政策有任何疑问，请通过以下方式联系我们：</p>
-    <p>邮箱：<a href="mailto:xiaomochn@gmail.com">xiaomochn@gmail.com</a><br>
-    GitHub：<a href="https://github.com/SelectXn00b/AndroidForClaw">https://github.com/SelectXn00b/AndroidForClaw</a></p>
+        <h2>八、儿童隐私</h2>
+        <p>本应用不面向 13 岁以下的儿童。我们不会有意收集 13 岁以下儿童的个人信息。</p>
+
+        <h2>九、隐私政策更新</h2>
+        <p>我们可能会不时更新本隐私政策。更新后的隐私政策将在应用内公布。继续使用本应用即表示您同意更新后的隐私政策。</p>
+
+        <h2>十、联系我们</h2>
+        <p>如果您对本隐私政策有任何疑问，请通过以下方式联系我们：</p>
+        <p>邮箱：<a href="mailto:xiaomochn@gmail.com">xiaomochn@gmail.com</a><br>
+        GitHub：<a href="https://github.com/SelectXn00b/AndroidForClaw">https://github.com/SelectXn00b/AndroidForClaw</a></p>
+    </div>
+
+    <!-- English -->
+    <div lang="en">
+        <h1>ForClaw Privacy Policy</h1>
+        <p class="date">Last updated: April 16, 2026</p>
+
+        <h2>1. Overview</h2>
+        <p>ForClaw (hereinafter referred to as "the App") is an AI Agent runtime tool that runs on Android devices. We take your privacy very seriously. This Privacy Policy is intended to help you understand how we collect, use, and protect your information.</p>
+
+        <h2>2. Information Collection and Use</h2>
+        <p>The App may involve the following data during operation:</p>
+        <ul>
+            <li><strong>AI Conversation Data:</strong> Your conversations with the AI assistant are stored only on your device locally and are not uploaded to our servers. Conversation content is sent to the third-party AI service provider you have configured (such as OpenAI, Anthropic, etc.) to obtain AI responses.</li>
+            <li><strong>Device Information:</strong> To provide accessibility features, the App may read screen content and app information. This data is processed only on the device locally and is not uploaded.</li>
+            <li><strong>Network Communication:</strong> The App requires network connectivity to call AI API services. Network requests contain only the conversation content you actively send and necessary API authentication information.</li>
+            <li><strong>File Access:</strong> The App may read and write configuration files and session records in device storage. All files are stored in the app's dedicated directory or directories you have authorized.</li>
+        </ul>
+
+        <h2>3. Permissions</h2>
+        <p>The App requests the following permissions and their purposes:</p>
+        <ul>
+            <li><strong>Accessibility Service:</strong> Used to assist in operating the phone interface and executing AI Agent automation tasks.</li>
+            <li><strong>Overlay Window:</strong> Used to display the AI conversation floating window, allowing you to interact with AI while using other apps.</li>
+            <li><strong>Screen Recording/Screenshot:</strong> Used to capture screen content, helping AI understand the current interface state.</li>
+            <li><strong>Network Access:</strong> Used to call AI API services and messaging channels (Feishu, Discord, etc.).</li>
+            <li><strong>Storage Access:</strong> Used to read and write configuration files, session records, and workspace files.</li>
+            <li><strong>Notification Listener:</strong> Used to read and manage device notifications, supporting notification-related automation tasks.</li>
+            <li><strong>Install Apps:</strong> Used for in-app auto-update functionality.</li>
+        </ul>
+
+        <h2>4. Third-Party Services</h2>
+        <p>The App may send data to the following third-party services:</p>
+        <ul>
+            <li><strong>AI Service Providers:</strong> Including but not limited to OpenAI, Anthropic, Google, etc., used to process your AI conversation requests. The specific service used depends on your configuration.</li>
+            <li><strong>Messaging Channels:</strong> Including Feishu, Discord, Telegram, Slack, etc., which are only used after you actively enable and configure the relevant channels.</li>
+        </ul>
+        <p>Please note that data processing by third-party services is governed by their respective privacy policies.</p>
+
+        <h2>5. Data Storage and Retention</h2>
+        <ul>
+            <li>All user data is stored locally on your device.</li>
+            <li>Sensitive information such as API keys is encrypted using Android EncryptedSharedPreferences.</li>
+            <li>The App does not operate independent servers and does not collect or store any user data in the cloud.</li>
+            <li>Network transmissions use HTTPS encryption (when connecting to AI APIs).</li>
+            <li><strong>Data Retention Period:</strong> Your conversation records, configuration, and other local data will remain on your device until you actively delete them or uninstall the App. The App does not automatically purge your data — you have full control over when to retain or delete it.</li>
+        </ul>
+
+        <h2>6. Data Deletion</h2>
+        <p>You can delete your data through the following methods:</p>
+        <ul>
+            <li><strong>Delete Conversations:</strong> In the conversation list within the App, swipe left or long-press a conversation to delete individual chat records.</li>
+            <li><strong>Clear All Data:</strong> Go to your phone's "Settings → Apps → ForClaw → Storage" and tap "Clear Data" to delete all locally stored conversation records, configurations, and cache.</li>
+            <li><strong>Uninstall the App:</strong> Uninstalling ForClaw will automatically remove all data in the app's dedicated directory.</li>
+        </ul>
+        <p>Since the App does not store any user data in the cloud, once you delete the local data on your device, all your data will be permanently and irreversibly erased.</p>
+
+        <h2>7. User Rights</h2>
+        <p>You may at any time:</p>
+        <ul>
+            <li>View and modify your configuration in the app settings.</li>
+            <li>Clear app data to delete all locally stored conversation records and configurations.</li>
+            <li>Uninstall the app to completely remove all related data.</li>
+            <li>Revoke any permissions of the App in system settings.</li>
+        </ul>
+
+        <h2>8. Children's Privacy</h2>
+        <p>The App is not intended for children under 13 years of age. We do not knowingly collect personal information from children under 13.</p>
+
+        <h2>9. Privacy Policy Updates</h2>
+        <p>We may update this Privacy Policy from time to time. The updated Privacy Policy will be published within the App. Continued use of the App constitutes your acceptance of the updated Privacy Policy.</p>
+
+        <h2>10. Contact Us</h2>
+        <p>If you have any questions about this Privacy Policy, please contact us through:</p>
+        <p>Email: <a href="mailto:xiaomochn@gmail.com">xiaomochn@gmail.com</a><br>
+        GitHub: <a href="https://github.com/SelectXn00b/AndroidForClaw">https://github.com/SelectXn00b/AndroidForClaw</a></p>
+    </div>
 </div>
+
+<script>
+(function() {
+    var isEn = /^en\b/i.test(navigator.language || navigator.userLanguage || '');
+    if (isEn) setLang('en');
+})();
+
+function toggleLang() {
+    var zhBlock = document.querySelector('[lang="zh"]');
+    var isZhVisible = zhBlock.style.display !== 'none';
+    setLang(isZhVisible ? 'en' : 'zh');
+}
+
+function setLang(lang) {
+    var zh = document.querySelector('[lang="zh"]');
+    var en = document.querySelector('[lang="en"]');
+    var btn = document.querySelector('.lang-switch');
+    if (lang === 'en') {
+        zh.style.display = 'none';
+        en.style.display = 'block';
+        btn.textContent = '中文';
+        document.documentElement.lang = 'en';
+    } else {
+        zh.style.display = 'block';
+        en.style.display = 'none';
+        btn.textContent = 'English';
+        document.documentElement.lang = 'zh-CN';
+    }
+}
+</script>
 </body>
 </html>

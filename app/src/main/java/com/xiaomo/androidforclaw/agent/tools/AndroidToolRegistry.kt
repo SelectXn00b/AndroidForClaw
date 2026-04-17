@@ -62,7 +62,7 @@ class AndroidToolRegistry(
         register(AndroidApiSkill(context))
 
         // === App management tools ===
-        register(ListInstalledAppsSkill(context))  // List apps
+        // register(ListInstalledAppsSkill(context))  // List apps — 商店版本暂时去掉，避免 Google Play 数据安全审核问题
         register(InstallAppSkill(context))         // Install APK
         register(StartActivityTool(context))       // Start Activity
 
@@ -160,7 +160,7 @@ class AndroidToolRegistry(
                 "观察" to listOf("screenshot", "get_view_tree"),
                 "交互" to listOf("tap", "swipe", "type", "long_press"),
                 "导航" to listOf("home", "back", "open_app"),
-                "应用管理" to listOf("list_installed_apps", "install_app", "start_activity"),
+                "应用管理" to listOf(/* "list_installed_apps", */ "install_app", "start_activity"),
                 "控制" to listOf("wait", "stop", "log"),
                 "浏览器" to listOf("browser")
             )

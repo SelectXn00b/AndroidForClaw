@@ -42,6 +42,9 @@
     <uses-permission android:name="android.permission.INSTALL_PACKAGES" tools:node="remove" />
     <uses-permission android:name="android.permission.DELETE_PACKAGES" tools:node="remove" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:node="remove" />
+    <uses-permission android:name="android.permission.SEND_SMS" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_SMS" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_CALL_LOG" tools:node="remove" />
 
     <uses-permission
         android:name="android.permission.WRITE_SETTINGS"

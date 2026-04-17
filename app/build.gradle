@@ -45,7 +45,7 @@ android {
         applicationId "com.xiaomo.androidforclaw"
         minSdk 26
         targetSdk 36
-        versionCode 33
+        versionCode 37
         versionName "1.1.19"
 
         ndk {
@@ -247,7 +247,7 @@ dependencies {
     implementation project(':extensions:whatsapp')
     implementation project(':extensions:weixin')
     implementation project(':extensions:observer')
-    
+
 
     // ========== Base Module ==========
     implementation project(':base')
