@@ -512,6 +512,11 @@ class AgentLoop(
             val iterationStartTime = System.currentTimeMillis()
             writeLog("========== Iteration $iteration ==========")
 
+            // Hoist accumulators above try so partial content survives stream errors
+            // (aligned with OpenClaw: SDK preserves assistantTexts even on stopReason=error)
+            val thinkingAccumulated = StringBuilder()
+            val contentAccumulated = StringBuilder()
+
             try {
                 // 4.1 Call LLM
                 writeLog("📢 发送迭代进度更新...")
@@ -564,17 +569,15 @@ class AgentLoop(
                 // ⏱️ SSE 流式调用 + timeout 保护
                 // 对齐 OpenClaw streamSimple → thinking_delta/text_delta 实时推送
                 val response: LLMResponse
+                data class ToolCallAccum(
+                    var id: String = "",
+                    var name: String = "",
+                    val args: StringBuilder = StringBuilder()
+                )
+                val toolCallsAccumulated = mutableMapOf<Int, ToolCallAccum>()
+                var finalUsage: LLMUsage? = null
+                var finalFinishReason: String? = null
                 try {
-                    val thinkingAccumulated = StringBuilder()
-                    val contentAccumulated = StringBuilder()
-                    data class ToolCallAccum(
-                        var id: String = "",
-                        var name: String = "",
-                        val args: StringBuilder = StringBuilder()
-                    )
-                    val toolCallsAccumulated = mutableMapOf<Int, ToolCallAccum>()
-                    var finalUsage: LLMUsage? = null
-                    var finalFinishReason: String? = null
 
                     // Scrub Anthropic refusal magic string from system prompt (aligned with OpenClaw scrubAnthropicRefusalMagic)
                     val scrubbedMessages = scrubAnthropicRefusalMagic(messages)
@@ -718,7 +721,14 @@ class AgentLoop(
                     }
 
                     writeLog("❌ LLM timeout after $timeoutCompactionAttempts compaction attempts, surfacing error")
-                    finalContent = "⏰ LLM 调用超时。请简化问题或使用 /new 开始新对话。"
+                    // Salvage partial content accumulated before timeout
+                    val partialOnTimeout = contentAccumulated.toString().trim()
+                    if (partialOnTimeout.isNotEmpty()) {
+                        writeLog("💾 Salvaging ${partialOnTimeout.length} chars of partial content from timed-out stream")
+                        finalContent = partialOnTimeout + "\n\n⏰ _(响应被截断：LLM 调用超时)_"
+                    } else {
+                        finalContent = "⏰ LLM 调用超时。请简化问题或使用 /new 开始新对话。"
+                    }
                     break
                 }
 
@@ -1235,13 +1245,29 @@ class AgentLoop(
                     // Android has no model fallback, so surface the error instead of infinite retry.
                     if (e.message?.contains("timeout", ignoreCase = true) == true) {
                         writeLog("⏰ Timeout error, surfacing to user (no infinite retry)")
-                        finalContent = "⏰ LLM 调用超时。请简化问题或使用 /new 开始新对话。"
+                        // Salvage partial content from interrupted stream
+                        val partialOnError = contentAccumulated.toString().trim()
+                        if (partialOnError.isNotEmpty()) {
+                            writeLog("💾 Salvaging ${partialOnError.length} chars of partial content from timed-out stream")
+                            finalContent = partialOnError + "\n\n⏰ _(响应被截断：LLM 调用超时)_"
+                        } else {
+                            finalContent = "⏰ LLM 调用超时。请简化问题或使用 /new 开始新对话。"
+                        }
                         break
                     }
 
                     // Other errors, stop loop and format error message
                     writeLog("❌ Agent loop failed: ${e.message}")
                     Log.e(TAG, "Agent loop failed", e)
+
+                    // Salvage partial content accumulated before stream error
+                    // Aligned with OpenClaw: SDK preserves assistantTexts even on stopReason=error
+                    val partialOnFail = contentAccumulated.toString().trim()
+                    if (partialOnFail.isNotEmpty()) {
+                        writeLog("💾 Salvaging ${partialOnFail.length} chars of partial content from failed stream")
+                        finalContent = partialOnFail + "\n\n⚠️ _(响应被截断：${e.message?.take(100) ?: "未知错误"})_"
+                        break
+                    }
 
                     // Build friendly error message (aligned with OpenClaw error formatting)
                     finalContent = buildString {
