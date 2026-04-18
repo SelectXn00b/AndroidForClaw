@@ -32,6 +32,7 @@ import com.xiaomo.hermes.hermes.ToolRegistry as HermesToolRegistry
 import com.xiaomo.hermes.hermes.getToolDefinitions
 import com.xiaomo.hermes.hermes.handleFunctionCall
 import com.xiaomo.hermes.hermes.registerDefaultTools
+import com.xiaomo.hermes.hermes.setPlatformDelegate
 import com.xiaomo.hermes.hermes.gateway.AgentLoop as GatewayAgentLoopInterface
 import com.xiaomo.hermes.providers.UnifiedLLMProvider
 import com.xiaomo.hermes.providers.llm.Message
@@ -75,6 +76,10 @@ class HermesAgentLoop(private val context: Context) : GatewayAgentLoopInterface 
         synchronized(Companion) {
             if (!toolsRegistered) {
                 registerDefaultTools()
+                // 注入平台委托：让 hermes 工具能调用 app 的实现
+                setPlatformDelegate(
+                    PlatformToolDelegateImpl(context, appToolRegistry, androidToolRegistry)
+                )
                 toolsRegistered = true
             }
         }
