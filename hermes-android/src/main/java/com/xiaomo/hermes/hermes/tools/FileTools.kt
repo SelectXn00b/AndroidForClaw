@@ -153,5 +153,34 @@ object FileTools {
         }
     }
 
+    /**
+     * 列出目录内容（对齐 OpenClaw list_dir 工具）
+     */
+    fun listDir(path: String, maxDepth: Int = 2, showHidden: Boolean = false): String {
+        val dir = File(path)
+        if (!dir.exists()) return gson.toJson(mapOf("error" to "Directory not found: $path"))
+        if (!dir.isDirectory) return gson.toJson(mapOf("error" to "Not a directory: $path"))
+
+        val entries = mutableListOf<Map<String, Any>>()
+        fun walk(file: File, depth: Int) {
+            if (depth > maxDepth) return
+            val children = file.listFiles()?.sortedBy { it.name } ?: return
+            for (child in children) {
+                if (!showHidden && child.name.startsWith(".")) continue
+                val entry = mutableMapOf<String, Any>(
+                    "name" to child.name,
+                    "path" to child.absolutePath,
+                    "type" to if (child.isDirectory) "directory" else "file"
+                )
+                if (child.isFile) entry["size"] = child.length()
+                entries.add(entry)
+                if (child.isDirectory && depth < maxDepth) {
+                    walk(child, depth + 1)
+                }
+            }
+        }
+        walk(dir, 1)
+        return gson.toJson(mapOf("path" to dir.absolutePath, "entries" to entries, "count" to entries.size))
+    }
 
 }

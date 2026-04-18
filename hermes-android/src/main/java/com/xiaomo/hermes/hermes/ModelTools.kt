@@ -497,5 +497,313 @@ fun registerDefaultTools() {
             modelToolsGson.toJson(mapOf("error" to "TTS requires Android context — use app module TtsTool"))
         })
 
+    // ── 配置管理 ──────────────────────────────────────────────────────
+
+    ToolRegistry.register(
+        name = "config_get",
+        description = "Read a config value by key path (dot notation).",
+        parameters = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "key" to mapOf("type" to "string", "description" to "Config key path (e.g. 'model', 'agents.default')")),
+            "required" to listOf("key")),
+        handler = { args ->
+            val key = args["key"] as? String ?: ""
+            platformDelegate?.configGet(key)
+                ?: modelToolsGson.toJson(mapOf("error" to "config_get not available — platform delegate not set"))
+        })
+
+    ToolRegistry.register(
+        name = "config_set",
+        description = "Write a config value by key path (dot notation).",
+        parameters = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "key" to mapOf("type" to "string", "description" to "Config key path"),
+                "value" to mapOf("type" to "string", "description" to "Value to set (JSON)")),
+            "required" to listOf("key", "value")),
+        handler = { args ->
+            val key = args["key"] as? String ?: ""
+            val value = args["value"] as? String ?: ""
+            platformDelegate?.configSet(key, value)
+                ?: modelToolsGson.toJson(mapOf("error" to "config_set not available — platform delegate not set"))
+        })
+
+    // ── 会话管理 ──────────────────────────────────────────────────────
+
+    ToolRegistry.register(
+        name = "sessions_list",
+        description = "List active sessions with optional filters.",
+        parameters = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "kinds" to mapOf("type" to "array", "items" to mapOf("type" to "string"), "description" to "Session kinds filter"),
+                "limit" to mapOf("type" to "integer", "description" to "Max sessions to return"),
+                "active_minutes" to mapOf("type" to "integer", "description" to "Only sessions active within N minutes")),
+            "required" to emptyList<String>()),
+        handler = { args ->
+            platformDelegate?.sessionsOp("list", args)
+                ?: modelToolsGson.toJson(mapOf("error" to "sessions_list not available"))
+        })
+
+    ToolRegistry.register(
+        name = "sessions_send",
+        description = "Send a message into another session.",
+        parameters = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "session_key" to mapOf("type" to "string", "description" to "Target session key"),
+                "message" to mapOf("type" to "string", "description" to "Message to send")),
+            "required" to listOf("session_key", "message")),
+        handler = { args ->
+            platformDelegate?.sessionsOp("send", args)
+                ?: modelToolsGson.toJson(mapOf("error" to "sessions_send not available"))
+        })
+
+    ToolRegistry.register(
+        name = "sessions_spawn",
+        description = "Spawn an isolated sub-agent session.",
+        parameters = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "task" to mapOf("type" to "string", "description" to "Task description for the sub-agent"),
+                "model" to mapOf("type" to "string", "description" to "Model override"),
+                "label" to mapOf("type" to "string", "description" to "Session label"),
+                "mode" to mapOf("type" to "string", "description" to "run (one-shot) or session (persistent)")),
+            "required" to listOf("task")),
+        handler = { args ->
+            platformDelegate?.sessionsOp("spawn", args)
+                ?: modelToolsGson.toJson(mapOf("error" to "sessions_spawn not available"))
+        })
+
+    ToolRegistry.register(
+        name = "sessions_history",
+        description = "Fetch message history for a session.",
+        parameters = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "session_key" to mapOf("type" to "string", "description" to "Session key"),
+                "limit" to mapOf("type" to "integer", "description" to "Max messages")),
+            "required" to listOf("session_key")),
+        handler = { args ->
+            platformDelegate?.sessionsOp("history", args)
+                ?: modelToolsGson.toJson(mapOf("error" to "sessions_history not available"))
+        })
+
+    ToolRegistry.register(
+        name = "sessions_yield",
+        description = "End current turn and wait for sub-agent results.",
+        parameters = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "message" to mapOf("type" to "string", "description" to "Optional message")),
+            "required" to emptyList<String>()),
+        handler = { args ->
+            platformDelegate?.sessionsOp("yield", args)
+                ?: modelToolsGson.toJson(mapOf("error" to "sessions_yield not available"))
+        })
+
+    ToolRegistry.register(
+        name = "subagents",
+        description = "List, steer, or kill spawned sub-agents.",
+        parameters = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "action" to mapOf("type" to "string", "description" to "list / steer / kill"),
+                "target" to mapOf("type" to "string", "description" to "Sub-agent target"),
+                "message" to mapOf("type" to "string", "description" to "Steering message")),
+            "required" to listOf("action")),
+        handler = { args ->
+            platformDelegate?.sessionsOp("subagents", args)
+                ?: modelToolsGson.toJson(mapOf("error" to "subagents not available"))
+        })
+
+    ToolRegistry.register(
+        name = "session_status",
+        description = "Show session status card (usage, time, cost).",
+        parameters = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "session_key" to mapOf("type" to "string", "description" to "Session key (optional)")),
+            "required" to emptyList<String>()),
+        handler = { args ->
+            platformDelegate?.sessionsOp("status", args)
+                ?: modelToolsGson.toJson(mapOf("error" to "session_status not available"))
+        })
+
+    // ── 消息 ──────────────────────────────────────────────────────────
+
+    ToolRegistry.register(
+        name = "message",
+        description = "Send messages via channel plugins (Telegram, Discord, Feishu, etc.).",
+        parameters = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "action" to mapOf("type" to "string", "description" to "send / react / delete / unsend"),
+                "target" to mapOf("type" to "string", "description" to "Target channel/user"),
+                "message" to mapOf("type" to "string", "description" to "Message content"),
+                "channel" to mapOf("type" to "string", "description" to "Channel type")),
+            "required" to listOf("action")),
+        handler = { args ->
+            platformDelegate?.messageSend(args)
+                ?: modelToolsGson.toJson(mapOf("error" to "message not available"))
+        })
+
+    // ── 文件列目录 ──────────────────────────────────────────────────────
+
+    ToolRegistry.register(
+        name = "list_dir",
+        description = "List directory contents with optional depth limit.",
+        parameters = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "path" to mapOf("type" to "string", "description" to "Directory path"),
+                "depth" to mapOf("type" to "integer", "description" to "Max depth (default 2)"),
+                "show_hidden" to mapOf("type" to "boolean", "description" to "Show hidden files (default false)")),
+            "required" to listOf("path")),
+        handler = { args ->
+            val path = args["path"] as? String ?: "."
+            val depth = (args["depth"] as? Number)?.toInt() ?: 2
+            val showHidden = args["show_hidden"] as? Boolean ?: false
+            FileTools.listDir(path, depth, showHidden)
+        })
+
+    // ── Android 专属 ──────────────────────────────────────────────────
+
+    ToolRegistry.register(
+        name = "start_activity",
+        description = "Launch an Android Activity by package/action/intent.",
+        parameters = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "package_name" to mapOf("type" to "string", "description" to "Target app package name"),
+                "activity" to mapOf("type" to "string", "description" to "Activity class name"),
+                "action" to mapOf("type" to "string", "description" to "Intent action (e.g. android.intent.action.VIEW)"),
+                "data" to mapOf("type" to "string", "description" to "Intent data URI"),
+                "extras" to mapOf("type" to "object", "description" to "Intent extras key-value pairs")),
+            "required" to emptyList<String>()),
+        handler = { args ->
+            platformDelegate?.androidOp("start_activity", args)
+                ?: modelToolsGson.toJson(mapOf("error" to "start_activity not available — needs Android Context"))
+        })
+
+    ToolRegistry.register(
+        name = "device",
+        description = "Get device information and control device features.",
+        parameters = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "action" to mapOf("type" to "string", "description" to "info / screenshot / clipboard / notification / volume / brightness"),
+                "value" to mapOf("type" to "string", "description" to "Value for set actions")),
+            "required" to listOf("action")),
+        handler = { args ->
+            platformDelegate?.androidOp("device", args)
+                ?: modelToolsGson.toJson(mapOf("error" to "device not available — needs Android Context"))
+        })
+
+    ToolRegistry.register(
+        name = "canvas",
+        description = "Control canvas: present, hide, navigate, eval, snapshot.",
+        parameters = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "action" to mapOf("type" to "string", "description" to "present / hide / navigate / eval / snapshot"),
+                "url" to mapOf("type" to "string", "description" to "URL for navigate/present"),
+                "javascript" to mapOf("type" to "string", "description" to "JS to evaluate")),
+            "required" to listOf("action")),
+        handler = { args ->
+            platformDelegate?.androidOp("canvas", args)
+                ?: modelToolsGson.toJson(mapOf("error" to "canvas not available — needs Android Context"))
+        })
+
+    ToolRegistry.register(
+        name = "termux_bridge",
+        description = "Execute commands via Termux:API bridge.",
+        parameters = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "command" to mapOf("type" to "string", "description" to "Command to execute in Termux"),
+                "background" to mapOf("type" to "boolean", "description" to "Run in background")),
+            "required" to listOf("command")),
+        handler = { args ->
+            platformDelegate?.androidOp("termux_bridge", args)
+                ?: modelToolsGson.toJson(mapOf("error" to "termux_bridge not available — needs Termux installed"))
+        })
+
+    ToolRegistry.register(
+        name = "tasker",
+        description = "Trigger Tasker tasks.",
+        parameters = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "task_name" to mapOf("type" to "string", "description" to "Tasker task name"),
+                "params" to mapOf("type" to "object", "description" to "Task parameters")),
+            "required" to listOf("task_name")),
+        handler = { args ->
+            platformDelegate?.androidOp("tasker", args)
+                ?: modelToolsGson.toJson(mapOf("error" to "tasker not available — needs Tasker installed"))
+        })
+
+    // ── 技能市场 ──────────────────────────────────────────────────────
+
+    ToolRegistry.register(
+        name = "clawhub_search",
+        description = "Search skills on ClawHub marketplace.",
+        parameters = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "query" to mapOf("type" to "string", "description" to "Search query"),
+                "limit" to mapOf("type" to "integer", "description" to "Max results")),
+            "required" to listOf("query")),
+        handler = { args ->
+            platformDelegate?.skillsOp("search", args)
+                ?: modelToolsGson.toJson(mapOf("error" to "clawhub_search not available"))
+        })
+
+    ToolRegistry.register(
+        name = "clawhub_install",
+        description = "Install a skill from ClawHub.",
+        parameters = mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "skill_name" to mapOf("type" to "string", "description" to "Skill name to install")),
+            "required" to listOf("skill_name")),
+        handler = { args ->
+            platformDelegate?.skillsOp("install", args)
+                ?: modelToolsGson.toJson(mapOf("error" to "clawhub_install not available"))
+        })
+
     modelToolsLogger.info("Default tools registered: ${ToolRegistry.getAllToolNames().joinToString()}")
+}
+
+// ── Platform Delegate（app 模块注入）─────────────────────────────────────
+
+/**
+ * 平台委托接口 — app 模块实现此接口来处理需要 Android Context 的工具。
+ * 在 Application.onCreate 中通过 setPlatformDelegate() 注入。
+ */
+interface PlatformToolDelegate {
+    /** 读取配置 */
+    suspend fun configGet(key: String): String
+    /** 写入配置 */
+    suspend fun configSet(key: String, value: String): String
+    /** 会话操作（list/send/spawn/history/yield/status/subagents） */
+    suspend fun sessionsOp(action: String, args: Map<String, Any>): String
+    /** 消息发送 */
+    suspend fun messageSend(args: Map<String, Any>): String
+    /** Android 专属操作（start_activity/device/canvas/termux_bridge/tasker） */
+    suspend fun androidOp(action: String, args: Map<String, Any>): String
+    /** 技能市场操作（search/install） */
+    suspend fun skillsOp(action: String, args: Map<String, Any>): String
+}
+
+@Volatile
+private var platformDelegate: PlatformToolDelegate? = null
+
+/**
+ * app 模块调用此方法注入平台委托
+ */
+fun setPlatformDelegate(delegate: PlatformToolDelegate) {
+    platformDelegate = delegate
+    modelToolsLogger.info("Platform delegate set: ${delegate::class.simpleName}")
 }
