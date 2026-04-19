@@ -14,10 +14,10 @@ import android.util.Log
 import com.xiaomo.hermes.hermes.gateway.*
 import org.json.JSONObject
 
-class BluebubblesAdapter(
+class Bluebubbles(
     context: Context,
     config: PlatformConfig) : BasePlatformAdapter(config, Platform.BLUEBUBBLES) {
-    companion object { private const val TAG = "BluebubblesAdapter" }
+    companion object { private const val TAG = "Bluebubbles" }
 
     override suspend fun connect(): Boolean {
         Log.w(TAG, "BlueBubbles is iOS/macOS-specific — not supported on Android")

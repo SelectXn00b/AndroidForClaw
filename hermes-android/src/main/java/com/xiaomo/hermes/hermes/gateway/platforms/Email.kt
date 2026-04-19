@@ -14,10 +14,10 @@ import android.util.Log
 import com.xiaomo.hermes.hermes.gateway.*
 import org.json.JSONObject
 
-class EmailAdapter(
+class Email(
     context: Context,
     config: PlatformConfig) : BasePlatformAdapter(config, Platform.EMAIL) {
-    companion object { private const val TAG = "EmailAdapter" }
+    companion object { private const val TAG = "Email" }
 
     override suspend fun connect(): Boolean {
         Log.w(TAG, "Email adapter is a stub — requires IMAP/SMTP libraries on Android")

@@ -14,10 +14,10 @@ import android.util.Log
 import com.xiaomo.hermes.hermes.gateway.*
 import org.json.JSONObject
 
-class SlackAdapter(
+class Slack(
     context: Context,
     config: PlatformConfig) : BasePlatformAdapter(config, Platform.SLACK) {
-    companion object { private const val TAG = "SlackAdapter" }
+    companion object { private const val TAG = "Slack" }
 
     override suspend fun connect(): Boolean {
         Log.w(TAG, "Slack adapter is a stub — not implemented on Android")

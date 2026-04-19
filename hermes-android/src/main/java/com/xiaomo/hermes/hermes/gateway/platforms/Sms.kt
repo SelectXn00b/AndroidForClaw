@@ -14,10 +14,10 @@ import android.util.Log
 import com.xiaomo.hermes.hermes.gateway.*
 import org.json.JSONObject
 
-class SmsAdapter(
+class Sms(
     context: Context,
     config: PlatformConfig) : BasePlatformAdapter(config, Platform.SMS) {
-    companion object { private const val TAG = "SmsAdapter" }
+    companion object { private const val TAG = "Sms" }
 
     override suspend fun connect(): Boolean {
         Log.w(TAG, "SMS adapter is iOS-specific — not supported on Android")

@@ -38,11 +38,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  * - Reactions
  * - Typing indicators
  */
-class DiscordAdapter(
+class Discord(
     context: Context,
     config: PlatformConfig) : BasePlatformAdapter(config, Platform.DISCORD) {
     companion object {
-        private const val TAG = "DiscordAdapter"
+        private const val TAG = "Discord"
         const val MAX_MESSAGE_LENGTH = 2000
         const val API_BASE = "https://discord.com/api/v10"
     }

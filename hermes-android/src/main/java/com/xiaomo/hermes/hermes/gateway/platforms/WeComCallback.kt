@@ -14,10 +14,10 @@ import android.util.Log
 import com.xiaomo.hermes.hermes.gateway.*
 import org.json.JSONObject
 
-class WeComCallbackAdapter(
+class WeComCallback(
     context: Context,
     config: PlatformConfig) : BasePlatformAdapter(config, Platform.WECOM_CALLBACK) {
-    companion object { private const val TAG = "WeComCallbackAdapter" }
+    companion object { private const val TAG = "WeComCallback" }
 
     override suspend fun connect(): Boolean {
         Log.w(TAG, "WeCom callback adapter requires HTTP server — use WeCom webhook mode on Android")

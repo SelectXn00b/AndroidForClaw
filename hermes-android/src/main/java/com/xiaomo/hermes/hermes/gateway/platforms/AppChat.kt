@@ -34,7 +34,7 @@ data class ChatResponse(
 /**
  * In-process adapter: Chat UI pushes messages in, GatewayRunner pushes responses out.
  */
-class AppChatAdapter(
+class AppChat(
     context: Context,
     config: PlatformConfig = PlatformConfig(
         platform = Platform.APP_CHAT,
@@ -45,7 +45,7 @@ class AppChatAdapter(
 ) : BasePlatformAdapter(config, Platform.APP_CHAT) {
 
     companion object {
-        private const val TAG = "AppChatAdapter"
+        private const val TAG = "AppChat"
         private val messageIdCounter = AtomicLong(0)
     }
 
@@ -60,13 +60,13 @@ class AppChatAdapter(
 
     override suspend fun connect(): Boolean {
         markConnected()
-        Log.i(TAG, "AppChatAdapter connected (in-process)")
+        Log.i(TAG, "AppChat connected (in-process)")
         return true
     }
 
     override suspend fun disconnect() {
         markDisconnected()
-        Log.i(TAG, "AppChatAdapter disconnected")
+        Log.i(TAG, "AppChat disconnected")
     }
 
     // ── Inbound: Chat UI → GatewayRunner ────────────────────────────

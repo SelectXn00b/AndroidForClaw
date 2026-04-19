@@ -22,11 +22,11 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-class HomeassistantAdapter(
+class Homeassistant(
     context: Context,
     config: PlatformConfig) : BasePlatformAdapter(config, Platform.HOMEASSISTANT) {
     companion object {
-        private const val TAG = "HomeassistantAdapter"
+        private const val TAG = "Homeassistant"
         val BACKOFF_STEPS = listOf(5, 10, 30, 60, 120, 300)
         const val COOLDOWN_SECONDS = 10L
     }

@@ -14,10 +14,10 @@ import android.util.Log
 import com.xiaomo.hermes.hermes.gateway.*
 import org.json.JSONObject
 
-class WebhookAdapter(
+class Webhook(
     context: Context,
     config: PlatformConfig) : BasePlatformAdapter(config, Platform.WEBHOOK) {
-    companion object { private const val TAG = "WebhookAdapter" }
+    companion object { private const val TAG = "Webhook" }
 
     override suspend fun connect(): Boolean {
         Log.w(TAG, "Webhook adapter requires HTTP server — not supported on Android")

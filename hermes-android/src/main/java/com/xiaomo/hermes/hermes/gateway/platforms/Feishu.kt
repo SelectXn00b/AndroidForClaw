@@ -90,11 +90,11 @@ enum class FeishuMessageType(val value: String) {
  * - Reaction events routed as synthetic text events
  * - Interactive card button-click events routed as synthetic COMMAND events
  */
-class FeishuAdapter(
+class Feishu(
     context: Context,
     config: PlatformConfig) : BasePlatformAdapter(config, Platform.FEISHU) {
     companion object {
-        private const val TAG = "FeishuAdapter"
+        private const val TAG = "Feishu"
 
         /** Maximum message length for Feishu. */
         const val MAX_MESSAGE_LENGTH = 30000

@@ -14,10 +14,10 @@ import android.util.Log
 import com.xiaomo.hermes.hermes.gateway.*
 import org.json.JSONObject
 
-class ApiServerAdapter(
+class ApiServer(
     context: Context,
     config: PlatformConfig) : BasePlatformAdapter(config, Platform.API_SERVER) {
-    companion object { private const val TAG = "ApiServerAdapter" }
+    companion object { private const val TAG = "ApiServer" }
 
     override suspend fun connect(): Boolean {
         Log.w(TAG, "API Server adapter requires HTTP server — not supported on Android")

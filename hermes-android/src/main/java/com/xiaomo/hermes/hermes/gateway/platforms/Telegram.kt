@@ -42,11 +42,11 @@ import java.util.concurrent.atomic.AtomicLong
  * - Inline keyboards (basic)
  * - MarkdownV2 formatting
  */
-class TelegramAdapter(
+class Telegram(
     context: Context,
     config: PlatformConfig) : BasePlatformAdapter(config, Platform.TELEGRAM) {
     companion object {
-        private const val TAG = "TelegramAdapter"
+        private const val TAG = "Telegram"
         const val MAX_MESSAGE_LENGTH = 4096
         const val API_BASE = "https://api.telegram.org"
 

@@ -20,10 +20,10 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-class WeComAdapter(
+class WeCom(
     context: Context,
     config: PlatformConfig) : BasePlatformAdapter(config, Platform.WECOM) {
-    companion object { private const val TAG = "WeComAdapter" }
+    companion object { private const val TAG = "WeCom" }
 
     private val _corpId: String = config.extra("corp_id") ?: System.getenv("WECOM_CORP_ID") ?: ""
     private val _corpSecret: String = config.extra("corp_secret") ?: System.getenv("WECOM_CORP_SECRET") ?: ""

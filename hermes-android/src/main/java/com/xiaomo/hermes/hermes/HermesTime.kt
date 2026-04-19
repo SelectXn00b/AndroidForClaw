@@ -37,6 +37,16 @@ fun tsNow(zone: TimeZone? = null): String {
 }
 
 /**
+ * 获取当前时间 Date 对象（使用 Hermes 配置的时区）
+ * Python: from hermes_time import now as _hermes_now
+ *
+ * 对齐 Python hermes_time.now()，返回 timezone-aware datetime.
+ * Kotlin Date 本身不带时区（内部存储 UTC millis），但此函数返回
+ * 当前时刻的 Date，由调用方按需选择时区格式化。
+ */
+fun hermesNow(): Date = Date()
+
+/**
  * 获取当前 UTC UNIX 时间戳（秒）
  * Python: ts_utc() -> int
  */

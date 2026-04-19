@@ -1,12 +1,12 @@
 package com.xiaomo.hermes.hermes.gateway.platforms
 
 /**
- * DingTalk platform adapter.
+ * Weixin (WeChat Official Account) platform adapter.
  *
- * Uses the DingTalk Bot API for sending messages and webhook callbacks
- * for receiving messages.
+ * Uses the WeChat Official Account API for sending messages and
+ * webhook callbacks for receiving messages.
  *
- * Ported from gateway/platforms/dingtalk.py
+ * Ported from gateway/platforms/weixin.py
  */
 
 import android.content.Context
@@ -21,13 +21,13 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-class DingtalkAdapter(
+class Weixin(
     context: Context,
-    config: PlatformConfig) : BasePlatformAdapter(config, Platform.DINGTALK) {
-    companion object { private const val TAG = "DingtalkAdapter" }
+    config: PlatformConfig) : BasePlatformAdapter(config, Platform.WEIXIN) {
+    companion object { private const val TAG = "Weixin" }
 
-    private val _appKey: String = config.extra("app_key") ?: System.getenv("DINGTALK_APP_KEY") ?: ""
-    private val _appSecret: String = config.extra("app_secret") ?: System.getenv("DINGTALK_APP_SECRET") ?: ""
+    private val _appId: String = config.extra("app_id") ?: System.getenv("WEIXIN_APP_ID") ?: ""
+    private val _appSecret: String = config.extra("app_secret") ?: System.getenv("WEIXIN_APP_SECRET") ?: ""
 
     private val _httpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -41,8 +41,8 @@ class DingtalkAdapter(
     override val isConnected: AtomicBoolean = AtomicBoolean(false)
 
     override suspend fun connect(): Boolean {
-        if (_appKey.isEmpty() || _appSecret.isEmpty()) {
-            Log.e(TAG, "DINGTALK_APP_KEY or DINGTALK_APP_SECRET not set")
+        if (_appId.isEmpty() || _appSecret.isEmpty()) {
+            Log.e(TAG, "WEIXIN_APP_ID or WEIXIN_APP_SECRET not set")
             return false
         }
         return _refreshAccessToken()
@@ -55,14 +55,14 @@ class DingtalkAdapter(
     private suspend fun _refreshAccessToken(): Boolean = withContext(Dispatchers.IO) {
         try {
             val request = Request.Builder()
-                .url("https://oapi.dingtalk.com/gettoken?appkey=$_appKey&appsecret=$_appSecret")
+                .url("https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=$_appId&secret=$_appSecret")
                 .get()
                 .build()
 
             _httpClient.newCall(request).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext false
                 val data = JSONObject(resp.body!!.string())
-                if (data.optInt("errcode", 0) != 0) return@withContext false
+                if (data.has("errcode")) return@withContext false
                 _accessToken = data.getString("access_token")
                 _accessTokenExpiry = System.currentTimeMillis() / 1000 + data.getLong("expires_in") - 300
                 Log.i(TAG, "Access token refreshed")
@@ -99,7 +99,7 @@ class DingtalkAdapter(
                 .toRequestBody("application/json; charset=utf-8".toMediaType())
 
             val request = Request.Builder()
-                .url("https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2?access_token=$_accessToken")
+                .url("https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token=$_accessToken")
                 .post(body)
                 .build()
 
