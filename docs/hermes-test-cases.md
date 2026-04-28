@@ -974,11 +974,11 @@ SAFETY 大多通过引用其它域的 TC 覆盖；此处列集成层 smoke。
 
 | TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
 |---|---|---|---|---|---|
-| TC-UI-001-a | R-UI-001 | 屏幕渲染 | 5 个 tile 可见 | ui | `HermesSettingsScreenTest#five tiles visible` 🟡 |
-| TC-UI-002-a | R-UI-001 | 每 tile 图标 | Icon 匹配资源 | ui | `HermesSettingsScreenTest#tile icons` 🟡 |
-| TC-UI-003-a | R-UI-001 | 点击 tile | callback 触发 | ui | `HermesSettingsScreenTest#tile click triggers callback` 🟡 |
-| TC-UI-004-a | R-UI-001 | 只打开不做任何 tap | 无 prefs / service 写 | ui | `HermesSettingsScreenTest#no side effect on open` 🟡 |
-| TC-UI-005-a | R-UI-001 | tile 文本超宽 | 截断显示 | ui | `HermesSettingsScreenTest#tile text ellipsis` 🟡 |
+| TC-UI-001-a | R-UI-001 | 屏幕渲染 | 5 个 tile 可见 | ui | `HermesSettingsScreenTest#five tiles visible` 🟢 |
+| TC-UI-002-a | R-UI-001 | 每 tile 图标 | Icon 匹配资源 | ui | `HermesSettingsScreenTest#tile icons` 🟢 |
+| TC-UI-003-a | R-UI-001 | 点击 tile | callback 触发 | ui | `HermesSettingsScreenTest#tile click triggers callback` 🟢 |
+| TC-UI-004-a | R-UI-001 | 只打开不做任何 tap | 无 prefs / service 写 | ui | `HermesSettingsScreenTest#no side effect on open` 🟢 |
+| TC-UI-005-a | R-UI-001 | tile 文本超宽 | 截断显示 | ui | `HermesSettingsScreenTest#tile text ellipsis` 🟢 |
 
 ### HermesGatewayCredentialsScreen.kt
 
