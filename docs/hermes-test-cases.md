@@ -1007,10 +1007,10 @@ SAFETY 大多通过引用其它域的 TC 覆盖；此处列集成层 smoke。
 
 | TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
 |---|---|---|---|---|---|
-| TC-UI-030-a | R-UI-001 | TextField 输入字母 | 被过滤 | ui | `HermesAgentParamsScreenTest#digits only filter` 🟡 |
-| TC-UI-031-a | R-UI-001 | 输入 9999 → Save | clamp 后写入 prefs | ui | `HermesAgentParamsScreenTest#save clamps value` 🟡 |
-| TC-UI-032-a | R-UI-001 | 输入空 → Save | no-op | ui | `HermesAgentParamsScreenTest#empty no-op save` 🟡 |
-| TC-UI-033-a | R-UI-001 | prefs 外部写 | 屏幕 resync 显示 | ui | `HermesAgentParamsScreenTest#external change resync` 🟡 |
+| TC-UI-030-a | R-UI-001 | TextField 输入字母 | 被过滤 | ui | `HermesAgentParamsScreenTest#digits only filter` 🟢 |
+| TC-UI-031-a | R-UI-001 | 输入 9999 → Save | clamp 后写入 prefs | ui | `HermesAgentParamsScreenTest#save clamps value` 🟢 |
+| TC-UI-032-a | R-UI-001 | 输入空 → Save | no-op | ui | `HermesAgentParamsScreenTest#empty no-op save` 🟢 |
+| TC-UI-033-a | R-UI-001 | prefs 外部写 | 屏幕 resync 显示 | ui | `HermesAgentParamsScreenTest#external change resync` 🟢 |
 
 ### HermesGatewayServiceScreen.kt
 
