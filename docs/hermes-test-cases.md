@@ -850,8 +850,8 @@ R-AGENT-001 描述 agent turn-loop 内核，验收以 **E2E 为主**（§3 三�
 | TC-SKILL-011-a | R-SKILL-001 | `isSafePath()` 传入 HERMES_HOME 外路径 | false；HERMES_HOME 内 / `/tmp/hermes-*` 下 true | unit | `DiskCleanupPluginTest#isSafePath scope bounds` ✅ |
 | TC-SKILL-012-a | R-SKILL-001 | `dryRun()` 含 test + temp + research | 返 Pair(auto,prompt)；磁盘上文件仍在 | unit | `DiskCleanupPluginTest#dryRun is read-only` ✅ |
 | TC-SKILL-020-a | R-SKILL-001 | MemoryProvider 接口 | 6 方法 `initialize/store/retrieve/delete/list/close` + `providerName` 属性（对齐 Python `hermes/plugins/memory/__init__.py`）| unit | `MemoryProviderTest#interface surface` ✅ |
-| TC-SKILL-021-a | R-SKILL-001 | Holographic provider 写读 | 回环相等 | integration | `MemoryProviderHolographicTest#roundtrip` 🟡 |
-| TC-SKILL-022-a | R-SKILL-001 | Honcho provider `save` | POST 请求有效签名 | integration | `MemoryProviderHonchoTest#save signed` 🟡 |
+| TC-SKILL-021-a | R-SKILL-001 | Holographic provider 写读 | 回环相等 | integration | `MemoryProviderHolographicTest#roundtrip` 🟢 |
+| TC-SKILL-022-a | R-SKILL-001 | Honcho provider `save` | POST 请求有效签名 | integration | `MemoryProviderHonchoTest#save signed` 🟢 |
 | TC-SKILL-030-a | R-SKILL-002 | `resolveSkillCommandKey("foo_bar")` 且 `/foo-bar` 已扫描 | 返回 `/foo-bar`（下划线归一 + 前缀加斜杠）| unit | `SkillCommandsTest#resolveSkillCommandKey underscore normalization` ✅ |
 | TC-SKILL-031-a | R-SKILL-002 | `buildPlanPath(userInstruction="Fix the Android bug!")` | 返回 `.hermes/plans/<ts>-fix-the-android-bug.md`（slug: 小写/非 `a-z0-9` 转 `-`/最多 8 段/长度 ≤48；单参 string — Python 上游同样不拆 argv）| unit | `SkillCommandsTest#buildPlanPath slug rules` ✅ |
 | TC-SKILL-040-a | R-SKILL-003 | skills 增量同步（`tools/skills_sync.py` 对应路径） | 参照 TOOL 段 TC-TOOL-185..191（已双指 R-SKILL-003） | unit/integration | `SkillsSyncTest` 全套（7 条） ✅ |
