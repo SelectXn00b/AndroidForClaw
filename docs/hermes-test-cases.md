@@ -1016,12 +1016,12 @@ SAFETY 大多通过引用其它域的 TC 覆盖；此处列集成层 smoke。
 
 | TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
 |---|---|---|---|---|---|
-| TC-UI-040-a | R-UI-001 | 打开 run switch | 同时 `saveRunSwitch(true)` + `startService` | ui | `HermesGatewayServiceScreenTest#run switch double write` 🟡 |
-| TC-UI-040-b | R-UI-001 | 关 run switch | 同时 `saveRunSwitch(false)` + `stopService` | ui | `HermesGatewayServiceScreenTest#run switch off` 🟡 |
-| TC-UI-041-a | R-UI-001 | autostart toggle | 仅写 prefs，不碰 service | ui | `HermesGatewayServiceScreenTest#autostart pref only` 🟡 |
-| TC-UI-042-a | R-UI-001 | Status=RUNNING | 显示 "运行中" 文案 | ui | `HermesGatewayServiceScreenTest#status RUNNING mapped` 🟡 |
-| TC-UI-042-b | R-UI-001 | Status=FAILED | 显示 "启动失败" | ui | `HermesGatewayServiceScreenTest#status FAILED mapped` 🟡 |
-| TC-UI-043-a | R-UI-001 | errorMessage != null | 错误条渲染 | ui | `HermesGatewayServiceScreenTest#error bar visible` 🟡 |
+| TC-UI-040-a | R-UI-001 | 打开 run switch | 同时 `saveRunSwitch(true)` + `startService` | ui | `HermesGatewayServiceScreenTest#run switch double write` 🟢 |
+| TC-UI-040-b | R-UI-001 | 关 run switch | 同时 `saveRunSwitch(false)` + `stopService` | ui | `HermesGatewayServiceScreenTest#run switch off` 🟢 |
+| TC-UI-041-a | R-UI-001 | autostart toggle | 仅写 prefs，不碰 service | ui | `HermesGatewayServiceScreenTest#autostart pref only` 🟢 |
+| TC-UI-042-a | R-UI-001 | Status=RUNNING | 显示 "运行中" 文案 | ui | `HermesGatewayServiceScreenTest#status RUNNING mapped` 🟢 |
+| TC-UI-042-b | R-UI-001 | Status=FAILED | 显示 "启动失败" | ui | `HermesGatewayServiceScreenTest#status FAILED mapped` 🟢 |
+| TC-UI-043-a | R-UI-001 | errorMessage != null | 错误条渲染 | ui | `HermesGatewayServiceScreenTest#error bar visible` 🟢 |
 
 ### HermesGatewayQrBindScreen.kt
 
