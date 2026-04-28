@@ -956,7 +956,7 @@ SAFETY 大多通过引用其它域的 TC 覆盖；此处列集成层 smoke。
 | TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
 |---|---|---|---|---|---|
 | TC-CONFIG-020-a | R-GW-006 | start()→RUNNING | Status 转换 STOPPED → STARTING → RUNNING | integration | `HermesGatewayControllerTest#status FSM happy path` 🟡 |
-| TC-CONFIG-021-a | R-GW-006 | 空 platforms 下 start() | Status → FAILED + errorMessage | integration | `HermesGatewayControllerTest#empty platforms fails` 🟡 |
+| TC-CONFIG-021-a | R-GW-006 | 空 platforms 下 start() | Status → FAILED + errorMessage | integration | `HermesGatewayControllerRobolectricTest#empty platforms fails` 🟢 |
 | TC-CONFIG-022-a | R-GW-006 | RUNNING 下 start() | no-op 返回 true | unit | `HermesGatewayControllerTest#start idempotent RUNNING` 🟢 |
 | TC-CONFIG-023-a | R-GW-006 | stop() 过程抛 | Status 仍 STOPPED | integration | `HermesGatewayControllerTest#stop exception still STOPPED` 🟡 |
 | TC-CONFIG-024-a | R-GW-006 | `stripInternalMarkup("<tool>...</tool>")` | 剥净 | unit | `HermesGatewayControllerTest#stripInternalMarkup removes xml` 🟢 |
