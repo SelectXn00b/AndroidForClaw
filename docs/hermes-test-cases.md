@@ -984,13 +984,13 @@ SAFETY 大多通过引用其它域的 TC 覆盖；此处列集成层 smoke。
 
 | TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
 |---|---|---|---|---|---|
-| TC-UI-010-a | R-UI-001 | Feishu 选 | 字段数 6 | ui | `HermesGatewayCredentialsScreenTest#feishu field count` 🟡 |
-| TC-UI-010-b | R-UI-001 | Weixin 选 | 字段数 3 | ui | `HermesGatewayCredentialsScreenTest#weixin field count` 🟡 |
-| TC-UI-011-a | R-UI-001 | 密码字段 | textVisible=false 默认 | ui | `HermesGatewayCredentialsScreenTest#password masked default` 🟡 |
-| TC-UI-012-a | R-UI-001 | 切 enable toggle | 立刻 saveEnable 调用 | ui | `HermesGatewayCredentialsScreenTest#enable toggle immediate save` 🟡 |
-| TC-UI-013-a | R-UI-001 | 按 Save | 每字段各一次 write | ui | `HermesGatewayCredentialsScreenTest#save per field write` 🟡 |
-| TC-UI-014-a | R-UI-001 | Save 后 | savedFlash 显示 1500ms 后消失 | ui | `HermesGatewayCredentialsScreenTest#saved flash 1500ms` 🟡 |
-| TC-UI-015-a | R-UI-001 | 打开屏幕 | 初始值等 prefs | ui | `HermesGatewayCredentialsScreenTest#initial values from prefs` 🟡 |
+| TC-UI-010-a | R-UI-001 | Feishu 卡片 | 字段数 4（app_id/app_secret/verification_token/encrypt_key；production FEISHU_FIELDS） | ui | `HermesGatewayCredentialsScreenTest#feishu field count` 🟢 |
+| TC-UI-010-b | R-UI-001 | Weixin 卡片 | 字段数 2（account_id/login_token；production WEIXIN_FIELDS） | ui | `HermesGatewayCredentialsScreenTest#weixin field count` 🟢 |
+| TC-UI-011-a | R-UI-001 | 密码字段 | textVisible=false 默认 | ui | `HermesGatewayCredentialsScreenTest#password masked default` 🟢 |
+| TC-UI-012-a | R-UI-001 | 切 enable toggle | 立刻 saveEnable 调用 | ui | `HermesGatewayCredentialsScreenTest#enable toggle immediate save` 🟢 |
+| TC-UI-013-a | R-UI-001 | 按 Save | 每字段各一次 write | ui | `HermesGatewayCredentialsScreenTest#save per field write` 🟢 |
+| TC-UI-014-a | R-UI-001 | Save 后 | savedFlash 显示 1500ms 后消失 | ui | `HermesGatewayCredentialsScreenTest#saved flash 1500ms` 🟢 |
+| TC-UI-015-a | R-UI-001 | 打开屏幕 | 初始值等 prefs | ui | `HermesGatewayCredentialsScreenTest#initial values from prefs` 🟢 |
 
 ### HermesGatewayPoliciesScreen.kt
 
