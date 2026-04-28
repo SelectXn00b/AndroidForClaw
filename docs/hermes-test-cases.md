@@ -996,12 +996,12 @@ SAFETY 大多通过引用其它域的 TC 覆盖；此处列集成层 smoke。
 
 | TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
 |---|---|---|---|---|---|
-| TC-UI-020-a | R-UI-001 | dm_policy chip | 选项 `{"allow","require_mention","deny"}` | ui | `HermesGatewayPoliciesScreenTest#dm policy chips` 🟡 |
-| TC-UI-020-b | R-UI-001 | group_policy chip | 同上集合 | ui | `HermesGatewayPoliciesScreenTest#group policy chips` 🟡 |
-| TC-UI-021-a | R-UI-001 | 改 chip 后不按 Save 退出 | prefs 未变 | ui | `HermesGatewayPoliciesScreenTest#only save persists` 🟡 |
-| TC-UI-022-a | R-UI-001 | `require_mention` chip → save → 读 Flow | string 为 `"require_mention"` | integration | `HermesGatewayPoliciesScreenTest#string-boolean match` 🟡 |
-| TC-UI-023-a | R-UI-001 | 未设定过 | 默认值 allow / require_mention | unit | `HermesGatewayPoliciesScreenTest#defaults` 🟡 |
-| TC-UI-024-a | R-UI-001 | 后续 prefs 外部变更 | 仅首次 emit 初始化 state | ui | `HermesGatewayPoliciesScreenTest#first-emit only init` 🟡 |
+| TC-UI-020-a | R-UI-001 | dm_policy chip | Feishu 选项 `{open, pairing, allowlist}`；Weixin `{open, allowlist, disabled}`（对齐 Python 上游） | ui | `HermesGatewayPoliciesScreenTest#dm policy chips` 🟢 |
+| TC-UI-020-b | R-UI-001 | group_policy chip | 两个平台都为 `{open, allowlist, disabled}` | ui | `HermesGatewayPoliciesScreenTest#group policy chips` 🟢 |
+| TC-UI-021-a | R-UI-001 | 改 chip 后不按 Save 退出 | prefs 未变 | ui | `HermesGatewayPoliciesScreenTest#only save persists` 🟢 |
+| TC-UI-022-a | R-UI-001 | 预置 `FIELD_REQUIRE_MENTION="false"`/`"true"` → 挂载 → 读 Switch 状态 | 字符串 `"false"` 渲染为 Off、`"true"` 渲染为 On（string↔boolean 双向映射） | ui | `HermesGatewayPoliciesScreenTest#string-boolean match` 🟢 |
+| TC-UI-023-a | R-UI-001 | 未设定过 | Feishu 默认 dm=`pairing`/group=`allowlist`/mention=`true`；Weixin `open`/`disabled`/`false` | unit | `HermesGatewayPoliciesScreenTest#defaults` 🟢 |
+| TC-UI-024-a | R-UI-001 | 首次 state 初始化后 prefs 外部变更 | state map 不覆盖（仅首次 emit 初始化） | ui | `HermesGatewayPoliciesScreenTest#first-emit only init` 🟢 |
 
 ### HermesAgentParamsScreen.kt
 
