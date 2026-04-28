@@ -667,7 +667,7 @@ class MessageProcessingDelegate(
                     AppLogger.e(TAG, "获取角色信息失败: ${e.message}", e)
                     Pair(null, null)
                 }
-                val currentRoleName = characterName ?: "墨思"
+                val currentRoleName = characterName ?: "Hermes"
                 logMessageTiming(
                     stage = "delegate.loadRoleInfo",
                     startTimeMs = loadRoleInfoStartTime,
@@ -1455,7 +1455,7 @@ class MessageProcessingDelegate(
                     val currentRoleName = try {
                         characterCardManager.getCharacterCardFlow(roleCardId).first().name
                     } catch (e: Exception) {
-                        "墨思" // 默认角色名
+                        "Hermes" // 默认角色名
                     }
 
                     // 获取当前使用的provider和model信息（在finally块内重新获取）
