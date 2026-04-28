@@ -930,15 +930,15 @@ SAFETY 大多通过引用其它域的 TC 覆盖；此处列集成层 smoke。
 
 | TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
 |---|---|---|---|---|---|
-| TC-CONFIG-001-a | R-GW-001 | `HermesGatewayPreferences.getInstance(ctx)` 两次 | 同实例 | unit | `HermesGatewayPreferencesTest#singleton` 🟡 |
-| TC-CONFIG-002-a | R-GW-001 | 写 `appId` | 进 EncryptedPrefs | integration | `HermesGatewayPreferencesTest#dual store writes` 🟡 |
-| TC-CONFIG-002-b | R-GW-001 | 写 policy | 进 DataStore | integration | `HermesGatewayPreferencesTest#policy goes to datastore` 🟡 |
-| TC-CONFIG-003-a | R-GW-001 | saveAgentMaxTurns(0) | clamp 到 1 | unit | `HermesGatewayPreferencesTest#maxTurns clamp low` 🟡 |
-| TC-CONFIG-003-b | R-GW-001 | saveAgentMaxTurns(9999) | clamp 到 cap | unit | `HermesGatewayPreferencesTest#maxTurns clamp high` 🟡 |
-| TC-CONFIG-004-a | R-GW-001 | `clearSecrets("feishu")` | 仅 `feishu_*` key 清 | integration | `HermesGatewayPreferencesTest#clearSecrets prefix only` 🟡 |
-| TC-CONFIG-005-a | R-GW-001 | 首次读 Flow 无值 | emit 默认 | unit | `HermesGatewayPreferencesTest#default flow emit` 🟡 |
-| TC-CONFIG-006-a | R-GW-001 | 写后 restart process 读 | 数据仍在 | integration | `HermesGatewayPreferencesTest#roundtrip persistence` 🟡 |
-| TC-CONFIG-007-a | R-GW-001 | 常量 key 名 | 与 Python 对齐 | unit | `HermesGatewayPreferencesTest#constant names` 🟡 |
+| TC-CONFIG-001-a | R-GW-001 | `HermesGatewayPreferences.getInstance(ctx)` 两次 | 同实例 | unit | `HermesGatewayPreferencesTest#singleton` 🟢 |
+| TC-CONFIG-002-a | R-GW-001 | 写 `appId` | 进 EncryptedPrefs | integration | `HermesGatewayPreferencesTest#dual store writes` 🟢 |
+| TC-CONFIG-002-b | R-GW-001 | 写 policy | 进 DataStore | integration | `HermesGatewayPreferencesTest#policy goes to datastore` 🟢 |
+| TC-CONFIG-003-a | R-GW-001 | saveAgentMaxTurns(0) | clamp 到 1 | unit | `HermesGatewayPreferencesTest#maxTurns clamp low` 🟢 |
+| TC-CONFIG-003-b | R-GW-001 | saveAgentMaxTurns(9999) | clamp 到 cap | unit | `HermesGatewayPreferencesTest#maxTurns clamp high` 🟢 |
+| TC-CONFIG-004-a | R-GW-001 | `clearSecrets("feishu")` | 仅 `feishu_*` key 清 | integration | `HermesGatewayPreferencesTest#clearSecrets prefix only` 🟢 |
+| TC-CONFIG-005-a | R-GW-001 | 首次读 Flow 无值 | emit 默认 | unit | `HermesGatewayPreferencesTest#default flow emit` 🟢 |
+| TC-CONFIG-006-a | R-GW-001 | 写后 restart process 读 | 数据仍在 | integration | `HermesGatewayPreferencesTest#roundtrip persistence` 🟢 |
+| TC-CONFIG-007-a | R-GW-001 | 常量 key 名 | 与 Python 对齐 | unit | `HermesGatewayPreferencesTest#constant names` 🟢 |
 
 ### HermesGatewayConfigBuilder.kt
 
