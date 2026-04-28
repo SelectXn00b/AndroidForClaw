@@ -1027,12 +1027,12 @@ SAFETY 大多通过引用其它域的 TC 覆盖；此处列集成层 smoke。
 
 | TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
 |---|---|---|---|---|---|
-| TC-UI-050-a | R-UI-001 | Feishu QR 流程成功 | `saveFeishuCreds(...)` 写入 | integration | `HermesGatewayQrBindScreenTest#feishu success writes creds` 🟡 |
-| TC-UI-051-a | R-UI-001 | Weixin QR 成功 | `saveWeixinCreds(...)` 写入 | integration | `HermesGatewayQrBindScreenTest#weixin success writes creds` 🟡 |
-| TC-UI-052-a | R-UI-001 | QR 生成失败 | 显示错误 UI | ui | `HermesGatewayQrBindScreenTest#qr gen failure` 🟡 |
-| TC-UI-053-a | R-UI-001 | 按取消 | state 清零 + job cancel | ui | `HermesGatewayQrBindScreenTest#cancel clears state` 🟡 |
-| TC-UI-054-a | R-UI-001 | 按 "清除凭证" | clearSecrets 调用 | ui | `HermesGatewayQrBindScreenTest#clear credentials invokes clear` 🟡 |
-| TC-UI-055-a | R-UI-001 | Weixin QR 失败 → fallback 文案 | 显示 "请改用扫码登录 APP" 之类兜底 | ui | `HermesGatewayQrBindScreenTest#weixin fallback message` 🟡 |
+| TC-UI-050-a | R-UI-001 | Feishu QR 流程成功（re-scoped：pre-seed appId + botName + domain）| "已绑定: ..." / Bot / Domain 信息卡渲染 | ui | `HermesGatewayQrBindScreenTest#feishu success writes creds` 🟢 |
+| TC-UI-051-a | R-UI-001 | Weixin QR 成功（re-scoped：pre-seed accountId）| "已绑定账号: ..." 渲染 | ui | `HermesGatewayQrBindScreenTest#weixin success writes creds` 🟢 |
+| TC-UI-052-a | R-UI-001 | QR 生成失败（反射调 `generateQrBitmap` size=0）| 返回 null（UI 依据该契约显示 "⚠️ 二维码生成失败"）| ui | `HermesGatewayQrBindScreenTest#qr gen failure` 🟢 |
+| TC-UI-053-a | R-UI-001 | idle 状态按钮不变量（re-scoped：无法驱动 qrRegister 网络路径）| "取消" 按钮不渲染 + "开始扫码注册" / "开始扫码登录" 渲染 | ui | `HermesGatewayQrBindScreenTest#cancel clears state` 🟢 |
+| TC-UI-054-a | R-UI-001 | 按 "清除凭证" | `clearSecrets(Feishu/Weixin)` 同步清空；状态 "已清除凭证" | ui | `HermesGatewayQrBindScreenTest#clear credentials invokes clear` 🟢 (Feishu + Weixin) |
+| TC-UI-055-a | R-UI-001 | Weixin 常驻描述文案（re-scoped：静态 fallback 文案）| "微信 (Weixin) iLink 扫码登录" 标题 + "qr_login 协议" 描述常驻 | ui | `HermesGatewayQrBindScreenTest#weixin fallback message` 🟢 |
 
 ---
 
