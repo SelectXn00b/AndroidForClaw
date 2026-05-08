@@ -12,6 +12,8 @@ enum class RecordingState {
     STEP_RECORDING,
     /** 单步录制暂停 */
     STEP_PAUSED,
+    /** 录制结束，等待用户输入描述 */
+    STEP_LABELING,
     /** AI 正在总结 */
     SUMMARIZING,
     /** 总结完成，用户审阅中 */

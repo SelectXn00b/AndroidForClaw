@@ -54,6 +54,9 @@ fun SkillRecorderScreen(
     val context = LocalContext.current
     var modelDropdownExpanded by remember { mutableStateOf(false) }
     var showDiscardAllDialog by remember { mutableStateOf(false) }
+    var showEditRecordLabelDialog by remember { mutableStateOf(false) }
+    var editingRecordStepId by remember { mutableStateOf("") }
+    var editingRecordLabelText by remember { mutableStateOf("") }
     val snackbarHostState = remember { SnackbarHostState() }
 
     // 保存成功后显示 Snackbar 提示
@@ -135,6 +138,39 @@ fun SkillRecorderScreen(
         )
     }
 
+    // 编辑 Record 步骤描述对话框
+    if (showEditRecordLabelDialog) {
+        AlertDialog(
+            onDismissRequest = { showEditRecordLabelDialog = false },
+            title = { Text("编辑操作描述") },
+            text = {
+                OutlinedTextField(
+                    value = editingRecordLabelText,
+                    onValueChange = { editingRecordLabelText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("请简要描述这段操作") },
+                    maxLines = 3
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.updateRecordStepLabel(editingRecordStepId, editingRecordLabelText)
+                        showEditRecordLabelDialog = false
+                    },
+                    enabled = editingRecordLabelText.isNotBlank()
+                ) {
+                    Text(stringResource(android.R.string.ok))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditRecordLabelDialog = false }) {
+                    Text(stringResource(android.R.string.cancel))
+                }
+            }
+        )
+    }
+
     // 当进入 REVIEW 状态时导航到审阅页面
     LaunchedEffect(recordingState) {
         if (recordingState == RecordingState.REVIEW) {
@@ -179,6 +215,11 @@ fun SkillRecorderScreen(
                         onCommitThinkStep = { viewModel.commitThinkStep() },
                         onCancelThinkStep = { viewModel.cancelThinkEditor() },
                         onEditThinkStep = { viewModel.editThinkStep(it) },
+                        onEditRecordLabel = { stepId, currentLabel ->
+                            editingRecordStepId = stepId
+                            editingRecordLabelText = currentLabel
+                            showEditRecordLabelDialog = true
+                        },
                         onRemoveStep = { viewModel.removeStep(it) },
                         onMoveStep = { from, to -> viewModel.moveStep(from, to) },
                         onGenerate = { viewModel.generateSkill() },
@@ -188,7 +229,7 @@ fun SkillRecorderScreen(
                 }
 
                 RecordingState.STEP_RECORDING, RecordingState.STEP_PAUSED -> {
-                    // ──── STEP_RECORDING：录制 overlay ────
+                    // ──── STEP_RECORDING：录制中，控制在悬浮球 ────
                     StepRecordingContent(
                         recordingState = recordingState,
                         stepFrameCount = stepFrameCount,
@@ -196,6 +237,15 @@ fun SkillRecorderScreen(
                         onResume = { viewModel.resumeStepRecording() },
                         onStop = { viewModel.stopStepRecording() },
                         onDiscard = { viewModel.discardStepRecording() }
+                    )
+                }
+
+                RecordingState.STEP_LABELING -> {
+                    // ──── STEP_LABELING：描述输入在悬浮面板（也保留 in-app fallback） ────
+                    StepLabelingContent(
+                        frameCount = stepFrameCount,
+                        onConfirm = { label -> viewModel.commitRecordStepWithLabel(label) },
+                        onDiscard = { viewModel.discardCurrentRecordStep() }
                     )
                 }
 
@@ -335,6 +385,7 @@ private fun BuildingContent(
     onCommitThinkStep: () -> Unit,
     onCancelThinkStep: () -> Unit,
     onEditThinkStep: (BuilderStep.Think) -> Unit,
+    onEditRecordLabel: (String, String) -> Unit,
     onRemoveStep: (String) -> Unit,
     onMoveStep: (Int, Int) -> Unit,
     onGenerate: () -> Unit,
@@ -402,7 +453,12 @@ private fun BuildingContent(
                     onMoveUp = { if (index > 0) onMoveStep(index, index - 1) },
                     onMoveDown = { if (index < steps.size - 1) onMoveStep(index, index + 1) },
                     onRemove = { onRemoveStep(step.id) },
-                    onEdit = { if (step is BuilderStep.Think) onEditThinkStep(step) }
+                    onEdit = {
+                        when (step) {
+                            is BuilderStep.Think -> onEditThinkStep(step)
+                            is BuilderStep.Record -> onEditRecordLabel(step.id, step.label)
+                        }
+                    }
                 )
             }
         }
@@ -555,6 +611,17 @@ private fun StepCard(
                 Spacer(modifier = Modifier.height(4.dp))
                 when (step) {
                     is BuilderStep.Record -> {
+                        if (step.label.isNotBlank()) {
+                            Text(
+                                text = "\"${step.label}\"",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                        }
                         Text(
                             text = stringResource(R.string.skill_recorder_step_frames, step.frames.size),
                             style = MaterialTheme.typography.bodySmall,
@@ -586,7 +653,7 @@ private fun StepCard(
                             Icon(Icons.Default.ArrowDownward, contentDescription = null, modifier = Modifier.size(16.dp))
                         }
                     }
-                    if (step is BuilderStep.Think) {
+                    if (step is BuilderStep.Think || step is BuilderStep.Record) {
                         IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
                             Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
                         }
@@ -699,6 +766,63 @@ private fun StepRecordingContent(
                 contentDescription = stringResource(R.string.skill_recorder_discard),
                 tint = MaterialTheme.colorScheme.error
             )
+        }
+    }
+}
+
+@Composable
+private fun StepLabelingContent(
+    frameCount: Int,
+    onConfirm: (String) -> Unit,
+    onDiscard: () -> Unit
+) {
+    var labelText by remember { mutableStateOf("") }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "描述这段操作",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+
+            Text(
+                text = "已捕获 $frameCount 帧。请简要描述刚才录制的操作，例如：\n• 从主页点击房态房量入口\n• 选择热点日历标签",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            OutlinedTextField(
+                value = labelText,
+                onValueChange = { labelText = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("这段操作做了什么？") },
+                minLines = 2,
+                maxLines = 4
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End)
+            ) {
+                OutlinedButton(onClick = onDiscard) {
+                    Text("丢弃")
+                }
+                Button(
+                    onClick = { onConfirm(labelText) },
+                    enabled = labelText.isNotBlank()
+                ) {
+                    Text("确认")
+                }
+            }
         }
     }
 }

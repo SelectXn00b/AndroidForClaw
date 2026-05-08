@@ -16,8 +16,10 @@ data class RecordingFrame(
     val activityName: String? = null,
     /** 当前包名 */
     val packageName: String? = null,
-    /** 压缩后的 UI 层级摘要文本 */
-    val uiHierarchySummary: String = ""
+    /** 压缩后的 UI 层级摘要文本 (操作后的界面状态) */
+    val uiHierarchySummary: String = "",
+    /** 操作前的 UI 层级摘要文本 (用于推断点击目标) */
+    val previousUiHierarchy: String = ""
 )
 
 /**
@@ -27,6 +29,8 @@ data class EventDetails(
     val className: String? = null,
     val text: String? = null,
     val contentDescription: String? = null,
+    /** 元素的资源 ID (如 com.example:id/btn_submit) */
+    val resourceId: String? = null,
     /** TEXT_INPUT 事件的输入内容 */
     val inputText: String? = null,
     val additionalData: Map<String, String> = emptyMap()

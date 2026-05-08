@@ -33,6 +33,24 @@ class FrameCapture(private val context: Context) {
             ActionListener.ActionType.SCROLL,
             ActionListener.ActionType.SCREEN_CHANGE
         )
+
+        /** 常见 Launcher / 系统 UI 包名前缀，录制启动阶段自动跳过 */
+        private val LAUNCHER_PACKAGES = setOf(
+            "com.android.launcher",
+            "com.google.android.apps.nexuslauncher",
+            "com.miui.home",
+            "com.huawei.android.launcher",
+            "com.oppo.launcher",
+            "com.vivo.launcher",
+            "com.sec.android.app.launcher",
+            "com.oneplus.launcher",
+            "com.realme.launcher",
+            "com.nothing.launcher",
+            "com.teslacoilsw.launcher",
+            "com.microsoft.launcher",
+            "net.oneplus.launcher",
+            "com.android.systemui"
+        )
     }
 
     private val frameIndex = AtomicInteger(0)
@@ -40,8 +58,22 @@ class FrameCapture(private val context: Context) {
     private var lastEventTime = 0L
     private var lastEventType = ""
     private var lastScrollTime = 0L
+    /** Track last SCREEN_CHANGE activity to prevent duplicate captures from polling + callback */
+    private var lastScreenChangeActivity: String? = null
     /** Resolved at construction time so we filter against the real applicationId */
     private val selfPackage: String = context.packageName
+    /** Kotlin package prefix — Activities use this, not applicationId */
+    private val selfKotlinPackage: String = "com.ai.assistance.operit"
+    /** Store previous UI hierarchy for diff-based click inference */
+    private var previousUiHierarchy: String = ""
+
+    /**
+     * Whether we are still in the "launch phase" — the period after recording starts
+     * where the user navigates from this app / launcher to the target app.
+     * During this phase, events from launchers and this app are silently skipped.
+     * Once we see an event from a non-launcher, non-self package, the launch phase ends.
+     */
+    private var inLaunchPhase = true
 
     /**
      * 处理一个 ActionEvent，决定是否捕获帧并加入 frameBuffer。
@@ -54,9 +86,25 @@ class FrameCapture(private val context: Context) {
         // 帧数限制
         if (frameBuffer.size >= MAX_FRAMES) return@withContext null
 
-        // 过滤自身事件
+        // 过滤自身事件（applicationId 或 Kotlin package 前缀都匹配）
         val pkg = event.elementInfo?.packageName
-        if (pkg != null && (pkg == selfPackage || pkg.startsWith("$selfPackage."))) return@withContext null
+        if (pkg != null && isSelfPackage(pkg)) return@withContext null
+
+        // 启动阶段过滤：跳过 Launcher / 系统 UI / 自身 app 事件，直到用户到达目标 app
+        if (inLaunchPhase) {
+            if (pkg == null || isLauncherPackage(pkg) || isSelfPackage(pkg)) {
+                return@withContext null
+            }
+            // 到达目标 app，结束启动阶段
+            inLaunchPhase = false
+            AppLogger.i(TAG, "启动阶段结束，目标应用: $pkg")
+        }
+
+        // 录制中途过滤：如果用户切回 Launcher 或自身 app，跳过这些帧
+        // （典型场景：录制结束时用户切回我们的 app 停止录制）
+        if (pkg != null && (isLauncherPackage(pkg) || isSelfPackage(pkg))) {
+            return@withContext null
+        }
 
         val eventType = event.actionType.name
 
@@ -71,6 +119,15 @@ class FrameCapture(private val context: Context) {
             if (event.actionType == ActionListener.ActionType.SCROLL) {
                 if (now - lastScrollTime < SCROLL_THROTTLE_MS) return@withContext null
                 lastScrollTime = now
+            }
+
+            // SCREEN_CHANGE 去重：同一 Activity 只记录一次（防止 polling + callback 双路径重复）
+            if (event.actionType == ActionListener.ActionType.SCREEN_CHANGE) {
+                val activityName = event.elementInfo?.className
+                if (activityName != null && activityName == lastScreenChangeActivity) {
+                    return@withContext null
+                }
+                lastScreenChangeActivity = activityName
             }
 
             // 同类型事件去抖
@@ -98,13 +155,44 @@ class FrameCapture(private val context: Context) {
                 null
             }
 
-            val details = EventDetails(
-                className = event.elementInfo?.className,
-                text = event.elementInfo?.text,
-                contentDescription = event.elementInfo?.contentDescription,
-                inputText = event.inputText,
-                additionalData = emptyMap()
-            )
+            // Build EventDetails — for CLICK events with no element info,
+            // try to infer the click target by diffing before/after UI trees
+            val details = if (event.actionType == ActionListener.ActionType.CLICK &&
+                event.elementInfo?.text.isNullOrBlank() &&
+                event.elementInfo?.contentDescription.isNullOrBlank() &&
+                event.elementInfo?.resourceId.isNullOrBlank() &&
+                previousUiHierarchy.isNotBlank() && uiHierarchy.isNotBlank()
+            ) {
+                val inferred = ClickTargetInferrer.inferClickTarget(previousUiHierarchy, uiHierarchy)
+                if (inferred != null) {
+                    EventDetails(
+                        className = inferred.className,
+                        text = inferred.text,
+                        contentDescription = inferred.contentDescription,
+                        resourceId = inferred.resourceId,
+                        inputText = null,
+                        additionalData = mapOf("inferConfidence" to inferred.confidence.name)
+                    )
+                } else {
+                    EventDetails(
+                        className = event.elementInfo?.className,
+                        text = event.elementInfo?.text,
+                        contentDescription = event.elementInfo?.contentDescription,
+                        resourceId = event.elementInfo?.resourceId,
+                        inputText = event.inputText,
+                        additionalData = emptyMap()
+                    )
+                }
+            } else {
+                EventDetails(
+                    className = event.elementInfo?.className,
+                    text = event.elementInfo?.text,
+                    contentDescription = event.elementInfo?.contentDescription,
+                    resourceId = event.elementInfo?.resourceId,
+                    inputText = event.inputText,
+                    additionalData = emptyMap()
+                )
+            }
 
             val frame = RecordingFrame(
                 index = frameIndex.getAndIncrement(),
@@ -113,8 +201,12 @@ class FrameCapture(private val context: Context) {
                 eventDetails = details,
                 activityName = activityName,
                 packageName = pkg,
-                uiHierarchySummary = uiHierarchy
+                uiHierarchySummary = uiHierarchy,
+                previousUiHierarchy = previousUiHierarchy
             )
+
+            // Update previousUiHierarchy for next frame
+            previousUiHierarchy = uiHierarchy
 
             frameBuffer.add(frame)
             frame
@@ -129,5 +221,23 @@ class FrameCapture(private val context: Context) {
         lastEventTime = 0L
         lastEventType = ""
         lastScrollTime = 0L
+        lastScreenChangeActivity = null
+        inLaunchPhase = true
+        previousUiHierarchy = ""
+    }
+
+    /**
+     * Check if a package name belongs to a known launcher or system UI.
+     */
+    private fun isLauncherPackage(pkg: String): Boolean {
+        return LAUNCHER_PACKAGES.any { pkg == it || pkg.startsWith("$it.") }
+    }
+
+    /**
+     * Check if a package name belongs to this app (either applicationId or Kotlin package).
+     */
+    private fun isSelfPackage(pkg: String): Boolean {
+        return pkg == selfPackage || pkg.startsWith("$selfPackage.") ||
+               pkg == selfKotlinPackage || pkg.startsWith("$selfKotlinPackage.")
     }
 }

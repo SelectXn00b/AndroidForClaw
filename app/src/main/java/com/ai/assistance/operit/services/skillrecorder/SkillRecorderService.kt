@@ -5,6 +5,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
+import android.provider.Settings
 import com.ai.assistance.operit.core.skillrecorder.FrameCapture
 import com.ai.assistance.operit.core.skillrecorder.SkillSummarizer
 import com.ai.assistance.operit.core.tools.system.action.ActionListener
@@ -57,8 +58,14 @@ class SkillRecorderService : Service() {
         /** Job tracking the current summarization coroutine, for cancellation */
         private var summarizationJob: Job? = null
 
+        /** Shared scope for summarization work (avoids creating new scopes each time) */
+        private val summarizationScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
         /** 当前步骤的帧缓冲（线程安全） */
         private val _stepFrameBuffer = java.util.Collections.synchronizedList(mutableListOf<RecordingFrame>())
+
+        /** 悬浮窗管理器（静态引用，生存周期独立于 Service 实例） */
+        private var _overlayManager: SkillRecorderOverlayManager? = null
 
         // ──── 构建器管理方法 ────
 
@@ -136,6 +143,58 @@ class SkillRecorderService : Service() {
             }
         }
 
+        /** 将帧缓冲提交为带描述的 BuilderStep.Record（用户输入 label 后调用） */
+        fun commitStepWithLabel(label: String) {
+            val session = _currentSession.value ?: run {
+                AppLogger.w(TAG, "commitStepWithLabel: no session")
+                _recordingState.value = RecordingState.BUILDING
+                _overlayManager?.remove()
+                return
+            }
+            val framesCopy: List<RecordingFrame>
+            synchronized(_stepFrameBuffer) {
+                framesCopy = ArrayList(_stepFrameBuffer)
+                _stepFrameBuffer.clear()
+            }
+            if (framesCopy.isNotEmpty()) {
+                val step = BuilderStep.Record(
+                    orderIndex = session.steps.size,
+                    label = label.trim(),
+                    frames = framesCopy,
+                    startTime = framesCopy.first().timestamp,
+                    endTime = framesCopy.last().timestamp
+                )
+                val newSteps = ArrayList(session.steps).apply { add(step) }
+                _currentSession.value = session.copy(steps = newSteps.toMutableList())
+                AppLogger.i(TAG, "commitStepWithLabel: label=\"$label\", ${framesCopy.size} frames")
+            }
+            _stepFrameCount.value = 0
+            _recordingState.value = RecordingState.BUILDING
+            _overlayManager?.showBuildingBall()
+        }
+
+        /** 更新录制步骤的 label */
+        fun updateRecordLabel(stepId: String, newLabel: String) {
+            val session = _currentSession.value ?: return
+            val idx = session.steps.indexOfFirst { it.id == stepId }
+            if (idx < 0) return
+            val old = session.steps[idx]
+            if (old is BuilderStep.Record) {
+                val newSteps = ArrayList(session.steps)
+                newSteps[idx] = old.copy(label = newLabel.trim())
+                _currentSession.value = session.copy(steps = newSteps.toMutableList())
+            }
+        }
+
+        /** 丢弃当前步骤帧缓冲（从 STEP_LABELING 回到 BUILDING） */
+        fun discardStepBuffer() {
+            _stepFrameBuffer.clear()
+            _stepFrameCount.value = 0
+            _recordingState.value = RecordingState.BUILDING
+            _overlayManager?.showBuildingBall()
+            AppLogger.i(TAG, "discardStepBuffer: 帧缓冲已丢弃")
+        }
+
         /** 删除一个步骤 */
         fun removeStep(stepId: String) {
             val session = _currentSession.value ?: return
@@ -169,43 +228,42 @@ class SkillRecorderService : Service() {
             _currentSession.value = session.copy(steps = newSteps.toMutableList())
         }
 
-        /** 从 BUILDING 状态触发 AI 总结 */
+        /**
+         * 从 BUILDING 状态生成 SKILL.md。
+         * 默认直接格式化（无 AI），录制数据本身就是完整的操作指令。
+         */
         fun startSummarization(context: Context, configId: String?) {
             val session = _currentSession.value ?: return
             if (_recordingState.value != RecordingState.BUILDING) return
             if (session.steps.isEmpty()) return
             session.endTime = System.currentTimeMillis()
-            _recordingState.value = RecordingState.SUMMARIZING
             selectedModelConfigId = configId
-            summarizationJob?.cancel()
-            summarizationJob = CoroutineScope(Dispatchers.Default + SupervisorJob()).launch {
-                val summarizer = SkillSummarizer(context.applicationContext)
-                val skillMd = summarizer.summarize(session, configId)
-                if (_recordingState.value == RecordingState.SUMMARIZING) {
-                    session.generatedSkillMd = skillMd
-                    _currentSession.value = session.copy()
-                    _recordingState.value = RecordingState.REVIEW
-                    AppLogger.i(TAG, "总结完成")
-                }
-            }
+
+            // 直接格式化生成，不需要 AI 推理
+            val summarizer = SkillSummarizer(context.applicationContext)
+            val skillMd = summarizer.generateDirectSkillMd(session)
+            session.generatedSkillMd = skillMd
+            _currentSession.value = session.copy()
+            _recordingState.value = RecordingState.REVIEW
+            AppLogger.i(TAG, "直接生成 SKILL.md 完成")
         }
 
         /**
-         * Re-run AI summarization on the existing session.
+         * 使用 AI 重新生成/优化 SKILL.md（可选功能，用户主动触发）。
          */
         fun regenerateSummary(context: Context) {
             val session = _currentSession.value ?: return
             if (_recordingState.value != RecordingState.REVIEW) return
             _recordingState.value = RecordingState.SUMMARIZING
             summarizationJob?.cancel()
-            summarizationJob = CoroutineScope(Dispatchers.Default + SupervisorJob()).launch {
+            summarizationJob = summarizationScope.launch {
                 val summarizer = SkillSummarizer(context.applicationContext)
                 val skillMd = summarizer.summarize(session, selectedModelConfigId)
                 if (_recordingState.value == RecordingState.SUMMARIZING) {
                     session.generatedSkillMd = skillMd
                     _currentSession.value = session.copy()
                     _recordingState.value = RecordingState.REVIEW
-                    AppLogger.i(TAG, "重新生成总结完成")
+                    AppLogger.i(TAG, "AI 优化 SKILL.md 完成")
                 }
             }
         }
@@ -217,58 +275,24 @@ class SkillRecorderService : Service() {
             _currentSession.value = null
             _stepFrameCount.value = 0
             _stepFrameBuffer.clear()
+            _overlayManager?.remove()
             _recordingState.value = RecordingState.IDLE
         }
 
         /**
-         * Skip AI summarization and go directly to REVIEW with fallback content.
+         * 取消 AI 优化，回退到直接格式化结果。
          */
-        fun skipSummarization() {
+        fun skipSummarization(context: Context) {
             if (_recordingState.value != RecordingState.SUMMARIZING) return
             summarizationJob?.cancel()
             summarizationJob = null
             val session = _currentSession.value ?: return
-            // Generate fallback content from steps
-            val sb = StringBuilder()
-            sb.appendLine("---")
-            sb.appendLine("name: recorded-skill-${session.id.take(8)}")
-            sb.appendLine("description: ${session.draftText?.takeIf { it.isNotBlank() } ?: "录制的操作流程"}")
-            sb.appendLine("category: recorded")
-            sb.appendLine("platform: android")
-            sb.appendLine("---")
-            sb.appendLine()
-            sb.appendLine("# 录制的操作流程")
-            sb.appendLine()
-            var stepNum = 1
-            for (step in session.steps) {
-                when (step) {
-                    is BuilderStep.Record -> {
-                        sb.appendLine("## 步骤 $stepNum: 录制操作")
-                        for (frame in step.frames) {
-                            val desc = when (frame.eventType) {
-                                "CLICK" -> "点击 \"${frame.eventDetails.text ?: frame.eventDetails.contentDescription ?: "元素"}\""
-                                "LONG_CLICK" -> "长按 \"${frame.eventDetails.text ?: "元素"}\""
-                                "TEXT_INPUT" -> "输入 \"${frame.eventDetails.inputText ?: frame.eventDetails.text ?: ""}\""
-                                "SCROLL" -> "滚动页面"
-                                "SCREEN_CHANGE" -> "页面切换到 ${frame.activityName ?: "新页面"}"
-                                else -> frame.eventType
-                            }
-                            sb.appendLine("- $desc")
-                        }
-                        sb.appendLine()
-                    }
-                    is BuilderStep.Think -> {
-                        sb.appendLine("## 步骤 $stepNum: 推理逻辑")
-                        sb.appendLine(step.content)
-                        sb.appendLine()
-                    }
-                }
-                stepNum++
-            }
-            session.generatedSkillMd = sb.toString()
+            val summarizer = SkillSummarizer(context.applicationContext)
+            val skillMd = summarizer.generateDirectSkillMd(session)
+            session.generatedSkillMd = skillMd
             _currentSession.value = session.copy()
             _recordingState.value = RecordingState.REVIEW
-            AppLogger.i(TAG, "跳过AI总结，使用 fallback")
+            AppLogger.i(TAG, "取消AI优化，使用直接格式化")
         }
     }
 
@@ -318,6 +342,14 @@ class SkillRecorderService : Service() {
             SkillRecorderNotification.NOTIFICATION_ID,
             SkillRecorderNotification.buildRecordingNotification(this, 0, 0, false)
         )
+
+        // 显示悬浮录制控制球
+        if (Settings.canDrawOverlays(this)) {
+            if (_overlayManager == null) {
+                _overlayManager = SkillRecorderOverlayManager(this.applicationContext)
+            }
+            _overlayManager?.showRecordingBall()
+        }
 
         // 注册 ActionManager 事件回调
         val actionManager = ActionManager.getInstance(this)
@@ -380,15 +412,17 @@ class SkillRecorderService : Service() {
                 return
             }
 
-            // Same activity but UI content changed → CLICK
+            // Same activity but UI content changed → likely user interaction (click, scroll, etc.)
+            // Generate a CLICK event so FrameCapture captures the UI hierarchy at this moment.
+            // The AI summarizer will infer what was clicked from the before/after UI context.
             if (currentUiHash != 0 && currentUiHash != lastUiHierarchyHash) {
                 val event = ActionListener.ActionEvent(
                     timestamp = now,
                     actionType = ActionListener.ActionType.CLICK,
                     elementInfo = ActionListener.ElementInfo(
-                        className = currentActivity,
                         packageName = currentActivity?.substringBeforeLast(".", "")
-                    )
+                    ),
+                    additionalData = mapOf("source" to "ui_change_polling")
                 )
                 lastUiHierarchyHash = currentUiHash
                 onActionEvent(event)
@@ -430,15 +464,16 @@ class SkillRecorderService : Service() {
         ActionManager.getInstance(this).unregisterEventCallback(CALLBACK_ID)
         timerJob?.cancel()
 
-        // 提交帧到 BuilderStep.Record（buffer 是 synchronizedList，commitStepFrames 内部用 synchronized）
-        commitStepFrames()
+        // 进入标注状态，等待用户输入描述后再提交
+        _recordingState.value = RecordingState.STEP_LABELING
 
-        _recordingState.value = RecordingState.BUILDING
+        // 切换悬浮窗为描述输入面板
+        _overlayManager?.showLabelingPanel()
 
         // 停止前台服务
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
-        AppLogger.i(TAG, "步骤录制完成，返回构建器")
+        AppLogger.i(TAG, "步骤录制完成，等待用户添加描述")
     }
 
     private fun discardRecording() {
@@ -450,6 +485,9 @@ class SkillRecorderService : Service() {
         // 清空帧缓冲但不丢弃 session
         _stepFrameBuffer.clear()
         _stepFrameCount.value = 0
+
+        // 移除悬浮窗
+        _overlayManager?.remove()
 
         _recordingState.value = RecordingState.BUILDING
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -506,7 +544,8 @@ class SkillRecorderService : Service() {
         serviceScope.cancel()
         _isServiceRunning.value = false
         if (_recordingState.value != RecordingState.REVIEW &&
-            _recordingState.value != RecordingState.BUILDING) {
+            _recordingState.value != RecordingState.BUILDING &&
+            _recordingState.value != RecordingState.STEP_LABELING) {
             _recordingState.value = RecordingState.IDLE
         }
     }

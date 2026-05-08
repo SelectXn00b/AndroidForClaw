@@ -221,6 +221,23 @@ class SkillRecorderViewModel(application: Application) : AndroidViewModel(applic
         SkillRecorderService.moveStep(fromIndex, toIndex)
     }
 
+    // ──── 录制步骤标注 ────
+
+    /** 用户输入描述后，提交录制步骤 */
+    fun commitRecordStepWithLabel(label: String) {
+        SkillRecorderService.commitStepWithLabel(label)
+    }
+
+    /** 丢弃当前步骤帧缓冲（从 STEP_LABELING 回到 BUILDING） */
+    fun discardCurrentRecordStep() {
+        SkillRecorderService.discardStepBuffer()
+    }
+
+    /** 更新已有录制步骤的 label */
+    fun updateRecordStepLabel(stepId: String, newLabel: String) {
+        SkillRecorderService.updateRecordLabel(stepId, newLabel)
+    }
+
     // ──── 生成与总结 ────
 
     /** 触发 AI 总结 */
@@ -232,7 +249,7 @@ class SkillRecorderViewModel(application: Application) : AndroidViewModel(applic
     }
 
     fun skipSummarization() {
-        SkillRecorderService.skipSummarization()
+        SkillRecorderService.skipSummarization(getApplication())
     }
 
     fun regenerateSummary() {
