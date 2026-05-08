@@ -20,16 +20,20 @@ private object SharedHttpClient {
     val instance: OkHttpClient by lazy {
         UnsafeModelSsl.apply(
             OkHttpClient.Builder()
-                // Increase the connection timeout to handle slow networks better.
-                .connectTimeout(60, TimeUnit.SECONDS)
-                // Set long read/write timeouts for streaming responses.
-                .readTimeout(1000, TimeUnit.SECONDS)
-                .writeTimeout(1000, TimeUnit.SECONDS)
-                // Use a connection pool to reuse connections, improving latency and reducing resource usage.
-                // Increased idle connections to 10 from the default of 5.
-                .connectionPool(ConnectionPool(10, 5, TimeUnit.MINUTES))
-                // Explicitly enable HTTP/2, which is the default but good to have declared.
-                // OkHttp will use HTTP/2 if the server supports it, falling back to HTTP/1.1.
+                .connectTimeout(30, TimeUnit.SECONDS)
+                // Read timeout covers the gap between consecutive data packets in a
+                // streaming response.  120 s is generous for SSE streams while still
+                // detecting stalled connections much earlier than the previous 1000 s.
+                .readTimeout(120, TimeUnit.SECONDS)
+                .writeTimeout(60, TimeUnit.SECONDS)
+                // Overall call timeout: caps the *entire* call (connect + write +
+                // read) to 10 minutes, preventing a single request from running
+                // indefinitely when combined with the retry loop.
+                .callTimeout(10, TimeUnit.MINUTES)
+                .connectionPool(ConnectionPool(5, 2, TimeUnit.MINUTES))
+                // HTTP/2 keepalive pings: detect dead connections proactively
+                // instead of waiting for the next read to time out.
+                .pingInterval(30, TimeUnit.SECONDS)
                 .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
         )
             .build()

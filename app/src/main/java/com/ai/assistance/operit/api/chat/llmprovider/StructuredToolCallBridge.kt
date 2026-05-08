@@ -358,6 +358,9 @@ internal object StructuredToolCallBridge {
             properties.put(param.name, JSONObject().apply {
                 put("type", param.type)
                 put("description", param.description)
+                if (param.type == "array") {
+                    put("items", JSONObject().apply { put("type", "string") })
+                }
                 if (param.default != null) {
                     put("default", param.default)
                 }

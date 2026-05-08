@@ -100,9 +100,9 @@ class EnhancedAIService private constructor(private val context: Context) {
 
         /**
          * Maximum number of auto-continue retries for sub-task (gateway) calls.
-         * When the AI stops with wait_for_user_need instead of completing, we
-         * inject a continuation message and re-run the agent loop up to this
-         * many times.  This simulates the main app's interactive multi-turn flow.
+         * When the AI is interrupted mid-task (finishedNaturally=false, e.g.
+         * token limit or maxTurns), we inject a continuation message and
+         * re-run the agent loop up to this many times.
          */
         private const val MAX_SUBTASK_CONTINUES = 10
 
@@ -683,7 +683,7 @@ class EnhancedAIService private constructor(private val context: Context) {
                 roleCardId = roleCardId,
                 chatModelConfigIdOverride = chatModelConfigIdOverride,
                 chatModelIndexOverride = chatModelIndexOverride,
-                includeInternalTools = isSubTask
+                includeInternalTools = false
             )
 
         var finalProcessedInput = message
@@ -870,7 +870,7 @@ class EnhancedAIService private constructor(private val context: Context) {
                         roleCardId = roleCardId,
                         chatModelConfigIdOverride = chatModelConfigIdOverride,
                         chatModelIndexOverride = chatModelIndexOverride,
-                        includeInternalTools = isSubTask
+                        includeInternalTools = false
                     )
                     val tAfterGetTools = messageTimingNow()
                     AppLogger.d(TAG, "sendMessage本地耗时: getAvailableToolsForFunction=${tAfterGetTools - tAfterGetService}ms")
@@ -1148,20 +1148,23 @@ class EnhancedAIService private constructor(private val context: Context) {
                         )
                     } else if (isSubTask) {
                         // Gateway auto-continue logic:
-                        // - If AI explicitly asked to wait (wait_for_user_need): auto-continue
-                        // - If AI was interrupted mid-task (finished=false, e.g. token
-                        //   limit or maxTurns hit while tools were being called): auto-continue
-                        // - If AI naturally finished (finished=true) with just a text
-                        //   reply and no wait_for_user_need: respect the AI's decision
-                        //   and let it end. This prevents forcing unnecessary continuations
-                        //   on simple responses like "好的，已切换到新话题。"
-                        if (hasWait || !event.finishedNaturally) {
-                            val reason = if (hasWait) "wait_for_user_need" else "interrupted (finished=false)"
-                            AppLogger.d(TAG, "isSubTask: deferring for auto-continue: $reason")
-                            GatewayFileLogger.i(TAG, "auto-continue triggered: $reason")
+                        // Only auto-continue when the AI was *interrupted* mid-task
+                        // (finished=false, e.g. token limit or maxTurns hit while
+                        // tools were being called).
+                        //
+                        // When finishedNaturally=true the AI decided on its own to
+                        // stop — whether it emitted wait_for_user_need or just a
+                        // plain text reply.  In both cases we respect that decision
+                        // and do NOT force a continuation.  Previously we treated
+                        // wait_for_user_need as a trigger for auto-continue, but
+                        // that caused infinite loops on simple chat messages like
+                        // "在吗？" where the AI correctly replies and waits.
+                        if (!event.finishedNaturally) {
+                            AppLogger.d(TAG, "isSubTask: deferring for auto-continue: interrupted (finished=false)")
+                            GatewayFileLogger.i(TAG, "auto-continue triggered: interrupted (finished=false)")
                             pendingWaitForUserNeed = true
                         } else {
-                            AppLogger.d(TAG, "isSubTask: AI naturally finished without wait_for_user_need — not auto-continuing")
+                            AppLogger.d(TAG, "isSubTask: AI naturally finished — not auto-continuing")
                             GatewayFileLogger.i(TAG, "AI naturally finished — no auto-continue needed")
                         }
                     } else {
@@ -1230,10 +1233,9 @@ class EnhancedAIService private constructor(private val context: Context) {
             }
 
         // ── Auto-continue retry loop for isSubTask ──
-        // When the AI stops with wait_for_user_need (asks the user) during a
-        // sub-task/gateway call, there is no interactive user to reply.  In the
-        // main app the user simply types a follow-up.  Here we simulate that by
-        // injecting a continuation message and re-running the agent loop, up to
+        // When the AI is interrupted mid-task (finishedNaturally=false, e.g.
+        // token limit or maxTurns hit while tools were being called), we inject
+        // a continuation message and re-run the agent loop, up to
         // MAX_SUBTASK_CONTINUES times.
         val maxContinues = if (isSubTask) MAX_SUBTASK_CONTINUES else 0
         var continueCount = 0

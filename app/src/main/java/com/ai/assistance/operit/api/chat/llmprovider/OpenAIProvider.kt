@@ -110,6 +110,20 @@ open class OpenAIProvider(
     private var isManuallyCancelled = false
 
     /**
+     * When a 400 error occurs and the request contained multimodal image content,
+     * this flag is set to temporarily disable vision for the retry attempt.
+     * The retry will strip images from content and send as plain text instead.
+     * Reset to false at the start of each sendMessage() call.
+     */
+    @Volatile
+    private var visionDisabledForRetry = false
+
+    /** Tracks whether the current request actually included multimodal image content.
+     *  Set in [buildContentField], reset at the start of each [sendMessage] call. */
+    @Volatile
+    private var requestContainedMultimodalImages = false
+
+    /**
      * 由客户端错误（如4xx状态码）触发的API异常，是否重试由统一策略决定
      */
     class NonRetriableException(message: String, cause: Throwable? = null) :
@@ -721,6 +735,10 @@ open class OpenAIProvider(
         val audioLinks = mediaLinks.filter { it.type == "audio" }
         val videoLinks = mediaLinks.filter { it.type == "video" }
 
+        // Respect the runtime fallback flag: if a previous 400 error was caused by
+        // multimodal content, treat vision as unsupported for this retry attempt.
+        val effectiveSupportsVision = supportsVision && !visionDisabledForRetry
+
         val hasSupportedMedia =
             (supportsAudio && audioLinks.isNotEmpty()) || (supportsVideo && videoLinks.isNotEmpty())
 
@@ -739,11 +757,11 @@ open class OpenAIProvider(
         if (videoLinks.isNotEmpty() && !supportsVideo) {
             AppLogger.w("AIService", "检测到视频链接，但当前Provider不支持视频多模态输入，已移除视频。原始文本长度: ${text.length}, 处理后: ${textWithoutLinks.length}")
         }
-        if (imageLinks.isNotEmpty() && !supportsVision) {
+        if (imageLinks.isNotEmpty() && !effectiveSupportsVision) {
             AppLogger.w("AIService", "检测到图片链接，但当前Provider不支持图片处理，已移除图片。原始文本长度: ${text.length}, 处理后: ${textWithoutLinks.length}")
         }
 
-        val hasAnySupportedRichContent = hasSupportedMedia || (supportsVision && imageLinks.isNotEmpty())
+        val hasAnySupportedRichContent = hasSupportedMedia || (effectiveSupportsVision && imageLinks.isNotEmpty())
         if (!hasAnySupportedRichContent) {
             if (textWithoutLinks.isNotEmpty()) return textWithoutLinks
 
@@ -795,7 +813,8 @@ open class OpenAIProvider(
             }
         }
 
-        if (supportsVision) {
+        if (effectiveSupportsVision && imageLinks.isNotEmpty()) {
+            requestContainedMultimodalImages = true
             imageLinks.forEach { link ->
                 contentArray.put(JSONObject().apply {
                     put("type", "image_url")
@@ -1140,6 +1159,9 @@ open class OpenAIProvider(
             properties.put(param.name, JSONObject().apply {
                 put("type", param.type)
                 put("description", param.description)
+                if (param.type == "array") {
+                    put("items", JSONObject().apply { put("type", "string") })
+                }
                 if (param.default != null) {
                     put("default", param.default)
                 }
@@ -1416,8 +1438,29 @@ open class OpenAIProvider(
 
         val errorText = resolveRetryErrorText(context, exception)
 
+        // Multimodal image fallback: if a 4xx error occurred and the request contained
+        // multimodal images, this is likely an API compatibility issue (not a transient error).
+        // Disable vision and allow ONE retry with text-only content, regardless of enableRetry.
+        if (exception is NonRetriableException &&
+            requestContainedMultimodalImages && !visionDisabledForRetry) {
+            AppLogger.w(
+                "AIService",
+                "【发送消息】4xx错误且请求包含多模态图片内容，将禁用图片后重试: ${exception.message}"
+            )
+            visionDisabledForRetry = true
+            requestContainedMultimodalImages = false
+            onNonFatalError(buildRetryMessage("API不支持图片格式，正在移除图片重试", retryCount + 1))
+            return retryCount + 1
+        }
+
         if (!enableRetry) {
             throw IOException(errorText, exception)
+        }
+
+        // 4xx client errors will never succeed on retry — bail out immediately.
+        if (exception is NonRetriableException) {
+            AppLogger.e("AIService", "【发送消息】$errorText (4xx客户端错误，不重试)", exception)
+            throw exception
         }
 
         val newRetryCount = retryCount + 1
@@ -1575,11 +1618,17 @@ open class OpenAIProvider(
     }
 
     // 创建请求
-    private suspend fun createRequest(requestBody: RequestBody): Request {
+    private suspend fun createRequest(requestBody: RequestBody, stream: Boolean = false): Request {
         val currentApiKey = apiKeyProvider.getApiKey().trim()
         val builder = Request.Builder()
             .url(EndpointCompleter.completeEndpoint(apiEndpoint, providerType))
             .addHeader("Content-Type", "application/json")
+
+        // For streaming requests, set Accept header so proxies / CDNs don't
+        // buffer the entire response before forwarding it to us.
+        if (stream) {
+            builder.addHeader("Accept", "text/event-stream")
+        }
 
         if (currentApiKey.isNotEmpty()) {
             builder.addHeader("Authorization", "Bearer $currentApiKey")
@@ -2223,6 +2272,8 @@ open class OpenAIProvider(
         val eventChannel = MutableSharedStream<TextStreamEvent>(replay = Int.MAX_VALUE)
         val responseStream = stream {
             isManuallyCancelled = false
+            visionDisabledForRetry = false
+            requestContainedMultimodalImages = false
             // 重置输出token计数（输入token由TokenCacheManager管理）
             tokenCacheManager.addOutputTokens(-tokenCacheManager.outputTokenCount)
             onTokensUpdated(
@@ -2279,7 +2330,7 @@ open class OpenAIProvider(
                     tokenCacheManager.cachedInputTokenCount,
                     tokenCacheManager.outputTokenCount
                 )
-                val request = createRequest(requestBody)
+                val request = createRequest(requestBody, stream)
                 AppLogger.d(
                     "AIService",
                     "【发送消息】请求体构建完成，目标模型: $modelName，API端点: $apiEndpoint"
@@ -2296,7 +2347,10 @@ open class OpenAIProvider(
                 // 确保在IO线程执行网络请求和响应体读取
                 AppLogger.d("AIService", "【发送消息】切换到IO线程执行网络请求")
                 withContext(Dispatchers.IO) {
+                    val executeStartMs = System.currentTimeMillis()
                     val response = call.execute()
+                    val executeElapsedMs = System.currentTimeMillis() - executeStartMs
+                    AppLogger.d("AIService", "【发送消息】call.execute() 耗时: ${executeElapsedMs}ms, 协议: ${response.protocol}")
 
                     // 保存response引用，以便取消时能强制关闭
                     activeResponse = response
@@ -2314,7 +2368,6 @@ open class OpenAIProvider(
                             if (response.code in 400..499) {
                                 throw NonRetriableException(context.getString(R.string.openai_error_api_request_failed_with_status, response.code, errorBody))
                             }
-                            // 对于5xx等服务端错误，允许重试
                             throw IOException(context.getString(R.string.openai_error_api_request_failed_with_status, response.code, errorBody))
                         }
 
@@ -2443,6 +2496,9 @@ open class OpenAIProvider(
                 return@stream
             } catch (e: Exception) {
                 lastException = e
+                // 确保在重试/异常退出时也清理活跃引用
+                activeCall = null
+                activeResponse = null
                 emitter.emitRollback(requestSavepointId)
                 retryCount = handleRetryableError(
                     context,

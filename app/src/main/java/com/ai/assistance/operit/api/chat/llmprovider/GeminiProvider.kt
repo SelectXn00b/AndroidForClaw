@@ -418,24 +418,27 @@ class GeminiProvider(
             properties.put(param.name, JSONObject().apply {
                 put("type", param.type)
                 put("description", param.description)
+                if (param.type == "array") {
+                    put("items", JSONObject().apply { put("type", "string") })
+                }
                 if (param.default != null) {
                     put("default", param.default)
                 }
             })
-            
+
             if (param.required) {
                 required.put(param.name)
             }
         }
-        
+
         schema.put("properties", properties)
         if (required.length() > 0) {
             schema.put("required", required)
         }
-        
+
         return schema
     }
-    
+
     /**
      * 构建包含文本和图片的parts数组
      */
@@ -1121,7 +1124,6 @@ class GeminiProvider(
                             if (response.code in 400..499) {
                                 throw NonRetriableException(context.getString(R.string.gemini_error_api_request_failed, response.code, errorBody))
                             }
-                            // 对于5xx等服务端错误，允许重试
                             throw IOException(context.getString(R.string.gemini_error_api_request_failed, response.code, errorBody))
                         }
 

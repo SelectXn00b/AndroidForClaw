@@ -418,24 +418,27 @@ class ClaudeProvider(
             properties.put(param.name, JSONObject().apply {
                 put("type", param.type)
                 put("description", param.description)
+                if (param.type == "array") {
+                    put("items", JSONObject().apply { put("type", "string") })
+                }
                 if (param.default != null) {
                     put("default", param.default)
                 }
             })
-            
+
             if (param.required) {
                 required.put(param.name)
             }
         }
-        
+
         schema.put("properties", properties)
         if (required.length() > 0) {
             schema.put("required", required)
         }
-        
+
         return schema
     }
-    
+
     /**
      * 构建包含文本和图片的content数组
      */
