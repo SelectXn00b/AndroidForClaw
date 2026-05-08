@@ -58,7 +58,7 @@ android {
         applicationId = "com.xiaomo.androidforclaw"
         minSdk = 26
         targetSdk = 35
-        versionCode = 52
+        versionCode = 53
         versionName = "2.0.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -70,7 +70,7 @@ android {
             // Explicitly specify the ABIs to support. This ensures that native libraries
             // for both 32-bit and 64-bit ARM devices are included in the APK,
             // resolving conflicts between dependencies with different native library sets.
-            abiFilters.addAll(listOf("arm64-v8a"))
+            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
         }
 
         externalNativeBuild {
