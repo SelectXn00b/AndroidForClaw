@@ -213,6 +213,26 @@ class ChatHistoryDelegate(
                 }
             }
         }
+
+        // Subscribe to gateway chat events for live UI updates
+        coroutineScope.launch {
+            com.ai.assistance.operit.hermes.gateway.GatewayChatEventBus.events.collect { event ->
+                val currentId = _currentChatId.value ?: return@collect
+                if (event.chatId != currentId) return@collect
+                when (event) {
+                    is com.ai.assistance.operit.hermes.gateway.GatewayChatEventBus.Event.UserMessagePersisted,
+                    is com.ai.assistance.operit.hermes.gateway.GatewayChatEventBus.Event.ProcessingCompleted -> {
+                        reloadChatMessagesSmart(event.chatId)
+                        onScrollToBottom()
+                    }
+                    is com.ai.assistance.operit.hermes.gateway.GatewayChatEventBus.Event.StreamingUpdate -> {
+                        reloadChatMessagesSmart(event.chatId)
+                        onScrollToBottom()
+                    }
+                    else -> {}
+                }
+            }
+        }
     }
 
     private suspend fun loadChatMessages(chatId: String) {

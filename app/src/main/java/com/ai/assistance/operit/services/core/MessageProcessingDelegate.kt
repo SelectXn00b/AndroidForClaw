@@ -347,6 +347,30 @@ class MessageProcessingDelegate(
 
     init {
         AppLogger.d(TAG, "MessageProcessingDelegate初始化: 创建滚动事件流")
+
+        // Subscribe to gateway chat events to drive processing indicators
+        coroutineScope.launch {
+            com.ai.assistance.operit.hermes.gateway.GatewayChatEventBus.events.collect { event ->
+                when (event) {
+                    is com.ai.assistance.operit.hermes.gateway.GatewayChatEventBus.Event.ProcessingStarted -> {
+                        _activeStreamingChatIds.value = _activeStreamingChatIds.value + event.chatId
+                        val map = _inputProcessingStateByChatId.value.toMutableMap()
+                        map[event.chatId] = EnhancedInputProcessingState.Processing("")
+                        _inputProcessingStateByChatId.value = map
+                        _isLoading.value = true
+                    }
+                    is com.ai.assistance.operit.hermes.gateway.GatewayChatEventBus.Event.ProcessingCompleted,
+                    is com.ai.assistance.operit.hermes.gateway.GatewayChatEventBus.Event.ProcessingFailed -> {
+                        _activeStreamingChatIds.value = _activeStreamingChatIds.value - event.chatId
+                        val map = _inputProcessingStateByChatId.value.toMutableMap()
+                        map[event.chatId] = EnhancedInputProcessingState.Completed
+                        _inputProcessingStateByChatId.value = map
+                        updateGlobalLoadingState()
+                    }
+                    else -> {}
+                }
+            }
+        }
     }
 
     fun updateUserMessage(message: String) {
@@ -413,7 +437,8 @@ class MessageProcessingDelegate(
             chatModelIndexOverride: Int? = null,
             suppressUserMessageInHistory: Boolean = false,
             isGroupOrchestrationTurn: Boolean = false,
-            groupParticipantNamesText: String? = null
+            groupParticipantNamesText: String? = null,
+            isSubTask: Boolean = false
     ) {
         val rawMessageText = messageTextOverride ?: _userMessage.value.text
         // 群组编排模式下，允许空消息（后续成员不需要用户消息）
@@ -751,7 +776,8 @@ class MessageProcessingDelegate(
                         incrementCurrentTurnToolInvocationCount(chatId)
                     },
                     chatModelConfigIdOverride = chatModelConfigIdOverride,
-                    chatModelIndexOverride = chatModelIndexOverride
+                    chatModelIndexOverride = chatModelIndexOverride,
+                    isSubTask = isSubTask
                 )
                 logMessageTiming(
                     stage = "delegate.prepareResponseStream",

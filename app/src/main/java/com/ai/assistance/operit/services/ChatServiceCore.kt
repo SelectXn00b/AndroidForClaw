@@ -133,6 +133,26 @@ class ChatServiceCore(
             }
         }
 
+        // Subscribe to gateway events so the token circle updates for gateway chats.
+        // The main-app path goes through onTurnComplete, but gateway uses its own
+        // EnhancedAIService instances and never triggers that callback.
+        coroutineScope.launch {
+            com.ai.assistance.operit.hermes.gateway.GatewayChatEventBus.events.collect { event ->
+                when (event) {
+                    is com.ai.assistance.operit.hermes.gateway.GatewayChatEventBus.Event.ProcessingCompleted -> {
+                        val chatId = event.chatId
+                        val service = EnhancedAIService.getChatInstance(context, chatId)
+                        tokenStatisticsDelegate.updateCumulativeStatistics(chatId, service)
+                        val (inputTokens, outputTokens) = tokenStatisticsDelegate.getCumulativeTokenCounts(chatId)
+                        val windowSize = tokenStatisticsDelegate.getLastCurrentWindowSize(chatId)
+                        tokenStatisticsDelegate.setTokenCounts(chatId, inputTokens, outputTokens, windowSize)
+                        chatHistoryDelegate.saveCurrentChat(inputTokens, outputTokens, windowSize, chatIdOverride = chatId)
+                    }
+                    else -> {}
+                }
+            }
+        }
+
         // 初始化消息处理委托
         messageProcessingDelegate = MessageProcessingDelegate(
             context = context,
@@ -214,7 +234,8 @@ class ChatServiceCore(
         messageTextOverride: String? = null,
         proxySenderNameOverride: String? = null,
         chatModelConfigIdOverride: String? = null,
-        chatModelIndexOverride: Int? = null
+        chatModelIndexOverride: Int? = null,
+        isSubTask: Boolean = false
     ) {
         messageCoordinationDelegate.sendUserMessage(
             promptFunctionType = promptFunctionType,
@@ -223,7 +244,8 @@ class ChatServiceCore(
             messageTextOverride = messageTextOverride,
             proxySenderNameOverride = proxySenderNameOverride,
             chatModelConfigIdOverride = chatModelConfigIdOverride,
-            chatModelIndexOverride = chatModelIndexOverride
+            chatModelIndexOverride = chatModelIndexOverride,
+            isSubTask = isSubTask
         )
     }
 
@@ -370,6 +392,9 @@ class ChatServiceCore(
 
     val isSummarizing: StateFlow<Boolean>
         get() = messageCoordinationDelegate.isSummarizing
+
+    val isSendTriggeredSummarizing: StateFlow<Boolean>
+        get() = messageCoordinationDelegate.isSendTriggeredSummarizing
 
     // 聊天历史相关
     val chatHistory: StateFlow<List<ChatMessage>>

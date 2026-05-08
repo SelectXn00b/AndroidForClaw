@@ -276,7 +276,8 @@ class MessageCoordinationDelegate(
         messageTextOverride: String? = null,
         proxySenderNameOverride: String? = null,
         chatModelConfigIdOverride: String? = null,
-        chatModelIndexOverride: Int? = null
+        chatModelIndexOverride: Int? = null,
+        isSubTask: Boolean = false
     ) {
         // 仅在没有指定 chatId 的情况下，才需要确保有当前对话
         if (chatIdOverride.isNullOrBlank() && chatHistoryDelegate.currentChatId.value == null) {
@@ -313,7 +314,8 @@ class MessageCoordinationDelegate(
                     messageTextOverride = messageTextOverride,
                     proxySenderNameOverride = proxySenderNameOverride,
                     chatModelConfigIdOverride = chatModelConfigIdOverride,
-                    chatModelIndexOverride = chatModelIndexOverride
+                    chatModelIndexOverride = chatModelIndexOverride,
+                    isSubTask = isSubTask
                 )
             }
         } else {
@@ -325,7 +327,8 @@ class MessageCoordinationDelegate(
                 messageTextOverride = messageTextOverride,
                 proxySenderNameOverride = proxySenderNameOverride,
                 chatModelConfigIdOverride = chatModelConfigIdOverride,
-                chatModelIndexOverride = chatModelIndexOverride
+                chatModelIndexOverride = chatModelIndexOverride,
+                isSubTask = isSubTask
             )
         }
     }
@@ -449,7 +452,8 @@ class MessageCoordinationDelegate(
         forceDisableSummary: Boolean = false,
         enableGroupOrchestration: Boolean = true,
         isGroupOrchestrationTurn: Boolean = false,
-        groupParticipantNamesText: String? = null
+        groupParticipantNamesText: String? = null,
+        isSubTask: Boolean = false
     ) {
         // 如果不是自动续写，更新当前的 promptFunctionType
         if (!isAutoContinuation) {
@@ -553,6 +557,10 @@ class MessageCoordinationDelegate(
         var tokenUsageThresholdForSend = apiConfigDelegate.summaryTokenThreshold.value.toDouble()
 
         // 如果不是续写，检查是否需要总结
+        // Pre-send summary is safe for sub-tasks (gateway): it asynchronously
+        // summarizes history BEFORE the new turn starts, so the agent still sees
+        // a coherent (summarized) context.  Mid-stream summary (enableSummary at
+        // line 630) remains disabled for sub-tasks to prevent mid-turn memory loss.
         if (!isBackgroundSend && !isContinuation && !skipSummaryCheck) {
             val currentMessages = chatHistoryDelegate.chatHistory.value
             val currentTokens = tokenStatsDelegate.currentWindowSizeFlow.value
@@ -621,12 +629,13 @@ class MessageCoordinationDelegate(
             tokenUsageThreshold = tokenUsageThresholdForSend,
             replyToMessage = if (isBackgroundSend) null else uiBridge.getReplyToMessage(),
             isAutoContinuation = isAutoContinuation,
-            enableSummary = !forceDisableSummary && !isBackgroundSend && apiConfigDelegate.enableSummary.value,
+            enableSummary = !forceDisableSummary && !isBackgroundSend && !isSubTask && apiConfigDelegate.enableSummary.value,
             chatModelConfigIdOverride = resolvedChatModelConfigIdOverride,
             chatModelIndexOverride = resolvedChatModelIndexOverride,
             suppressUserMessageInHistory = suppressUserMessageInHistory,
             isGroupOrchestrationTurn = isGroupOrchestrationTurn,
-            groupParticipantNamesText = groupParticipantNamesText
+            groupParticipantNamesText = groupParticipantNamesText,
+            isSubTask = isSubTask
         )
 
         // 只有在非续写（即用户主动发送）时才清空附件和UI状态
