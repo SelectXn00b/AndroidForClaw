@@ -8,10 +8,13 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
-    alias(libs.plugins.kotlin.kapt)
     alias(libs.plugins.kotlin.parcelize)
+    id("com.google.devtools.ksp") version "2.2.0-2.0.2"
     id("io.objectbox")
-    id("kotlin-kapt")
+}
+
+kapt {
+    correctErrorTypes = true
 }
 
 val localProperties = Properties()
@@ -54,7 +57,7 @@ android {
     defaultConfig {
         applicationId = "com.xiaomo.androidforclaw"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 35
         versionCode = 52
         versionName = "2.0.8"
 
@@ -333,11 +336,10 @@ dependencies {
     // Room 数据库
     implementation(libs.room.runtime)
     implementation(libs.room.ktx) // Kotlin扩展和协程支持
-    kapt(libs.room.compiler) // 使用kapt代替ksp
+    ksp(libs.room.compiler) // 使用KSP
 
     // ObjectBox
     implementation(libs.objectbox.kotlin)
-    kapt(libs.objectbox.processor)
     implementation(libs.commons.compress.v2)
     implementation(libs.junrar)
 
