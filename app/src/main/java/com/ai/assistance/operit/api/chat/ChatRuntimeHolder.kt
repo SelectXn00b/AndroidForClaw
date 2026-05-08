@@ -40,6 +40,7 @@ class ChatRuntimeHolder private constructor(context: Context) {
                 selectionMode = when (slot) {
                     ChatRuntimeSlot.MAIN -> ChatSelectionMode.FOLLOW_GLOBAL
                     ChatRuntimeSlot.FLOATING -> ChatSelectionMode.LOCAL_ONLY
+                    ChatRuntimeSlot.GATEWAY -> ChatSelectionMode.LOCAL_ONLY
                 }
             )
         }
@@ -48,13 +49,15 @@ class ChatRuntimeHolder private constructor(context: Context) {
     private fun observeStats() {
         val mainCore = getCore(ChatRuntimeSlot.MAIN)
         val floatingCore = getCore(ChatRuntimeSlot.FLOATING)
+        val gatewayCore = getCore(ChatRuntimeSlot.GATEWAY)
 
         runtimeScope.launch {
             combine(
                 mainCore.activeStreamingChatIds,
-                floatingCore.activeStreamingChatIds
-            ) { mainActiveChatIds, floatingActiveChatIds ->
-                (mainActiveChatIds + floatingActiveChatIds).size
+                floatingCore.activeStreamingChatIds,
+                gatewayCore.activeStreamingChatIds
+            ) { mainActiveChatIds, floatingActiveChatIds, gatewayActiveChatIds ->
+                (mainActiveChatIds + floatingActiveChatIds + gatewayActiveChatIds).size
             }.collect { count ->
                 _activeConversationCount.value = count
             }
@@ -93,6 +96,12 @@ class ChatRuntimeHolder private constructor(context: Context) {
         )
         registerTurnSync(
             sourceSlot = ChatRuntimeSlot.FLOATING,
+            targetSlot = ChatRuntimeSlot.MAIN
+        )
+        // Gateway turn completions should refresh the MAIN UI so the user
+        // can see gateway chat progress when viewing the same chatId.
+        registerTurnSync(
+            sourceSlot = ChatRuntimeSlot.GATEWAY,
             targetSlot = ChatRuntimeSlot.MAIN
         )
     }

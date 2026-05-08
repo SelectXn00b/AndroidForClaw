@@ -2,20 +2,9 @@ package com.ai.assistance.operit.hermes.gateway
 
 import android.content.Context
 import android.util.Log
-import com.ai.assistance.operit.api.chat.EnhancedAIService
-import com.ai.assistance.operit.core.chat.AIMessageManager
-import com.ai.assistance.operit.core.chat.hooks.PromptTurn
-import com.ai.assistance.operit.core.chat.hooks.PromptTurnKind
-import com.ai.assistance.operit.core.tools.AIToolHandler
-import com.ai.assistance.operit.core.tools.packTool.PackageManager
-import com.ai.assistance.operit.data.model.CharacterCardChatModelBindingMode
-import com.ai.assistance.operit.data.model.ChatMessage
-import com.ai.assistance.operit.data.model.FunctionType
-import com.ai.assistance.operit.data.preferences.ActivePromptManager
-import com.ai.assistance.operit.data.preferences.ApiPreferences
-import com.ai.assistance.operit.data.preferences.CharacterCardManager
-import com.ai.assistance.operit.data.preferences.FunctionalConfigManager
-import com.ai.assistance.operit.data.preferences.ModelConfigManager
+import com.ai.assistance.operit.api.chat.ChatRuntimeHolder
+import com.ai.assistance.operit.api.chat.ChatRuntimeSlot
+import com.ai.assistance.operit.data.model.InputProcessingState
 import com.ai.assistance.operit.data.repository.ChatHistoryManager
 import com.ai.assistance.operit.util.ChatMarkupRegex
 import com.xiaomo.hermes.hermes.gateway.GatewayRunner
@@ -23,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -70,7 +60,12 @@ class HermesGatewayController private constructor(private val appContext: Contex
             }
             val instance = GatewayRunner(appContext, config)
             instance.agentRunner = { text, sessionKey, platform, chatId, userId ->
-                runHermesAgent(text = text, sessionKey = sessionKey, chatId = chatId)
+                runHermesAgent(
+                    text = text,
+                    sessionKey = sessionKey,
+                    chatId = chatId,
+                    interruptCheck = { runner?.getInterruptFlag(sessionKey)?.get() == true }
+                )
             }
             runner = instance
             instance.start()
@@ -113,33 +108,30 @@ class HermesGatewayController private constructor(private val appContext: Contex
     fun stopAsync(): Job = _scope.launch { stop() }
 
     /**
-     * Feed [text] into the app's [EnhancedAIService] — the same path the
-     * in-app chat dialog uses — so the gateway gets identical tool capabilities,
-     * system prompts, memory, and prompt hooks.  Collects all streamed chunks
-     * and strips internal markup so the gateway only echoes user-visible plain
-     * text back to the platform.
+     * Feed [text] through the same ChatServiceCore path the APP UI uses.
      *
-     * Uses [EnhancedAIService.getChatInstance] with a gateway-specific chat ID
-     * so the gateway's execution contexts are fully isolated from the main app.
-     * Without this, [EnhancedAIService.cancelConversation] called from the UI
-     * (notification cancel, in-app cancel, or app exit) would kill ALL execution
-     * contexts — including the gateway's running agent loop — via
-     * [invalidateAllExecutionContexts].
+     * Instead of calling HermesAdapter (which had its own XML-mode agent loop),
+     * we now route through ChatServiceCore — the exact same entry point the UI
+     * uses when the user types a message.  This gives us:
+     * - Tool Call API mode with package_proxy (structured function calling)
+     * - Proper validToolNames enforcement
+     * - Full model parameters, token budget, summarization
+     * - Chat history persisted in the same Room DB the APP UI reads
+     *
+     * The gateway-specific chat lives in Room DB with a "gw:" prefixed ID
+     * and shows up in the APP's conversation list for visibility.
      */
     private suspend fun runHermesAgent(
         text: String,
         sessionKey: String,
         chatId: String,
+        interruptCheck: () -> Boolean = { false },
     ): String {
         val historyChatId = "gw:$sessionKey:$chatId"
         GatewayFileLogger.i(TAG, "═══ runHermesAgent START ═══")
         GatewayFileLogger.i(TAG, "  user text (${text.length} chars): ${text.take(1000)}${if (text.length > 1000) "…[truncated]" else ""}")
         GatewayFileLogger.i(TAG, "  chatId: $historyChatId")
 
-        // Use a per-chatId instance so the gateway is isolated from the main
-        // app's cancel operations (which call invalidateAllExecutionContexts
-        // on the singleton).
-        val service = EnhancedAIService.getChatInstance(appContext, historyChatId)
         val history = ChatHistoryManager.getInstance(appContext)
 
         // Handle /new command: clear chat history for this session so the
@@ -157,388 +149,266 @@ class HermesGatewayController private constructor(private val appContext: Contex
             return "好的，已切换到新话题。"
         }
 
-        // Persist the inbound user message
+        // Ensure the chat record exists in Room DB (creates it if not).
+        val chatTitle = gatewayChatTitle(sessionKey, chatId)
         try {
-            history.ensureChatWithId(historyChatId, title = gatewayChatTitle(sessionKey, chatId))
-            history.addMessage(historyChatId, ChatMessage(sender = "user", content = text))
+            history.ensureChatWithId(historyChatId, title = chatTitle)
         } catch (e: Throwable) {
-            Log.w(TAG, "failed to persist inbound gateway message: ${e.message}")
-            GatewayFileLogger.w(TAG, "failed to persist inbound message: ${e.message}")
+            Log.w(TAG, "failed to ensure gateway chat record: ${e.message}")
         }
 
-        // Load prior chat history so the AI retains context across messages.
-        // Cap to the most recent MAX_HISTORY_MESSAGES to prevent unbounded
-        // context growth (which was causing 50k+ input tokens and polluting
-        // the model with old "User cancelled" failures).
-        val chatHistory = try {
-            val allMsgs = history.loadChatMessages(historyChatId)
-            // Drop the last message (the one we just added) — sendMessage
-            // appends the current user message itself.
-            val msgsWithoutCurrent = if (allMsgs.isNotEmpty()) allMsgs.dropLast(1) else allMsgs
-            // Keep only the most recent messages to prevent context bloat
-            val recentMsgs = if (msgsWithoutCurrent.size > MAX_HISTORY_MESSAGES) {
-                Log.i(TAG, "trimming chat history from ${msgsWithoutCurrent.size} to $MAX_HISTORY_MESSAGES messages")
-                msgsWithoutCurrent.takeLast(MAX_HISTORY_MESSAGES)
-            } else {
-                msgsWithoutCurrent
-            }
-            // Prune tool result content from AI messages to save tokens.
-            // Tool results (especially get_page_info) can be 30k+ chars each;
-            // in history they are useless bloat — we keep names & status only.
-            val prunedMsgs = pruneToolResultsFromHistory(recentMsgs)
-            AIMessageManager.getMemoryFromMessages(messages = prunedMsgs)
-        } catch (e: Throwable) {
-            Log.w(TAG, "failed to load chat history, proceeding without: ${e.message}")
-            GatewayFileLogger.w(TAG, "failed to load chat history: ${e.message}")
-            emptyList()
-        }
-        GatewayFileLogger.i(TAG, "  history turns: ${chatHistory.size}")
+        // Get the GATEWAY ChatServiceCore — same component the APP UI uses,
+        // but on a dedicated slot so it doesn't interfere with the user's
+        // active MAIN or FLOATING sessions.
+        val core = ChatRuntimeHolder.getInstance(appContext)
+            .getCore(ChatRuntimeSlot.GATEWAY)
+
+        // Switch the gateway core to this chat (local only, doesn't affect
+        // the global currentChatId that the MAIN UI tracks).
+        core.switchChatLocal(historyChatId)
+
+        // Brief delay to let switchChatLocal's coroutine complete DB load.
+        delay(200)
 
         val prefs = HermesGatewayPreferences.getInstance(appContext)
         val maxTurns = prefs.agentMaxTurnsFlow.first()
         val timeoutMs = maxTurns.toLong() * 120_000L
 
-        // Read user's thinking mode preferences so gateway matches main app behavior.
-        // Safety: thinking guidance and thinking mode are mutually exclusive.
-        // When guidance is enabled, we avoid enabling provider-level thinking
-        // simultaneously (same guard as MessageCoordinationDelegate).
-        val apiPrefs = ApiPreferences.getInstance(appContext)
-        val thinkingGuidance = try {
-            apiPrefs.enableThinkingGuidanceFlow.first()
-        } catch (_: Throwable) { false }
-        val enableThinking = try {
-            apiPrefs.enableThinkingModeFlow.first() && !thinkingGuidance
-        } catch (_: Throwable) { false }
-
-        // Read user's memory query setting (main app reads apiConfigDelegate.enableMemoryQuery)
-        val enableMemoryQuery = try {
-            apiPrefs.enableMemoryQueryFlow.first()
-        } catch (_: Throwable) { true }
-
-        // Read actual model config for CHAT function (same as main app)
-        // so gateway uses the user's configured context length and summary
-        // threshold instead of hardcoded defaults.
-        val modelConfig = try {
-            val funcMgr = FunctionalConfigManager(appContext)
-            val configId = funcMgr.getConfigIdForFunction(FunctionType.CHAT)
-            val cfgMgr = ModelConfigManager(appContext)
-            cfgMgr.getModelConfigFlow(configId).first()
-        } catch (e: Throwable) {
-            Log.w(TAG, "failed to read model config, using defaults: ${e.message}")
-            null
-        }
-        val rawContextLength = if (modelConfig != null) {
-            if (modelConfig.enableMaxContextMode) modelConfig.maxContextLength
-            else modelConfig.contextLength
-        } else {
-            128.0f // fallback default — gateway needs headroom for tool results
-        }
-        // Gateway tool calls (especially get_page_info) produce very large
-        // responses.  Enforce a minimum context budget of 128k tokens so the
-        // agent loop does not abort after a single tool call.
-        val contextLength = rawContextLength.coerceAtLeast(GATEWAY_MIN_CONTEXT_LENGTH)
-        val maxTokens = (contextLength * 1024).toInt()
-        val tokenUsageThreshold = modelConfig?.summaryTokenThreshold?.toDouble() ?: 0.70
-
-        GatewayFileLogger.i(TAG, "  model config: rawContext=${rawContextLength}k effectiveContext=${contextLength}k " +
-            "maxTokens=$maxTokens threshold=$tokenUsageThreshold thinking=$enableThinking " +
-            "thinkingGuidance=$thinkingGuidance memoryQuery=$enableMemoryQuery " +
-            "maxTurns=$maxTurns timeoutMs=$timeoutMs")
-
-        // Read the user's active role card so gateway uses the same character
-        // personality and system prompt sections as the main app.
-        val roleCardId = try {
-            ActivePromptManager.getInstance(appContext).resolveActiveCardIdForSend()
-        } catch (e: Throwable) {
-            Log.w(TAG, "failed to read active role card, using default: ${e.message}")
-            null
-        }
-
-        // Resolve character name and per-role-card model binding (same as
-        // MessageCoordinationDelegate.resolveRoleCardChatModelOverrides).
-        val characterCardManager = CharacterCardManager.getInstance(appContext)
-        val (characterName, chatModelConfigIdOverride, chatModelIndexOverride) = try {
-            if (roleCardId != null) {
-                val roleCard = characterCardManager.getCharacterCardFlow(roleCardId).first()
-                val bindingMode = CharacterCardChatModelBindingMode.normalize(roleCard.chatModelBindingMode)
-                val (cfgId, cfgIdx) = if (
-                    bindingMode == CharacterCardChatModelBindingMode.FIXED_CONFIG &&
-                    !roleCard.chatModelConfigId.isNullOrBlank()
-                ) {
-                    Pair(roleCard.chatModelConfigId, roleCard.chatModelIndex.coerceAtLeast(0))
-                } else {
-                    Pair(null, null)
-                }
-                Triple(roleCard.name, cfgId, cfgIdx)
-            } else {
-                Triple(null, null, null)
-            }
-        } catch (e: Throwable) {
-            Log.w(TAG, "failed to read role card details: ${e.message}")
-            Triple(null, null, null)
-        }
-
-        GatewayFileLogger.i(TAG, "  roleCard: id=$roleCardId name=$characterName " +
-            "configOverride=$chatModelConfigIdOverride indexOverride=$chatModelIndexOverride")
-
-        // Pre-activate Automatic_ui_base so the model knows about UI
-        // automation tools without having to discover and call use_package first.
-        // This ensures the gateway agent has the same tool awareness as the
-        // main app where users typically have the package already activated.
-        val packageManager = PackageManager.getInstance(
-            appContext, AIToolHandler.getInstance(appContext)
-        )
-        val uiPackagePrompt = try {
-            packageManager.usePackage("Automatic_ui_base")
-        } catch (e: Throwable) {
-            Log.w(TAG, "failed to pre-activate Automatic_ui_base: ${e.message}")
-            null
-        }
-
-        // Prepend a synthetic use_package turn to the chat history so the
-        // model sees the package tools already available in context.
-        val augmentedHistory = buildList {
-            if (uiPackagePrompt != null && chatHistory.none {
-                    it.kind == PromptTurnKind.TOOL_RESULT &&
-                        it.content.contains("Automatic_ui_base")
-                }) {
-                add(PromptTurn(
-                    kind = PromptTurnKind.ASSISTANT,
-                    content = "<tool name=\"use_package\"><param name=\"package_name\">Automatic_ui_base</param></tool>"
-                ))
-                add(PromptTurn(
-                    kind = PromptTurnKind.TOOL_RESULT,
-                    content = "<tool_result name=\"use_package\">\n$uiPackagePrompt\n</tool_result>"
-                ))
-            }
-            // Inject a synthetic "warmup" exchange so the AI has
-            // operational self-awareness from the very first message.
-            // Testing showed that when the user first asks "what tools
-            // do you have?", subsequent tasks succeed because the AI's
-            // own capability summary persists in chat history and guides
-            // subsequent tool usage decisions.
-            if (chatHistory.isEmpty()) {
-                add(PromptTurn(
-                    kind = PromptTurnKind.USER,
-                    content = "你能操作手机app吗？你有什么工具？"
-                ))
-                add(PromptTurn(
-                    kind = PromptTurnKind.ASSISTANT,
-                    content = WARMUP_CAPABILITY_SUMMARY
-                ))
-            }
-            addAll(chatHistory)
-            // Gateway-specific: inject a system instruction forbidding
-            // wait_for_user_need.  In the main app the user can reply
-            // after seeing that status, but the gateway has no such
-            // interactive turn — once the agent loop ends the entire
-            // call finishes.  This forces the AI to always either call
-            // a tool (continue working) or emit <status type="complete">.
-            add(PromptTurn(
-                kind = PromptTurnKind.SYSTEM,
-                content = GATEWAY_AGENT_RULES
-            ))
-        }
-
-        Log.i(TAG, "runHermesAgent: text=${text.take(80)} chatId=$historyChatId " +
-            "historyTurns=${chatHistory.size} " +
-            "timeoutMs=$timeoutMs maxTurns=$maxTurns maxTokens=$maxTokens " +
-            "roleCardId=$roleCardId contextLength=$contextLength")
-        GatewayFileLogger.i(TAG, "  augmented history turns: ${augmentedHistory.size}")
-        GatewayFileLogger.i(TAG, "  calling service.sendMessage...")
+        GatewayFileLogger.i(TAG, "  maxTurns=$maxTurns timeoutMs=$timeoutMs")
+        GatewayFileLogger.i(TAG, "  routing through ChatServiceCore (本体 path)...")
 
         val startMs = System.currentTimeMillis()
-        val stream = service.sendMessage(
-            message = text,
-            chatId = historyChatId,
-            chatHistory = augmentedHistory,
-            maxTokens = maxTokens,
-            tokenUsageThreshold = tokenUsageThreshold,
-            enableThinking = enableThinking,
-            thinkingGuidance = thinkingGuidance,
-            enableMemoryQuery = enableMemoryQuery,
-            // Use null (same as main app) so the system prompt auto-selects
-            // based on locale and includes all sections (character identity,
-            // workspace guidelines, etc.).
-            customSystemPromptTemplate = null,
-            characterName = characterName,
-            roleCardId = roleCardId,
-            chatModelConfigIdOverride = chatModelConfigIdOverride,
-            chatModelIndexOverride = chatModelIndexOverride,
+
+        // Fire-and-forget: this launches a coroutine inside ChatServiceCore
+        // that goes through the full MessageCoordinationDelegate →
+        // MessageProcessingDelegate → AIMessageManager → EnhancedAIService
+        // → HermesAgentLoop pipeline — exactly like the APP UI.
+        core.sendUserMessage(
+            chatIdOverride = historyChatId,
+            messageTextOverride = text,
             isSubTask = true
         )
-        val raw = StringBuilder()
-        var chunkCount = 0
-        val completed = withTimeoutOrNull(timeoutMs) {
-            stream.collect { chunk ->
-                raw.append(chunk)
-                chunkCount++
-                if (Log.isLoggable(TAG, Log.VERBOSE)) {
-                    Log.v(TAG, "runHermesAgent: chunk len=${chunk.length} totalLen=${raw.length}")
+
+        // Notify the MAIN UI that the gateway has started processing this chat.
+        // The subscribers in MessageProcessingDelegate and ChatHistoryDelegate
+        // will add the chatId to _activeStreamingChatIds and reload messages,
+        // so the user sees the "processing" indicator if they're viewing this chat.
+        GatewayChatEventBus.emit(GatewayChatEventBus.Event.UserMessagePersisted(historyChatId))
+        GatewayChatEventBus.emit(GatewayChatEventBus.Event.ProcessingStarted(historyChatId))
+
+        // Emit periodic StreamingUpdate events so the MAIN UI can reload
+        // from DB and show progressively growing AI content.  The GATEWAY
+        // core already persists streaming snapshots every ~1000ms; this
+        // coroutine notifies the MAIN UI to pick them up.
+        val streamingUpdateJob = _scope.launch {
+            delay(STREAMING_UPDATE_INTERVAL_MS)
+            while (true) {
+                GatewayChatEventBus.emit(GatewayChatEventBus.Event.StreamingUpdate(historyChatId))
+                delay(STREAMING_UPDATE_INTERVAL_MS)
+            }
+        }
+
+        // Wait for the processing to complete by observing the
+        // activeStreamingChatIds StateFlow.  The chatId enters the set when
+        // processing starts and leaves when it finishes.
+        //
+        // IMPORTANT: When a token-limit is hit mid-agent-loop, the first
+        // round's chatId leaves activeStreamingChatIds *before* the
+        // auto-continuation second round re-adds it (there is a gap while
+        // summarization runs).  We must loop and re-check after a
+        // stabilization window to avoid returning intermediate text.
+        var wasInterrupted = false
+        val completed = try { withTimeoutOrNull(timeoutMs) {
+            // First wait for the chatId to appear (processing started)
+            val appeared = withTimeoutOrNull(10_000L) {
+                core.activeStreamingChatIds.first { historyChatId in it }
+            }
+            if (appeared == null) {
+                // Check if it already finished before we started observing
+                val state = core.inputProcessingStateByChatId.value[historyChatId]
+                if (state is InputProcessingState.Completed || state is InputProcessingState.Idle) {
+                    GatewayFileLogger.i(TAG, "  processing completed before we started observing")
+                    return@withTimeoutOrNull true
                 }
-                // Log tool calls as they stream in
-                if (chunk.contains("<tool ") || chunk.contains("<tool_result")) {
-                    GatewayFileLogger.d(TAG, "  chunk#$chunkCount contains tool markup (totalLen=${raw.length})")
+                if (state is InputProcessingState.Error) {
+                    GatewayFileLogger.w(TAG, "  processing errored before observation: ${state.message}")
+                    return@withTimeoutOrNull true
                 }
+                GatewayFileLogger.w(TAG, "  chatId never appeared in activeStreamingChatIds within 10s")
+            }
+
+            // Wait for chatId to leave, but account for continuation gaps.
+            // After it leaves, check whether a continuation is pending
+            // (summarization in progress or Summarizing state), and if so
+            // wait for the next round.
+            while (true) {
+                // Wait for chatId to leave OR interrupt to be signaled.
+                // Poll every INTERRUPT_POLL_MS to check both conditions.
+                var interruptDetected = false
+                while (true) {
+                    if (interruptCheck()) {
+                        interruptDetected = true
+                        break
+                    }
+                    if (historyChatId !in core.activeStreamingChatIds.value) break
+                    delay(INTERRUPT_POLL_MS)
+                }
+
+                if (interruptDetected) {
+                    GatewayFileLogger.i(TAG, "  ⚡ Interrupt detected — cancelling agent run")
+                    core.cancelMessage(historyChatId)
+                    // Wait for cancellation to take effect
+                    withTimeoutOrNull(10_000L) {
+                        while (historyChatId in core.activeStreamingChatIds.value) {
+                            delay(200)
+                        }
+                    }
+                    delay(300) // let isLoading fully clear
+                    GatewayChatEventBus.emit(GatewayChatEventBus.Event.ProcessingFailed(historyChatId))
+                    wasInterrupted = true
+                    return@withTimeoutOrNull true
+                }
+
+                // The agent completed naturally (chatId left activeStreamingChatIds).
+                // Check the interrupt flag one more time: if it was set while the
+                // agent was finishing (race condition), we still treat it as interrupted
+                // so the old response is discarded and the pending message gets processed.
+                if (interruptCheck()) {
+                    GatewayFileLogger.i(TAG, "  ⚡ Interrupt flag set after agent completed — treating as interrupted")
+                    GatewayChatEventBus.emit(GatewayChatEventBus.Event.ProcessingFailed(historyChatId))
+                    wasInterrupted = true
+                    return@withTimeoutOrNull true
+                }
+
+                GatewayFileLogger.i(TAG, "  chatId left activeStreamingChatIds, checking for continuation...")
+
+                // Fast path: if the processing state is Completed and no summary
+                // (neither mid-stream nor pre-send async) is running, we're done.
+                val procState = core.inputProcessingStateByChatId.value[historyChatId]
+                if (procState is InputProcessingState.Completed && !core.isSummarizing.value && !core.isSendTriggeredSummarizing.value) {
+                    // One final interrupt check before declaring completion
+                    if (interruptCheck()) {
+                        GatewayFileLogger.i(TAG, "  ⚡ Interrupt flag set during continuation check — treating as interrupted")
+                        GatewayChatEventBus.emit(GatewayChatEventBus.Event.ProcessingFailed(historyChatId))
+                        wasInterrupted = true
+                        return@withTimeoutOrNull true
+                    }
+                    GatewayFileLogger.i(TAG, "  inputProcessingState=Completed, no summarization — done immediately")
+                    break
+                }
+
+                // If the core is currently summarizing (mid-stream), an auto-continuation
+                // is about to start.  Wait for summarization to finish, then
+                // wait for the new round to appear.
+                if (core.isSummarizing.value) {
+                    GatewayFileLogger.i(TAG, "  core is summarizing — waiting for it to finish")
+                    core.isSummarizing.first { !it }
+                    GatewayFileLogger.i(TAG, "  summarization finished, re-checking activeStreamingChatIds")
+                }
+
+                // If a pre-send async summary is running, the Completed state is
+                // suppressed until it finishes.  Wait for it instead of falling
+                // through to the 45-second stabilization window.
+                if (core.isSendTriggeredSummarizing.value) {
+                    GatewayFileLogger.i(TAG, "  pre-send async summary in progress — waiting for it to finish")
+                    core.isSendTriggeredSummarizing.first { !it }
+                    GatewayFileLogger.i(TAG, "  pre-send async summary finished")
+                    // Re-check procState: it should now transition to Completed/Idle
+                    delay(300)
+                    val updatedState = core.inputProcessingStateByChatId.value[historyChatId]
+                    if (updatedState is InputProcessingState.Completed || updatedState is InputProcessingState.Idle) {
+                        GatewayFileLogger.i(TAG, "  state=$updatedState after async summary — done")
+                        break
+                    }
+                }
+
+                // Stabilization window: wait up to CONTINUATION_SETTLE_MS
+                // to see if the chatId re-enters (a new round started).
+                val reEntered = withTimeoutOrNull(CONTINUATION_SETTLE_MS) {
+                    core.activeStreamingChatIds.first { historyChatId in it }
+                    true
+                } ?: false
+
+                if (reEntered) {
+                    GatewayFileLogger.i(TAG, "  chatId re-entered — continuation round started, waiting again")
+                    continue
+                }
+
+                // No re-entry — truly done.
+                GatewayFileLogger.i(TAG, "  stable — processing truly finished")
+                break
             }
             true
+        } } finally { streamingUpdateJob.cancel() }
+
+        // If interrupted, return the sentinel immediately — caller will process the pending event.
+        if (wasInterrupted) {
+            GatewayFileLogger.i(TAG, "═══ runHermesAgent END (interrupted) ═══\n")
+            return GatewayRunner.INTERRUPTED_SENTINEL
         }
         val elapsedMs = System.currentTimeMillis() - startMs
 
         if (completed == null) {
-            Log.w(TAG, "runHermesAgent: TIMED OUT after ${elapsedMs}ms " +
-                "collectedLen=${raw.length}")
-            GatewayFileLogger.w(TAG, "  TIMED OUT after ${elapsedMs}ms chunks=$chunkCount rawLen=${raw.length}")
+            Log.w(TAG, "runHermesAgent: TIMED OUT after ${elapsedMs}ms")
+            GatewayFileLogger.w(TAG, "  TIMED OUT after ${elapsedMs}ms")
+            GatewayChatEventBus.emit(GatewayChatEventBus.Event.ProcessingFailed(historyChatId))
         } else {
-            Log.i(TAG, "runHermesAgent: completed in ${elapsedMs}ms " +
-                "rawLen=${raw.length}")
-            GatewayFileLogger.i(TAG, "  completed in ${elapsedMs}ms chunks=$chunkCount rawLen=${raw.length}")
+            Log.i(TAG, "runHermesAgent: completed in ${elapsedMs}ms")
+            GatewayFileLogger.i(TAG, "  completed in ${elapsedMs}ms")
+            GatewayChatEventBus.emit(GatewayChatEventBus.Event.ProcessingCompleted(historyChatId))
         }
 
-        val rawText = raw.toString()
-
-        // Log tool call names found in the raw output for diagnostics
-        val toolNames = ChatMarkupRegex.toolCallPattern.findAll(rawText)
-            .mapNotNull { it.groupValues.getOrNull(2)?.ifEmpty { null } }
-            .toList()
-        if (toolNames.isNotEmpty()) {
-            GatewayFileLogger.i(TAG, "  tool calls in response: $toolNames")
-        }
-        // Log tool results found
-        val toolResultCount = ChatMarkupRegex.toolResultTag.findAll(rawText).count()
-        if (toolResultCount > 0) {
-            GatewayFileLogger.i(TAG, "  tool results in response: $toolResultCount")
+        // Read the last AI message from Room DB.
+        // ChatServiceCore has already persisted both user and AI messages
+        // through its normal pipeline (MessageProcessingDelegate → ChatHistoryDelegate).
+        val lastAiMessage = try {
+            val messages = history.loadChatMessages(historyChatId)
+            messages.lastOrNull { it.sender == "ai" }
+        } catch (e: Throwable) {
+            Log.w(TAG, "failed to read AI reply from DB: ${e.message}")
+            GatewayFileLogger.w(TAG, "  failed to read AI reply from DB: ${e.message}")
+            null
         }
 
-        // Save the full raw AI response (with tool markup) to history so
-        // future calls can reconstruct the complete conversation context.
-        val strippedReply = stripInternalMarkup(rawText).trim().ifEmpty {
+        val rawContent = lastAiMessage?.content ?: ""
+        // Extract the final reply from the raw content.
+        // The raw content may contain multiple agent turns with interleaved
+        // <think>, <tool>, <tool_result>, and <status> tags.  We want only
+        // the text from the LAST turn — the actual answer.
+        //
+        // Strategy: find the last <status type="complete"> tag.  The text
+        // between it and the preceding markup tag (tool_result, tool, think,
+        // or status) is the final reply.  If no <status type="complete"> is
+        // found, fall back to stripping all markup and returning everything.
+        val strippedReply = extractFinalReply(rawContent).ifEmpty {
             if (completed == null) "(agent timed out)" else "(empty response)"
         }
 
         GatewayFileLogger.i(TAG, "  stripped reply length: ${strippedReply.length}")
         if (strippedReply == "(empty response)") {
-            GatewayFileLogger.w(TAG, "  ⚠ EMPTY RESPONSE — raw text was: ${rawText.take(500)}")
+            GatewayFileLogger.w(TAG, "  ⚠ EMPTY RESPONSE — raw content was: ${rawContent.take(500)}")
         } else if (strippedReply == "(agent timed out)") {
-            GatewayFileLogger.w(TAG, "  ⚠ AGENT TIMED OUT — raw text tail: ${rawText.takeLast(500)}")
+            GatewayFileLogger.w(TAG, "  ⚠ AGENT TIMED OUT — raw content tail: ${rawContent.takeLast(500)}")
         } else {
             GatewayFileLogger.i(TAG, "  full reply (${strippedReply.length} chars): ${strippedReply.take(2000)}${if (strippedReply.length > 2000) "…[truncated]" else ""}")
         }
         GatewayFileLogger.i(TAG, "═══ runHermesAgent END ═══\n")
 
-        try {
-            history.addMessage(historyChatId, ChatMessage(sender = "ai", content = rawText))
-        } catch (e: Throwable) {
-            Log.w(TAG, "failed to persist outbound gateway reply: ${e.message}")
-        }
-
-        // Trigger memory extraction asynchronously (same as main app's
-        // handleTaskCompletion).  Uses the MEMORY-configured AI service for
-        // a secondary analysis call, so it does not block the reply.
-        if (enableMemoryQuery) {
-            try {
-                val conversationPairs = chatHistory.map { turn ->
-                    val role = when (turn.kind) {
-                        PromptTurnKind.USER -> "user"
-                        PromptTurnKind.ASSISTANT -> "assistant"
-                        else -> "system"
-                    }
-                    role to turn.content
-                } + listOf("user" to text, "assistant" to rawText)
-                service.saveConversationToMemoryAsync(
-                    conversationHistory = conversationPairs,
-                    lastContent = rawText,
-                    onSuccess = {
-                        GatewayFileLogger.i(TAG, "  memory save completed for $historyChatId")
-                    },
-                    onError = { e ->
-                        GatewayFileLogger.w(TAG, "  memory save failed: ${e.message}")
-                    }
-                )
-                GatewayFileLogger.i(TAG, "  memory save triggered (async)")
-            } catch (e: Throwable) {
-                GatewayFileLogger.w(TAG, "  failed to trigger memory save: ${e.message}")
-            }
-        }
-
-        // Return stripped text to the platform (no XML markup)
         return strippedReply
-    }
-
-    /**
-     * Prune large tool-result content from AI messages in [msgs] so that
-     * chat history does not blow up the token budget.
-     *
-     * Strategy:
-     * - User messages: kept as-is (usually short).
-     * - AI messages: replace the *body* of every `<tool_result…>…</tool_result>`
-     *   with a short placeholder, preserving the tag name, attributes (name,
-     *   status) so the model still knows what happened.  Also truncate
-     *   oversized `<param>` values inside `<tool>` blocks.
-     */
-    private fun pruneToolResultsFromHistory(msgs: List<ChatMessage>): List<ChatMessage> {
-        var totalBefore = 0L
-        var totalAfter = 0L
-        val result = msgs.map { msg ->
-            totalBefore += msg.content.length
-            if (msg.sender != "ai") {
-                totalAfter += msg.content.length
-                return@map msg
-            }
-            val pruned = pruneAiMessageContent(msg.content)
-            totalAfter += pruned.length
-            if (pruned.length == msg.content.length) msg
-            else msg.copy(content = pruned)
-        }
-        if (totalBefore != totalAfter) {
-            GatewayFileLogger.i(TAG, "  history pruned: ${totalBefore} → ${totalAfter} chars " +
-                "(saved ${totalBefore - totalAfter})")
-        }
-        return result
-    }
-
-    /**
-     * Strip the body of `<tool_result>` tags and truncate large `<param>`
-     * values inside a single AI message's content string.
-     */
-    private fun pruneAiMessageContent(content: String): String {
-        if (content.isEmpty()) return content
-
-        // Phase 1: Replace tool_result body with placeholder.
-        // Uses the existing pruneToolResultContentPattern which captures:
-        //   group 1 = tag name, group 2 = attributes, group 3 = status, group 4 = body
-        var pruned = ChatMarkupRegex.pruneToolResultContentPattern.replace(content) { m ->
-            val tagName = m.groupValues[1]
-            val attrs = m.groupValues[2]
-            val status = m.groupValues[3]
-            "<$tagName$attrs>[result omitted]</$tagName>"
-        }
-
-        // Phase 2: Truncate <param> values longer than 200 chars.
-        pruned = ChatMarkupRegex.toolParamPattern.replace(pruned) { m ->
-            val paramName = m.groupValues[1]
-            val paramValue = m.groupValues[2]
-            if (paramValue.length > 200) {
-                "<param name=\"$paramName\">${paramValue.take(200)}…[truncated]</param>"
-            } else {
-                m.value
-            }
-        }
-
-        return pruned
     }
 
     private fun gatewayChatTitle(sessionKey: String, chatId: String): String {
         val platform = sessionKey.substringBefore(':').ifEmpty { sessionKey }
         val shortChat = chatId.substringBefore('@').take(24).ifEmpty { chatId.take(24) }
-        return "$platform: $shortChat"
+        return "[$platform] $shortChat"
     }
 
-    private fun stripInternalMarkup(xml: String): String {
-        if (xml.isEmpty()) return xml
-        return xml
+    /** Strip all internal XML markup from a text segment, leaving only user-visible text. */
+    private fun stripMarkup(text: String): String {
+        return text
             .replace(ChatMarkupRegex.thinkTag, "")
             .replace(ChatMarkupRegex.thinkSelfClosingTag, "")
+            .replace(UNCLOSED_THINK_REGEX, "")
             .replace(ChatMarkupRegex.toolResultTag, "")
             .replace(ChatMarkupRegex.toolResultSelfClosingTag, "")
             .replace(ChatMarkupRegex.toolTag, "")
@@ -547,94 +417,121 @@ class HermesGatewayController private constructor(private val appContext: Contex
             .replace(ChatMarkupRegex.statusSelfClosingTag, "")
     }
 
+    /**
+     * Extract the final reply text from raw AI message content.
+     *
+     * The raw content contains interleaved XML markup and plain text across
+     * multiple agent turns.  We find the last `<status type="complete">`
+     * (or `<status type="wait_for_user_need">`) and extract all plain text
+     * between the preceding markup boundary and that status tag.
+     *
+     * If no status tag is found, fall back to stripping all markup and
+     * returning everything (single-turn simple response).
+     */
+    private fun extractFinalReply(rawContent: String): String {
+        if (rawContent.isBlank()) return ""
+
+        // Find the last <status ...> tag position
+        val lastStatusIdx = LAST_STATUS_TAG_REGEX.findAll(rawContent)
+            .lastOrNull()?.range?.first ?: -1
+
+        if (lastStatusIdx <= 0) {
+            // No status tag found — strip all markup and return everything
+            val stripped = stripMarkup(rawContent).trim()
+            return stripped.ifEmpty { extractThinkingFallback(rawContent) }
+        }
+
+        // From the text before the last status tag, find the nearest
+        // preceding markup boundary (end of </think>, </tool_result>,
+        // </tool>, or another </status>).
+        val textBeforeStatus = rawContent.substring(0, lastStatusIdx)
+        val lastMarkupEnd = MARKUP_END_TAG_REGEX.findAll(textBeforeStatus)
+            .lastOrNull()?.let { it.range.last + 1 } ?: 0
+
+        // The final reply is the text between the last markup end and
+        // the last status tag, with any remaining markup stripped.
+        val replySlice = rawContent.substring(lastMarkupEnd, lastStatusIdx)
+        val cleaned = stripMarkup(replySlice).trim()
+
+        if (cleaned.isNotEmpty()) return cleaned
+
+        // If the slice is empty (e.g., status tag immediately follows
+        // tool_result), fall back to full stripped content.
+        val fullStripped = stripMarkup(rawContent).trim()
+        return fullStripped.ifEmpty { extractThinkingFallback(rawContent) }
+    }
+
+    /**
+     * Fallback for reasoning models (e.g. Qwen 3.5) that produce only
+     * `<think>...</think>` without any visible reply text.  Rather than
+     * showing "(empty response)" to the user, extract the thinking content
+     * and return it directly — it IS the model's response.
+     */
+    private fun extractThinkingFallback(rawContent: String): String {
+        val match = THINK_CONTENT_REGEX.findAll(rawContent).lastOrNull() ?: return ""
+        val thinkText = match.groupValues[1].trim()
+        if (thinkText.isBlank()) return ""
+        GatewayFileLogger.i(TAG, "  using thinking-content fallback (${thinkText.length} chars)")
+        return thinkText
+    }
+
     companion object {
         private const val TAG = "HermesGatewayCtl"
 
         /**
-         * Maximum number of raw [ChatMessage]s loaded from history per gateway
-         * call.  Keeps context within a reasonable token budget and prevents
-         * old failure traces (e.g. "User cancelled") from poisoning the model.
-         * Keep only 6 messages (~1-2 user interactions) to stay well within
-         * the token budget — large tool results (e.g. get_page_info) can
-         * easily consume 30k+ tokens on their own.
+         * After the chatId leaves activeStreamingChatIds and the processing
+         * state is NOT Completed, wait this long to see if it re-enters
+         * (indicating an auto-continuation round is starting after
+         * summarization).  Only used when the fast-path check doesn't apply.
          */
-        private const val MAX_HISTORY_MESSAGES = 6
+        private const val CONTINUATION_SETTLE_MS = 45_000L
 
         /**
-         * Minimum context length (in "k" units, multiplied by 1024 for tokens)
-         * enforced for gateway calls.  Tool results like get_page_info can
-         * easily be 30-40k tokens, so we need at least 128k total budget.
+         * Interval between [GatewayChatEventBus.Event.StreamingUpdate]
+         * emissions so the MAIN UI can periodically reload growing AI
+         * content from DB while the GATEWAY core is streaming.
          */
-        private const val GATEWAY_MIN_CONTEXT_LENGTH = 128.0f
+        private const val STREAMING_UPDATE_INTERVAL_MS = 1_500L
+
+        /** Polling interval for interrupt detection in the wait loop. */
+        private const val INTERRUPT_POLL_MS = 500L
+
+        /** Matches the last `<status ...>...</status>` or self-closing `<status .../>`. */
+        private val LAST_STATUS_TAG_REGEX = Regex(
+            "<status\\b[^>]*(?:>[\\s\\S]*?</status>|/>)",
+            RegexOption.IGNORE_CASE
+        )
 
         /**
-         * Extra system-level rules injected into every gateway agent call.
-         *
-         * The gateway has no interactive user turn — once the agent loop
-         * finishes, the entire call returns.  The standard system prompt
-         * allows `<status type="wait_for_user_need">` which causes the AI
-         * to stop working and ask the user for help.  In the main app the
-         * user can reply, but in the gateway this terminates the task.
-         *
-         * These rules override that behavior: the AI must keep calling
-         * tools until the task is done, then use `<status type="complete">`.
+         * Matches the end of any markup closing tag that acts as a
+         * boundary between agent turns: `</think>`, `</thinking>`,
+         * `</tool_result>`, `</tool>`, `</status>`.
          */
-        private const val GATEWAY_AGENT_RULES = """[Gateway Agent Rules — HIGHEST PRIORITY]
-You are running as an autonomous gateway agent. There is NO interactive user available.
-
-CRITICAL RULES:
-1. FORBIDDEN: <status type="wait_for_user_need">. Never ask the user for help or clarification.
-2. LOAD SKILLS FIRST: If the system prompt lists Available packages/skills, ALWAYS call use_package to load the relevant skill BEFORE starting the task. Skills contain parameter formats and step-by-step instructions that are critical for correct execution. Never skip this step.
-3. APP LAUNCHING: The `start_app` tool requires an Android package name (e.g., com.meituan.hotel), NOT a Chinese app name. If you only know the Chinese name, first call `list_installed_apps` to look up the correct package name, then use `start_app` with the package name. Similarly, package_proxy's `app_launch` tool also requires a package name.
-4. PREFER DIRECT METHODS: Always try `execute_shell` or `modify_system_setting` FIRST before resorting to UI navigation (get_page_info + click). Examples: adjust brightness via execute_shell("settings put system screen_brightness 50"), query WiFi status via execute_shell("dumpsys wifi"), etc. Only fall back to UI automation when no direct command/setting exists.
-5. BUILT-IN vs PACKAGE TOOLS: Tools like sleep, execute_shell, start_app, list_installed_apps, get_page_info, tap, click_element, set_input_text, swipe, press_key, capture_screenshot, modify_system_setting, get_system_setting are BUILT-IN — call them directly. Only use package_proxy for package-specific tools (e.g., Automatic_ui_base:app_launch).
-6. RETRY LIMIT: If the same operation or approach fails 4 times, STOP retrying. Report what you tried and what failed using <status type="complete">, do NOT keep looping.
-7. RESPECT USER INSTRUCTIONS: If the user's message contains explicit constraints (e.g., "try at most 2 times", "don't use app X", "stop if it fails"), those constraints OVERRIDE these rules. Always follow user-specified limits.
-8. After each tool call, proceed to the NEXT step immediately.
-9. Use get_page_info to observe the current screen state when doing UI automation.
-10. If waiting for content to appear (e.g., AI response, page loading), use sleep(duration_ms=3000) then get_page_info to check. Repeat until content appears (but respect rule 6).
-11. Only use <status type="complete"> when the entire task is finished or when you must stop due to rule 6/7.
-12. Be concise — focus on DOING, not explaining.
-13. PACKAGE_PROXY FORMAT: When calling package tools via package_proxy, set tool_name to "PackageName:tool_name" and put all arguments in params as a JSON string. Example: <tool name="package_proxy"><param name="tool_name">Automatic_ui_base:app_launch</param><param name="params">{"package_name":"com.example.app"}</param></tool>"""
+        private val MARKUP_END_TAG_REGEX = Regex(
+            "</(?:think(?:ing)?|tool_result|tool|status)\\s*>",
+            RegexOption.IGNORE_CASE
+        )
 
         /**
-         * Synthetic "warmup" assistant reply injected into the first
-         * message of a new gateway conversation. Replicates the effect
-         * of a user first asking "what tools do you have?" — which
-         * testing showed dramatically improves task completion rates
-         * because the AI's self-generated capability summary persists
-         * in chat history and guides subsequent tool usage decisions.
+         * Catches unclosed `<think>` / `<thinking>` tags.  The model sometimes
+         * emits `<think>…` without a matching `</think>`.  After paired-tag
+         * regexes have removed properly closed blocks, this sweeps any
+         * remaining opening-tag-to-end-of-string residue.
          */
-        private const val WARMUP_CAPABILITY_SUMMARY = """我可以操作手机上的 App。以下是我的工具和能力：
+        private val UNCLOSED_THINK_REGEX = Regex(
+            "<think(?:ing)?\\b[^>]*>[\\s\\S]*",
+            RegexOption.IGNORE_CASE
+        )
 
-**内置工具（直接调用，不需要 package_proxy）**
-- `execute_shell`：执行设备 shell 命令（如 settings put、dumpsys、am start 等）
-- `modify_system_setting` / `get_system_setting`：修改/读取系统设置（亮度、音量等）
-- `start_app`：启动应用（需要 Android 包名，如 com.meituan.hotel）
-- `list_installed_apps`：列出已安装应用（查找中文名对应的包名）
-- `get_page_info`：读取当前界面 UI 结构
-- `capture_screenshot`：截取屏幕截图
-- `click_element`：点击界面元素（通过 text/id 选择器）
-- `set_input_text`：在输入框中输入文字
-- `tap` / `long_press`：按坐标操作
-- `swipe`：滑动屏幕
-- `press_key`：按键（返回、主页等）
-- `sleep`：等待指定时间
-- `use_package`：加载技能包
-- `visit_web`：访问网页获取内容
-- `http_request`：发送 HTTP 请求
-
-**包工具（通过 package_proxy 调用）**
-- 需要先 `use_package` 加载包，再用 `package_proxy` 调用包内工具
-
-**操作策略**
-- 系统设置类任务（亮度/音量/WiFi等），优先用 `execute_shell` 或 `modify_system_setting`
-- 启动应用前如只知道中文名，先 `list_installed_apps` 查找包名
-- UI 操作时每步后用 `get_page_info` 确认结果
-- 页面加载中时用 `sleep(duration_ms=3000)` 等待
-- 任务完成后用 `<status type="complete">` 结束
-
-我现在可以帮你操作 App。"""
+        /**
+         * Extracts the content inside `<think>...</think>` or `<thinking>...</thinking>`.
+         * Used as fallback when reasoning models (Qwen, etc.) produce only thinking
+         * content without a visible reply.
+         */
+        private val THINK_CONTENT_REGEX = Regex(
+            "<think(?:ing)?\\b[^>]*>([\\s\\S]*?)</think(?:ing)?>",
+            RegexOption.IGNORE_CASE
+        )
 
         @Volatile private var INSTANCE: HermesGatewayController? = null
 
