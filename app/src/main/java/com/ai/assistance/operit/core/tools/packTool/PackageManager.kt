@@ -2364,6 +2364,17 @@ private constructor(private val context: Context, private val aiToolHandler: AIT
 
         val skillPrompt = skillManager.getSkillSystemPrompt(normalizedPackageName)
         if (skillPrompt != null) {
+            // Auto-activate Automatic_ui_base when a skill is loaded, since skills
+            // contain UI automation instructions (click_element, tap, swipe, etc.)
+            val uiBaseName = normalizePackageName("Automatic_ui_base")
+            if (!activePackageToolNames.containsKey(uiBaseName)) {
+                val uiBasePackage = getPackageTools(uiBaseName)
+                if (uiBasePackage != null) {
+                    val selected = selectToolPackageState(uiBasePackage)
+                    registerPackageTools(selected)
+                    AppLogger.d(TAG, "Auto-activated Automatic_ui_base for skill: $normalizedPackageName")
+                }
+            }
             return skillPrompt
         }
 

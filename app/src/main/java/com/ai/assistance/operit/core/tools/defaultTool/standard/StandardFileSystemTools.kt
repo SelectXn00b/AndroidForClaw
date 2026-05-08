@@ -52,6 +52,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -98,7 +99,7 @@ open class StandardFileSystemTools(protected val context: Context) {
             "doc", "docx",      // Word documents
             "pdf",              // PDF documents
             "jpg", "jpeg",      // Image files
-            "png", "gif", "bmp",
+            "png", "gif", "bmp", "webp", "heic", "heif",
             "mp3", "wav", "m4a", "aac", "flac", "ogg", "opus",
             "mp4", "mkv", "mov", "webm", "avi", "m4v"
         )
@@ -1437,11 +1438,31 @@ open class StandardFileSystemTools(protected val context: Context) {
             "jpg", "jpeg", "png", "gif", "bmp" -> {
                 // 获取可选的intent参数和direct_image参数
                 val intent = tool.parameters.find { it.name == "intent" }?.value
-                val directImage = tool.parameters.find { it.name == "direct_image" }?.value?.toBoolean() ?: false
+                val explicitDirectImage = tool.parameters.find { it.name == "direct_image" }?.value?.toBoolean()
+
+                // Auto-detect: if the current chat model has enableDirectImageProcessing,
+                // automatically use direct_image=true so the model can see the image.
+                // The AI never knows about the direct_image parameter (it's filtered from
+                // tool prompts), so we infer it from the model config.
+                val directImage = explicitDirectImage ?: run {
+                    try {
+                        val functionalConfigMgr = FunctionalConfigManager(context)
+                        functionalConfigMgr.initializeIfNeeded()
+                        val modelConfigMgr = ModelConfigManager(context)
+                        val mapping = functionalConfigMgr.getConfigMappingForFunction(FunctionType.CHAT)
+                        AppLogger.d(TAG, "Image auto-detect: CHAT configId=${mapping.configId}")
+                        val config = modelConfigMgr.getModelConfigFlow(mapping.configId).first()
+                        AppLogger.d(TAG, "Image auto-detect: enableDirectImageProcessing=${config.enableDirectImageProcessing}, model=${config.modelName}")
+                        config.enableDirectImageProcessing
+                    } catch (e: Exception) {
+                        AppLogger.w(TAG, "Failed to check model config for direct image: ${e.message}", e)
+                        false
+                    }
+                }
 
                 AppLogger.d(
                     TAG,
-                    "Detected image file, intent=${intent ?: "无"}, direct_image=$directImage"
+                    "Detected image file, intent=${intent ?: "无"}, direct_image=$directImage (explicit=${explicitDirectImage})"
                 )
 
                 // 情况1：direct_image 为 true，直接返回图片链接，供支持识图的聊天模型自己查看
@@ -1475,9 +1496,7 @@ open class StandardFileSystemTools(protected val context: Context) {
                     try {
                         val enhancedService =
                             com.ai.assistance.operit.api.chat.EnhancedAIService.getInstance(context)
-                        val analysisResult = kotlinx.coroutines.runBlocking {
-                            enhancedService.analyzeImageWithIntent(path, intent)
-                        }
+                        val analysisResult = enhancedService.analyzeImageWithIntent(path, intent)
 
                         return ToolResult(
                             toolName = tool.name,
@@ -1502,13 +1521,11 @@ open class StandardFileSystemTools(protected val context: Context) {
                     }
                     if (bitmap != null) {
                         val ocrText =
-                            kotlinx.coroutines.runBlocking {
-                                com.ai.assistance.operit.util
-                                    .OCRUtils.recognizeText(
-                                        context,
-                                        bitmap
-                                    )
-                            }
+                            com.ai.assistance.operit.util
+                                .OCRUtils.recognizeText(
+                                    context,
+                                    bitmap
+                                )
                         if (ocrText.isNotBlank()) {
                             AppLogger.d(
                                 TAG,
@@ -1624,9 +1641,7 @@ open class StandardFileSystemTools(protected val context: Context) {
                 if (!intent.isNullOrBlank()) {
                     try {
                         val enhancedService = com.ai.assistance.operit.api.chat.EnhancedAIService.getInstance(context)
-                        val analysisResult = kotlinx.coroutines.runBlocking {
-                            enhancedService.analyzeAudioWithIntent(path, intent)
-                        }
+                        val analysisResult = enhancedService.analyzeAudioWithIntent(path, intent)
 
                         return ToolResult(
                             toolName = tool.name,
@@ -1699,9 +1714,7 @@ open class StandardFileSystemTools(protected val context: Context) {
                 if (!intent.isNullOrBlank()) {
                     try {
                         val enhancedService = com.ai.assistance.operit.api.chat.EnhancedAIService.getInstance(context)
-                        val analysisResult = kotlinx.coroutines.runBlocking {
-                            enhancedService.analyzeVideoWithIntent(path, intent)
-                        }
+                        val analysisResult = enhancedService.analyzeVideoWithIntent(path, intent)
 
                         return ToolResult(
                             toolName = tool.name,

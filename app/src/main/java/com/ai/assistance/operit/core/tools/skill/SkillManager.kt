@@ -206,20 +206,31 @@ class SkillManager private constructor(private val context: Context) {
         }
 
         val sb = StringBuilder()
-        sb.appendLine("Using package (Skill): ${skill.name}")
-        sb.appendLine("Use Time: ${java.time.LocalDateTime.now()}")
-        sb.appendLine("Execution policy:")
-        sb.appendLine("Prioritize using the skill-provided instructions and bundled scripts, and complete tasks with terminal-related tools.")
-        if (skill.description.isNotBlank()) {
-            sb.appendLine("Description: ${skill.description}")
-        }
-        sb.appendLine("SKILL.md path: ${skill.skillFile.absolutePath}")
-        sb.appendLine("Skill directory: ${skill.directory.absolutePath}")
-        sb.appendLine("Directory structure:")
-        sb.appendLine(buildDirectoryTreeText(skill.directory))
+        // Strong directive framing first — the AI must treat this as instructions
+        sb.appendLine("=== SKILL ACTIVATED: ${skill.name} ===")
         sb.appendLine()
-        sb.appendLine("SKILL.md:")
+        sb.appendLine("IMPORTANT: You MUST strictly follow the instructions below step by step, in the exact order specified. Do NOT skip steps, reorder steps, or deviate from the instructions. Execute each step completely before moving to the next one.")
+        sb.appendLine()
+        sb.appendLine("UI TOOLS: The Automatic_ui_base package has been auto-activated. You can directly call UI automation tools such as click_element, tap, swipe, get_page_info, set_input_text, press_key without needing to call use_package first. If tools are unavailable, call use_package(\"Automatic_ui_base\") to activate them.")
+        sb.appendLine()
+        sb.appendLine("NOTE: This skill already contains the complete navigation path (marked with PATH:FIXED). Do NOT attempt to navigate to the target app or page on your own — the skill's fixed path handles all navigation. Simply follow the steps in order. If the user's instruction mentions the same app/target as the skill, that is expected — the skill IS the way to fulfill that instruction.")
+        sb.appendLine()
+        // Skill content immediately after the directive — highest attention zone
+        sb.appendLine("--- BEGIN SKILL INSTRUCTIONS ---")
         sb.appendLine(content)
+        sb.appendLine("--- END SKILL INSTRUCTIONS ---")
+        sb.appendLine()
+        // Metadata at the end — useful but secondary
+        sb.appendLine("Skill metadata:")
+        sb.appendLine("- Skill directory: ${skill.directory.absolutePath}")
+        if (skill.description.isNotBlank()) {
+            sb.appendLine("- Description: ${skill.description}")
+        }
+        val dirTree = buildDirectoryTreeText(skill.directory)
+        if (dirTree.isNotBlank()) {
+            sb.appendLine("- Directory structure:")
+            sb.appendLine(dirTree)
+        }
 
         return sb.toString()
     }

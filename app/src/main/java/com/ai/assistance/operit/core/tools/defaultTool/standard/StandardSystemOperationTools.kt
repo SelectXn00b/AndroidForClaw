@@ -263,6 +263,41 @@ open class StandardSystemOperationTools(private val context: Context) {
                 "secure" -> Settings.Secure.putString(context.contentResolver, setting, value)
                 "global" -> Settings.Global.putString(context.contentResolver, setting, value)
             }
+
+            // When modifying screen_brightness, automatically disable auto-brightness
+            // first so the manual value takes visible effect.  Then notify the system
+            // ContentObserver so the display subsystem re-reads the value immediately.
+            if (namespace == "system" && setting == "screen_brightness") {
+                try {
+                    // Disable auto-brightness if it is currently on
+                    val currentMode = Settings.System.getInt(
+                        context.contentResolver,
+                        Settings.System.SCREEN_BRIGHTNESS_MODE,
+                        Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL
+                    )
+                    if (currentMode != Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL) {
+                        Settings.System.putInt(
+                            context.contentResolver,
+                            Settings.System.SCREEN_BRIGHTNESS_MODE,
+                            Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL
+                        )
+                    }
+                    // Notify observers to force an immediate display refresh
+                    val brightnessUri = Settings.System.getUriFor(Settings.System.SCREEN_BRIGHTNESS)
+                    context.contentResolver.notifyChange(brightnessUri, null)
+                } catch (e: Exception) {
+                    AppLogger.w(TAG, "Failed to force brightness refresh: ${e.message}")
+                }
+            }
+            if (namespace == "system" && setting == "screen_brightness_mode") {
+                try {
+                    val modeUri = Settings.System.getUriFor(Settings.System.SCREEN_BRIGHTNESS_MODE)
+                    context.contentResolver.notifyChange(modeUri, null)
+                } catch (e: Exception) {
+                    AppLogger.w(TAG, "Failed to notify brightness mode change: ${e.message}")
+                }
+            }
+
             val resultData = SystemSettingData(namespace = namespace, setting = setting, value = value)
             ToolResult(toolName = tool.name, success = true, result = resultData, error = "")
         } catch (e: SecurityException) {

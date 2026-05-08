@@ -63,12 +63,16 @@ class ActionListenerFactory {
             )
 
             for (level in levels) {
-                val listener = getListener(context, level)
-                val permStatus = listener.hasPermission()
+                try {
+                    val listener = getListener(context, level)
+                    val permStatus = listener.hasPermission()
 
-                if (listener.isAvailable() && permStatus.granted) {
-                    AppLogger.d(TAG, "Found highest available action listener: ${listener.getPermissionLevel()}")
-                    return Pair(listener, permStatus)
+                    if (listener.isAvailable() && permStatus.granted) {
+                        AppLogger.d(TAG, "Found highest available action listener: ${listener.getPermissionLevel()}")
+                        return Pair(listener, permStatus)
+                    }
+                } catch (e: Exception) {
+                    AppLogger.w(TAG, "Error checking listener $level, skipping: ${e.message}")
                 }
             }
 

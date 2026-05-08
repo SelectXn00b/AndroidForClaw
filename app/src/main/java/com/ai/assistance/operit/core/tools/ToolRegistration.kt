@@ -9,6 +9,7 @@ import com.ai.assistance.operit.data.model.AITool
 import com.ai.assistance.operit.data.model.ToolParameter
 import com.ai.assistance.operit.data.model.ToolResult
 import com.ai.assistance.operit.data.model.skillrecorder.RecordingState
+import com.ai.assistance.operit.data.repository.UIHierarchyManager
 import com.ai.assistance.operit.integrations.tasker.triggerAIAgentAction
 import com.ai.assistance.operit.services.FloatingChatService
 import com.ai.assistance.operit.services.skillrecorder.SkillRecorderNotification
@@ -2098,23 +2099,45 @@ fun registerAllTools(handler: AIToolHandler, context: Context) {
             executor = { tool ->
                 val action = tool.parameters.find { it.name == "action" }?.value ?: "status"
                 val skillName = tool.parameters.find { it.name == "skill_name" }?.value
+                val skillContent = tool.parameters.find { it.name == "content" }?.value
 
                 runBlocking(Dispatchers.IO) {
                     when (action) {
                         "start" -> {
-                            // Start a build session if not already in one, then start recording a step
-                            if (SkillRecorderService.recordingState.value == RecordingState.IDLE) {
-                                SkillRecorderService.startBuildSession(null)
+                            // Check accessibility service readiness before starting
+                            val providerInstalled = UIHierarchyManager.isProviderAppInstalled(context)
+                            if (!providerInstalled) {
+                                ToolResult(
+                                    toolName = tool.name,
+                                    success = false,
+                                    result = StringResultData("Cannot start recording: UI Hierarchy Provider app is not installed. Please install it first via the Skill Recorder UI.")
+                                )
+                            } else {
+                                val accessibilityReady = try {
+                                    UIHierarchyManager.isAccessibilityServiceEnabled(context)
+                                } catch (_: Exception) { false }
+                                if (!accessibilityReady) {
+                                    ToolResult(
+                                        toolName = tool.name,
+                                        success = false,
+                                        result = StringResultData("Cannot start recording: Accessibility service is not enabled. Please enable it in device settings first.")
+                                    )
+                                } else {
+                                    // Start a build session if not already in one, then start recording a step
+                                    if (SkillRecorderService.recordingState.value == RecordingState.IDLE) {
+                                        SkillRecorderService.startBuildSession(null)
+                                    }
+                                    SkillRecorderService.start(context)
+                                    // Wait briefly for service to start
+                                    delay(500)
+                                    val state = SkillRecorderService.recordingState.value
+                                    ToolResult(
+                                        toolName = tool.name,
+                                        success = state == RecordingState.STEP_RECORDING,
+                                        result = StringResultData("Recording started. State: $state. Switch to the target app and perform the actions you want to record. Call skill_recorder(action=stop) when done.")
+                                    )
+                                }
                             }
-                            SkillRecorderService.start(context)
-                            // Wait briefly for service to start
-                            delay(500)
-                            val state = SkillRecorderService.recordingState.value
-                            ToolResult(
-                                toolName = tool.name,
-                                success = state == RecordingState.STEP_RECORDING,
-                                result = StringResultData("Recording started. State: $state. Switch to the target app and perform the actions you want to record. Call skill_recorder(action=stop) when done.")
-                            )
                         }
                         "stop" -> {
                             SkillRecorderService.sendAction(context, SkillRecorderNotification.ACTION_STOP)
@@ -2182,14 +2205,16 @@ fun registerAllTools(handler: AIToolHandler, context: Context) {
                                     ToolResult(
                                         toolName = tool.name,
                                         success = false,
-                                        result = StringResultData("No generated SKILL.md to save. Record and stop first.")
+                                        result = StringResultData("No generated SKILL.md to save. Record and stop first, or use action=create to create a skill directly from content.")
                                     )
                                 } else {
                                     try {
                                         val skillManager = SkillManager.getInstance(context)
                                         val skillDir = java.io.File(skillManager.getSkillsDirectoryPath(), name)
                                         skillDir.mkdirs()
-                                        java.io.File(skillDir, "SKILL.md").writeText(content)
+                                        // Sync frontmatter name to match directory name
+                                        val finalContent = syncSkillFrontmatterName(content, name)
+                                        java.io.File(skillDir, "SKILL.md").writeText(finalContent)
                                         skillManager.refreshAvailableSkills()
                                         session?.savedSkillName = name
                                         ToolResult(
@@ -2204,6 +2229,44 @@ fun registerAllTools(handler: AIToolHandler, context: Context) {
                                             result = StringResultData("Failed to save skill: ${e.message}")
                                         )
                                     }
+                                }
+                            }
+                        }
+                        "create" -> {
+                            val name = skillName?.trim()?.replace(Regex("[^a-zA-Z0-9_-]"), "") ?: ""
+                            val mdContent = skillContent ?: ""
+                            if (name.isBlank()) {
+                                ToolResult(
+                                    toolName = tool.name,
+                                    success = false,
+                                    result = StringResultData("skill_name parameter is required for create action. Use alphanumeric characters, hyphens, and underscores only.")
+                                )
+                            } else if (mdContent.isBlank()) {
+                                ToolResult(
+                                    toolName = tool.name,
+                                    success = false,
+                                    result = StringResultData("content parameter is required for create action. Provide the full SKILL.md content (YAML frontmatter + markdown body).")
+                                )
+                            } else {
+                                try {
+                                    val skillManager = SkillManager.getInstance(context)
+                                    val skillDir = java.io.File(skillManager.getSkillsDirectoryPath(), name)
+                                    skillDir.mkdirs()
+                                    // Sync frontmatter name to match directory name
+                                    val finalMdContent = syncSkillFrontmatterName(mdContent, name)
+                                    java.io.File(skillDir, "SKILL.md").writeText(finalMdContent)
+                                    skillManager.refreshAvailableSkills()
+                                    ToolResult(
+                                        toolName = tool.name,
+                                        success = true,
+                                        result = StringResultData("Skill '$name' created at ${skillDir.absolutePath}. It is now available as a package via use_package(\"$name\").")
+                                    )
+                                } catch (e: Exception) {
+                                    ToolResult(
+                                        toolName = tool.name,
+                                        success = false,
+                                        result = StringResultData("Failed to create skill: ${e.message}")
+                                    )
                                 }
                             }
                         }
@@ -2229,11 +2292,37 @@ fun registerAllTools(handler: AIToolHandler, context: Context) {
                             ToolResult(
                                 toolName = tool.name,
                                 success = false,
-                                result = StringResultData("Unknown action '$action'. Valid actions: start, stop, pause, resume, discard, save, status")
+                                result = StringResultData("Unknown action '$action'. Valid actions: start, stop, pause, resume, discard, save, create, status")
                             )
                         }
                     }
                 }
             }
     )
+}
+
+/**
+ * Ensure the YAML frontmatter `name:` field matches the skill directory name.
+ */
+private fun syncSkillFrontmatterName(content: String, skillName: String): String {
+    val lines = content.lines().toMutableList()
+    if (lines.isNotEmpty() && lines[0].trim() == "---") {
+        val endIdx = lines.drop(1).indexOfFirst { it.trim() == "---" }
+        if (endIdx >= 0) {
+            val fmEnd = endIdx + 1
+            var nameReplaced = false
+            for (i in 1..fmEnd) {
+                if (lines[i].trim().startsWith("name:")) {
+                    lines[i] = "name: $skillName"
+                    nameReplaced = true
+                    break
+                }
+            }
+            if (!nameReplaced) {
+                lines.add(1, "name: $skillName")
+            }
+            return lines.joinToString("\n")
+        }
+    }
+    return "---\nname: $skillName\n---\n$content"
 }

@@ -46,6 +46,23 @@ open class DebuggerSystemOperationTools(context: Context) :
             val result = AndroidShellExecutor.executeShellCommand(command)
 
             if (result.success) {
+                // When modifying screen_brightness via shell, also disable
+                // auto-brightness so the manual value takes visible effect.
+                if (namespace == "system" && setting == "screen_brightness") {
+                    try {
+                        val modeResult = AndroidShellExecutor.executeShellCommand(
+                            "settings get system screen_brightness_mode"
+                        )
+                        if (modeResult.success && modeResult.stdout.trim() != "0") {
+                            AndroidShellExecutor.executeShellCommand(
+                                "settings put system screen_brightness_mode 0"
+                            )
+                        }
+                    } catch (e: Exception) {
+                        AppLogger.w(TAG, "Failed to disable auto-brightness: ${e.message}")
+                    }
+                }
+
                 val resultData =
                     SystemSettingData(namespace = namespace, setting = setting, value = value)
 
