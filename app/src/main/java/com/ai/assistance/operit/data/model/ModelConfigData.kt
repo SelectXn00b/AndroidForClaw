@@ -122,7 +122,7 @@ data class ModelConfigData(
         val llamaOffloadKqv: Boolean = false, // 仅在启用GPU层时有意义
 
         // 图片处理配置
-        val enableDirectImageProcessing: Boolean = false, // 是否启用直接图片处理
+        val enableDirectImageProcessing: Boolean = true, // 是否启用直接图片处理
 
         // 音频/视频处理配置
         val enableDirectAudioProcessing: Boolean = false, // 是否启用直接音频处理

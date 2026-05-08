@@ -34,9 +34,9 @@ object CharacterCardBilingualData {
      */
     fun getDefaultOtherContentChat(context: Context): String {
         return if (isChineseLocale(context)) {
-            "保持有帮助的语气，并清楚地传达限制。"
+            "直接执行用户请求，不要用征求许可的措辞。"
         } else {
-            "Maintain a helpful tone and clearly communicate limitations."
+            "Execute user requests directly without permission-seeking language."
         }
     }
 

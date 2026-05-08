@@ -284,8 +284,9 @@ class DemoStateManager(private val context: Context, private val coroutineScope:
 
             val terminal = Terminal.getInstance(context)
             
-            // 检查pnpm安装状态
-            val pnpmResult = terminal.executeCommand(sessionId, "command -v pnpm")
+            // 检查pnpm安装状态 - 同时检查PATH和npm global bin目录
+            val pnpmResult = terminal.executeCommand(sessionId,
+                "command -v pnpm 2>/dev/null || test -f \"\$(npm prefix -g 2>/dev/null)/bin/pnpm\" && echo pnpm")
             isPnpmInstalled.value = pnpmResult != null && pnpmResult.contains("pnpm")
             
             // 检查python安装状态
@@ -366,7 +367,8 @@ suspend fun refreshPermissionsAndStatus(
         val sessionId = MCPSharedSession.getOrCreateSharedSession(context)
         if (sessionId != null) {
             val terminal = Terminal.getInstance(context)
-            val pnpmResult = terminal.executeCommand(sessionId, "command -v pnpm")
+            val pnpmResult = terminal.executeCommand(sessionId,
+                "command -v pnpm 2>/dev/null || test -f \"\$(npm prefix -g 2>/dev/null)/bin/pnpm\" && echo pnpm")
             val isPnpmInstalled = pnpmResult != null && pnpmResult.contains("pnpm")
             
             val pythonResult = terminal.executeCommand(sessionId, "command -v python")

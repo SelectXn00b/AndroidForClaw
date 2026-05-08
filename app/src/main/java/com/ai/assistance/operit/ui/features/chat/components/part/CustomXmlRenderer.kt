@@ -908,8 +908,18 @@ class CustomXmlRenderer(
                     }
                 val statusText =
                     when (statusType) {
-                        "completion", "complete" -> "✓ Task completed"
-                        "wait_for_user_need" -> "✓ Ready for further assistance"
+                        "completion", "complete" -> "✅ 执行完成"
+                        "wait_for_user_need" -> "✅ 执行完成"
+                        "warning" -> statusContent
+                        "error" -> {
+                            val errorHints = listOf(
+                                "遇到了一些问题，要不要换种方式继续？",
+                                "执行出错了，需要我换个思路再试试吗？",
+                                "出了点状况，要继续尝试还是换种方法？",
+                                "操作遇到阻碍，要不要调整一下再来？",
+                            )
+                            "⚠️ ${errorHints.random()}"
+                        }
                         else -> statusContent
                     }
 

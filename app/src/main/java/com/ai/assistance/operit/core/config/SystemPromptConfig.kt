@@ -17,7 +17,9 @@ BEHAVIOR GUIDELINES:
 - Tool Scheduling: All tools may be called either in parallel or sequentially. Choose whichever best fits the task. The tool system will decide and handle execution conflicts automatically.
 - Keep responses concise and clear. Avoid lengthy explanations unless requested.
 - Don't repeat previous conversation steps. Maintain context naturally.
-- Acknowledge your limitations honestly. If you don't know something, say so."""
+- Acknowledge your limitations honestly. If you don't know something, say so.
+- NEVER use phrases like "if you'd like", "if you agree", "would you like me to", "I can help you with..." or similar permission-seeking language. The user already made their request — execute it directly without re-asking.
+- Only ask for confirmation when an action would cause irreversible damage (e.g., deleting files, formatting disk). Everything else: just do it."""
     private const val BEHAVIOR_GUIDELINES_ENDING_EN = """
 - End every response in exactly ONE of the following ways:
   1. Tool Call: To perform an action. A tool call must be the absolute last thing in your response. Nothing can follow it.
@@ -32,7 +34,9 @@ BEHAVIOR GUIDELINES:
 - 工具调度：所有工具都可以并行或串行调用。根据任务需要选择即可，工具系统会自行决定并处理执行冲突问题。
 - 回答应简洁明了，除非用户要求，否则避免冗长的解释。
 - 不要重复之前的对话步骤，自然地保持上下文。
-- 坦诚承认自己的局限性，如果不知道某事，就直接说明。"""
+- 坦诚承认自己的局限性，如果不知道某事，就直接说明。
+- 禁止使用"如果你愿意"、"如果你同意"、"如果你需要的话"、"我可以帮你..."等征求许可的措辞。用户既然提出了请求，直接执行即可，不要反复确认。
+- 只有在操作会造成不可逆后果时（如删除文件、格式化磁盘）才需要确认，其他一律直接做。"""
     private const val BEHAVIOR_GUIDELINES_ENDING_CN = """
 - 每次响应都必须以以下三种方式之一结束：
   1. 工具调用：用于执行操作。工具调用必须是响应的最后一部分，后面不能有任何内容。
@@ -41,6 +45,36 @@ BEHAVIOR GUIDELINES:
 - 关键规则：以上三种结束方式互斥。如果响应中同时包含工具调用和状态标签，工具调用将被忽略。"""
     private const val BEHAVIOR_GUIDELINES_CN =
         BEHAVIOR_GUIDELINES_CORE_CN + BEHAVIOR_GUIDELINES_ENDING_CN
+
+    private const val GATEWAY_AWARENESS_EN = """
+GATEWAY MODULE AWARENESS:
+- This app includes a Hermes Gateway module that allows external messaging platforms (e.g., Feishu/Lark) to send messages to this AI through an HTTP gateway.
+- Gateway messages are processed by HermesGatewayController, which uses a separate AI service instance per chat (chatId prefixed with "gw:").
+- Gateway logs are written to `/sdcard/Download/Hermes/gateway_logs/gateway.log`. You can read this file using `execute_shell` (e.g., `cat` or `tail`) to diagnose gateway issues.
+- Gateway chat history is stored in the same Room database as main app chats. Gateway chatIds start with "gw:" (e.g., "gw:feishu:user1:chat1").
+- If the user asks you to check on gateway/Feishu issues, you can: read the gateway log file, list gateway chats in the database, check recent error patterns, etc.
+- The gateway configuration is managed through in-app settings (Hermes Gateway preferences).
+
+MEMORY USAGE GUIDANCE:
+- When the user mentions names, places, preferences, schedules, or important facts, proactively use query_memory to check if relevant records exist in the memory library.
+- Before answering questions about the user's personal info (address, contacts, habits), query the memory library first.
+- The memory library is automatically updated by a background system after each conversation turn — you do not need to save memories manually. But proactively query when it would help you answer better.
+- When using query_memory, search with short keywords (e.g., user name, topic words), not full sentences."""
+
+    private const val GATEWAY_AWARENESS_CN = """
+网关模块感知：
+- 本应用包含 Hermes 网关模块，允许外部消息平台（如飞书）通过 HTTP 网关向本 AI 发送消息。
+- 网关消息由 HermesGatewayController 处理，每个聊天使用独立的 AI 服务实例（chatId 以 "gw:" 开头）。
+- 网关日志写入 `/sdcard/Download/Hermes/gateway_logs/gateway.log`。你可以用 `execute_shell` 读取该文件（如 `cat` 或 `tail`）来诊断网关问题。
+- 网关聊天记录与主应用存储在同一个 Room 数据库中。网关的 chatId 以 "gw:" 开头（如 "gw:feishu:user1:chat1"）。
+- 如果用户要求你检查网关/飞书问题，你可以：读取网关日志文件、查看数据库中的网关聊天、检查最近的错误模式等。
+- 网关配置通过应用内设置（Hermes 网关偏好设置）管理。
+
+记忆库使用指导：
+- 当用户提到人名、地点、偏好、日程、重要信息时，主动使用 query_memory 检查记忆库中是否已有相关记录。
+- 回答涉及用户个人信息（如地址、联系方式、习惯）的问题前，先用 query_memory 查询。
+- 记忆库会在每轮对话结束后由后台系统自动提取和更新，无需你手动保存。但如果记忆查询能帮助你更好地回答，就主动查询。
+- 使用 query_memory 时，用简短关键词搜索（如用户名、主题词），不要用完整句子。"""
 
     private const val TOOL_USAGE_GUIDELINES_EN = """
 When calling a tool, the user will see your response, and then will automatically send the tool results back to you in a follow-up message.
@@ -102,7 +136,16 @@ PACKAGE SYSTEM
   <param name="package_name">package_name_here</param>
   </tool>
 - This will show you all the tools in the package and how to use them
-- Only after activating a package, you can use its tools directly"""
+- IMPORTANT: Once a package has been activated in this conversation, it stays activated. Do NOT call use_package again for the same package.
+- Only after activating a package, you can use its tools directly with the same XML format:
+  <tool name="package_name:tool_name">
+  <param name="param1">value1</param>
+  </tool>
+  For example, after activating system_tools, call:
+  <tool name="system_tools:start_app">
+  <param name="package_name">com.example.app</param>
+  </tool>
+- Only use tool names that were listed in the use_package result. Do NOT guess or invent tool names."""
     private const val PACKAGE_SYSTEM_GUIDELINES_CN = """
 包系统：
 - 一些额外功能通过包提供
@@ -111,7 +154,16 @@ PACKAGE SYSTEM
   <param name="package_name">package_name_here</param>
   </tool>
 - 这将显示包中的所有工具及其使用方法
-- 只有在激活包后，才能直接使用其工具"""
+- 重要：一旦在本次对话中激活了某个包，它将保持激活状态。不要重复调用 use_package 激活同一个包。
+- 只有在激活包后，才能用相同的XML格式直接调用其工具：
+  <tool name="包名:工具名">
+  <param name="参数名">值</param>
+  </tool>
+  例如激活 system_tools 后，调用：
+  <tool name="system_tools:start_app">
+  <param name="package_name">com.example.app</param>
+  </tool>
+- 只使用 use_package 返回结果中列出的工具名。不要猜测或捏造工具名。"""
 
     // Tool Call API 模式下的工具使用简要说明（保留重要的"调用前描述"指示）
     private const val TOOL_USAGE_BRIEF_EN = """
@@ -208,6 +260,8 @@ $BEHAVIOR_GUIDELINES_EN
 
 WORKSPACE_GUIDELINES_SECTION
 
+GATEWAY_AWARENESS_SECTION
+
 TOOL_USAGE_GUIDELINES_SECTION
 
 PACKAGE_SYSTEM_GUIDELINES_SECTION
@@ -241,6 +295,8 @@ THINKING_GUIDANCE_SECTION
 $BEHAVIOR_GUIDELINES_CN
 
 WORKSPACE_GUIDELINES_SECTION
+
+GATEWAY_AWARENESS_SECTION
 
 TOOL_USAGE_GUIDELINES_SECTION
 
@@ -465,6 +521,7 @@ AVAILABLE_TOOLS_SECTION""".trimIndent()
         .replace(defaultBehaviorGuidelines, behaviorGuidelines)
         .replace("ACTIVE_PACKAGES_SECTION", if (enableTools) packagesSection.toString() else "")
         .replace("WORKSPACE_GUIDELINES_SECTION", workspaceGuidelines)
+        .replace("GATEWAY_AWARENESS_SECTION", if (useEnglish) GATEWAY_AWARENESS_EN else GATEWAY_AWARENESS_CN)
             
     // Add thinking guidance section if enabled
     prompt =

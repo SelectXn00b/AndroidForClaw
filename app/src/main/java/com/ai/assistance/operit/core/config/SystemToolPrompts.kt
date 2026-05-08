@@ -63,18 +63,24 @@ object SystemToolPrompts {
             ),
             ToolPrompt(
                 name = "skill_recorder",
-                description = "Control the Skill Recorder to record user actions on the device and generate reusable SKILL.md files. Workflow: start → perform actions on device → stop (waits for AI summarization) → save(skill_name=...). After saving, the skill becomes available via use_package.",
+                description = "Control the Skill Recorder to manage reusable SKILL.md files. Two workflows: (1) Record: start → perform actions → stop (AI summarization) → save(skill_name=...). (2) Create directly: create(skill_name=..., content=...) to write a SKILL.md without recording. After saving/creating, the skill is available via use_package.",
                 parametersStructured = listOf(
                     ToolParameterSchema(
                         name = "action",
                         type = "string",
-                        description = "Action to perform: start, stop, pause, resume, discard, save, status",
+                        description = "Action to perform: start, stop, pause, resume, discard, save, create, status",
                         required = true
                     ),
                     ToolParameterSchema(
                         name = "skill_name",
                         type = "string",
-                        description = "Required when action=save. Name for the skill directory.",
+                        description = "Required when action=save or action=create. Name for the skill directory (alphanumeric, hyphens, underscores only).",
+                        required = false
+                    ),
+                    ToolParameterSchema(
+                        name = "content",
+                        type = "string",
+                        description = "Required when action=create. Full SKILL.md content (YAML frontmatter + markdown body).",
                         required = false
                     )
                 )
@@ -101,18 +107,24 @@ object SystemToolPrompts {
             ),
             ToolPrompt(
                 name = "skill_recorder",
-                description = "控制技能录制器，录制设备上的用户操作并生成可复用的 SKILL.md 文件。工作流程：start → 在设备上执行操作 → stop（等待 AI 总结）→ save(skill_name=...)。保存后可通过 use_package 使用该技能。",
+                description = "控制技能录制器，管理可复用的 SKILL.md 文件。两种工作流程：(1) 录制：start → 在设备上执行操作 → stop（等待 AI 总结）→ save(skill_name=...)。(2) 直接创建：create(skill_name=..., content=...) 不需要录制即可写入 SKILL.md。保存/创建后可通过 use_package 使用该技能。",
                 parametersStructured = listOf(
                     ToolParameterSchema(
                         name = "action",
                         type = "string",
-                        description = "要执行的操作：start、stop、pause、resume、discard、save、status",
+                        description = "要执行的操作：start、stop、pause、resume、discard、save、create、status",
                         required = true
                     ),
                     ToolParameterSchema(
                         name = "skill_name",
                         type = "string",
-                        description = "action=save 时必填，技能目录名称。",
+                        description = "action=save 或 action=create 时必填，技能目录名称（仅字母数字、连字符、下划线）。",
+                        required = false
+                    ),
+                    ToolParameterSchema(
+                        name = "content",
+                        type = "string",
+                        description = "action=create 时必填，完整的 SKILL.md 内容（YAML frontmatter + markdown 正文）。",
                         required = false
                     )
                 )

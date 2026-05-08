@@ -248,6 +248,14 @@ object AIMessageManager {
                     }
                 } else {
                     // 非图片或未启用直接图片处理，使用普通附件格式
+                    // 对于图片附件，如果content为空，自动提示AI使用read_file读取
+                    val contentText = if (attachment.content.isNotBlank()) {
+                        attachment.content
+                    } else if (attachment.mimeType.startsWith("image/", ignoreCase = true)) {
+                        "[Image file attached. You MUST use the read_file tool on path \"${attachment.filePath}\" to view and analyze this image. Do NOT skip this step.]"
+                    } else {
+                        ""
+                    }
                     val attributes = buildString {
                         append("id=\"${attachment.filePath}\" ")
                         append("filename=\"${attachment.fileName}\" ")
@@ -256,7 +264,7 @@ object AIMessageManager {
                             append(" size=\"${attachment.fileSize}\"")
                         }
                     }
-                    "<attachment $attributes>${attachment.content}</attachment>"
+                    "<attachment $attributes>$contentText</attachment>"
                 }
             }
         } else ""
@@ -267,7 +275,18 @@ object AIMessageManager {
         )
 
         // 5. 组合最终消息
-        val finalMessageContent = listOf(proxySenderTag, processedMessageText, attachmentTags, workspaceTag, replyTag)
+        // 如果用户只发了附件（如图片）没有文字，添加默认引导文字
+        val effectiveMessageText = if (processedMessageText.isBlank() && attachmentTags.isNotBlank()) {
+            val hasImageAttachment = attachments.any { it.mimeType.startsWith("image/", ignoreCase = true) }
+            if (hasImageAttachment) {
+                "Please read and analyze the attached image(s)."
+            } else {
+                processedMessageText
+            }
+        } else {
+            processedMessageText
+        }
+        val finalMessageContent = listOf(proxySenderTag, effectiveMessageText, attachmentTags, workspaceTag, replyTag)
             .filter { it.isNotBlank() }
             .joinToString(" ")
         logMessageTiming(
@@ -323,7 +342,8 @@ object AIMessageManager {
         proxySenderName: String? = null,
         onToolInvocation: (suspend (String) -> Unit)? = null,
         chatModelConfigIdOverride: String? = null,
-        chatModelIndexOverride: Int? = null
+        chatModelIndexOverride: Int? = null,
+        isSubTask: Boolean = false
     ): SharedStream<String> {
         val totalStartTime = messageTimingNow()
         val chatKey = chatId ?: DEFAULT_CHAT_KEY
@@ -454,7 +474,8 @@ object AIMessageManager {
                 onToolInvocation = onToolInvocation,
                 chatModelConfigIdOverride = chatModelConfigIdOverride,
                 chatModelIndexOverride = chatModelIndexOverride,
-                stream = enableStream
+                stream = enableStream,
+                isSubTask = isSubTask
             ).shareRevisable(
                 scope = scope,
                 onComplete = {

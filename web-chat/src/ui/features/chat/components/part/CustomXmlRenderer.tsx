@@ -310,12 +310,21 @@ function StatusBlock({ block }: { block: WebMessageContentBlock }) {
     );
   }
 
+  const errorHints = [
+    '遇到了一些问题，要不要换种方式继续？',
+    '执行出错了，需要我换个思路再试试吗？',
+    '出了点状况，要继续尝试还是换种方法？',
+    '操作遇到阻碍，要不要调整一下再来？',
+  ];
+
   const statusText =
     statusType === 'completion' || statusType === 'complete'
-      ? '✓ Task completed'
+      ? '✅ 执行完成'
       : statusType === 'wait_for_user_need'
-        ? '✓ Ready for further assistance'
-        : statusContent;
+        ? '✅ 执行完成'
+        : statusType === 'error'
+          ? `⚠️ ${errorHints[Math.floor(Math.random() * errorHints.length)]}`
+          : statusContent;
 
   return <div className={`structured-status-card is-${statusType}`}>{statusText}</div>;
 }
