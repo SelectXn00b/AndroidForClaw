@@ -69,6 +69,9 @@ private fun ToolParameterSchema.toPropertySchema(): Map<String, Any?> {
         "type" to type,
         "description" to description
     )
+    if (type == "array") {
+        m["items"] = mapOf("type" to "string")
+    }
     if (default != null) m["default"] = default
     return m
 }

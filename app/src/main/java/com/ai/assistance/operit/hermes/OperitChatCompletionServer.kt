@@ -89,7 +89,9 @@ class OperitChatCompletionServer(
         )
 
         val fullText = aggregated.toString()
-        val toolCalls = extractToolCalls(fullText)
+        val extractResult = extractToolCalls(fullText)
+        val toolCalls = extractResult.toolCalls
+        val displayText = extractResult.cleanedText
 
         Log.d(TAG, "chatCompletion OUT: textLen=${fullText.length} " +
             "toolCalls=${toolCalls?.size ?: 0} " +
@@ -112,7 +114,7 @@ class OperitChatCompletionServer(
             choices = listOf(
                 Choice(
                     message = AssistantMessage(
-                        content = fullText,
+                        content = displayText,
                         toolCalls = toolCalls
                     )
                 )
@@ -138,27 +140,192 @@ class OperitChatCompletionServer(
         return out
     }
 
-    internal fun extractToolCalls(text: String): List<ToolCall>? {
+    internal data class ToolCallExtractResult(
+        val toolCalls: List<ToolCall>?,
+        val cleanedText: String
+    )
+
+    internal fun extractToolCalls(text: String): ToolCallExtractResult {
         val matches = ChatMarkupRegex.toolCallPattern.findAll(text).toList()
-        if (matches.isEmpty()) return null
-        return matches.map { match ->
-            val toolName = match.groupValues[2]
-            val body = match.groupValues[3]
-            val paramsJson = JSONObject()
-        ChatMarkupRegex.toolParamPattern.findAll(body).forEach { paramMatch ->
-                val key = paramMatch.groupValues[1]
-                val value = unescapeXml(paramMatch.groupValues[2])
-                paramsJson.put(key, value)
+        if (matches.isNotEmpty()) {
+            val toolCalls = matches.map { match ->
+                val toolName = match.groupValues[2]
+                val body = match.groupValues[3]
+                val paramsJson = JSONObject()
+                ChatMarkupRegex.toolParamPattern.findAll(body).forEach { paramMatch ->
+                    val key = paramMatch.groupValues[1]
+                    val value = unescapeXml(paramMatch.groupValues[2])
+                    paramsJson.put(key, value)
+                }
+                ToolCall(
+                    id = "call_${UUID.randomUUID().toString().replace("-", "").take(16)}",
+                    type = "function",
+                    function = ToolCallFunction(
+                        name = toolName,
+                        arguments = paramsJson.toString()
+                    )
+                )
             }
-            ToolCall(
+            // XML tool calls are rendered as structured UI widgets by the frontend,
+            // so we don't need to strip them from the text.
+            return ToolCallExtractResult(toolCalls = toolCalls, cleanedText = text)
+        }
+
+        // Fallback: some models occasionally output tool calls as inline JSON
+        // instead of the expected XML format, e.g.:
+        //   "我来读取文件。{"path":"/sdcard/file.txt","start_line":1}"
+        // Try to extract a JSON object and infer the tool name from its keys.
+        val jsonResult = tryExtractJsonToolCall(text)
+        return jsonResult ?: ToolCallExtractResult(toolCalls = null, cleanedText = text)
+    }
+
+    /**
+     * Attempt to parse inline JSON objects from the assistant text and
+     * match them to known tools based on parameter keys.
+     * Supports multiple JSON objects in a single message.
+     * Returns both the tool calls and text with JSON objects stripped out.
+     */
+    private fun tryExtractJsonToolCall(text: String): ToolCallExtractResult? {
+        val jsonMatches = JSON_OBJECT_REGEX.findAll(text).toList()
+        if (jsonMatches.isEmpty()) return null
+
+        val toolCalls = mutableListOf<ToolCall>()
+        val matchedRanges = mutableListOf<IntRange>()
+        for (jsonMatch in jsonMatches) {
+            val jsonStr = jsonMatch.value
+            val params = try { JSONObject(jsonStr) } catch (_: Exception) { continue }
+            val keys = params.keys().asSequence().toSet()
+            if (keys.isEmpty()) continue
+            val toolName = inferToolNameFromKeys(keys) ?: continue
+
+            Log.w(TAG, "extractToolCalls: recovered JSON-format tool call as '$toolName' " +
+                "(model did not use XML format). Keys: $keys")
+
+            toolCalls.add(ToolCall(
                 id = "call_${UUID.randomUUID().toString().replace("-", "").take(16)}",
                 type = "function",
                 function = ToolCallFunction(
                     name = toolName,
-                    arguments = paramsJson.toString()
+                    arguments = params.toString()
                 )
-            )
+            ))
+            matchedRanges.add(jsonMatch.range)
         }
+
+        if (toolCalls.isEmpty()) return null
+
+        // Strip the matched JSON objects from the display text
+        val cleanedText = buildString {
+            var lastEnd = 0
+            for (range in matchedRanges) {
+                append(text.substring(lastEnd, range.first))
+                lastEnd = range.last + 1
+            }
+            append(text.substring(lastEnd))
+        }.trim()
+
+        return ToolCallExtractResult(toolCalls = toolCalls, cleanedText = cleanedText)
+    }
+
+    /**
+     * Infer tool name from a set of JSON parameter keys.
+     * Uses distinctive/required parameters to identify tools with high confidence.
+     */
+    private fun inferToolNameFromKeys(keys: Set<String>): String? {
+        // --- File tools (most specific first) ---
+        if ("pattern" in keys && "use_path_pattern" in keys) return "find_files"
+        if ("pattern" in keys && "file_pattern" in keys) return "grep_code"
+        if ("pattern" in keys && "context_lines" in keys) return "grep_code"
+        if ("intent" in keys && "file_pattern" in keys) return "grep_context"
+        if ("start_line" in keys || "end_line" in keys) {
+            if ("path" in keys) return "read_file_part"
+        }
+        if ("old" in keys && "new" in keys && "path" in keys) return "apply_file"
+        if ("old_str" in keys && "path" in keys) return "edit_file"
+        if ("base64Content" in keys) return "write_file_binary"
+        if ("content" in keys && "path" in keys && "append" in keys) return "write_file"
+        if ("content" in keys && "path" in keys) return "write_file"
+        if ("recursive" in keys && "path" in keys && "source" !in keys) return "delete_file"
+        if ("create_parents" in keys) return "make_directory"
+        if ("source" in keys && "destination" in keys && "recursive" in keys) return "copy_file"
+        if ("source" in keys && "destination" in keys) {
+            // Could be move_file, copy_file, zip_files, unzip_files
+            if ("source_environment" in keys || "dest_environment" in keys) return "copy_file"
+            return "move_file"
+        }
+        if ("text_only" in keys && "path" in keys) return "read_file_full"
+        if ("direct_image" in keys || "direct_audio" in keys || "direct_video" in keys) return "read_file"
+
+        // --- Command / terminal tools ---
+        if ("session_id" in keys && "command" in keys) return "execute_in_terminal_session"
+        if ("session_id" in keys && "input" in keys) return "input_in_terminal_session"
+        if ("session_id" in keys) return "get_terminal_session_screen"
+        if ("session_name" in keys) return "create_terminal_session"
+        if ("command" in keys && "executor_key" in keys) return "execute_hidden_terminal_command"
+        if ("command" in keys) return "execute_shell"
+
+        // --- HTTP tools ---
+        if ("url" in keys && "method" in keys && "form_data" in keys) return "multipart_request"
+        if ("url" in keys && "method" in keys) return "http_request"
+        if ("url" in keys && "visit_key" in keys && "destination" in keys) return "download_file"
+        if ("url" in keys && "visit_key" in keys) return "visit_web"
+        if ("url" in keys && "include_image_links" in keys) return "visit_web"
+        if ("url" in keys && "user_agent" in keys) return "visit_web"
+
+        // --- UI / accessibility tools ---
+        if ("resourceId" in keys || "contentDesc" in keys || "className" in keys) return "click_element"
+        if ("start_x" in keys && "end_x" in keys) return "swipe"
+        if ("key_code" in keys) return "press_key"
+        if ("format" in keys && "detail" in keys) return "get_page_info"
+        if ("ref" in keys && "selector" in keys) return "browser_click"
+        if ("max_steps" in keys && "intent" in keys) return "run_ui_subagent"
+
+        // --- Memory tools ---
+        if ("query" in keys && "folder_path" in keys) return "query_memory"
+        if ("query" in keys && "snapshot_id" in keys) return "query_memory"
+        if ("title" in keys && "chunk_index" in keys) return "get_memory_by_title"
+        if ("title" in keys && "content" in keys && "content_type" in keys) return "create_memory"
+        if ("old_title" in keys) return "update_memory"
+        if ("source_title" in keys && "target_title" in keys) return "link_memories"
+        if ("link_id" in keys || "link_type" in keys) return "query_memory_links"
+
+        // --- Chat tools ---
+        if ("message" in keys && "chat_id" in keys && "chat_history" in keys) return "send_message_to_ai_advanced"
+        if ("message" in keys && "chat_id" in keys) return "send_message_to_ai"
+        if ("chat_id" in keys && "title" in keys) return "update_chat_title"
+        if ("chat_id" in keys && "order" in keys) return "get_chat_messages"
+
+        // --- Search ---
+        if ("query" in keys && "engine" in keys) return "web_search"
+        if ("query" in keys && keys.size <= 3) return "web_search"
+
+        // --- Intent / broadcast ---
+        if ("action" in keys && "uri" in keys && "extras" in keys) return "execute_intent"
+        if ("action" in keys && "extra_key" in keys) return "send_broadcast"
+
+        // --- Workflow ---
+        if ("workflow_id" in keys && "nodes" in keys) return "update_workflow"
+        if ("workflow_id" in keys && "node_patches" in keys) return "patch_workflow"
+        if ("workflow_id" in keys) return "trigger_workflow"
+        if ("nodes" in keys && "connections" in keys) return "create_workflow"
+
+        // --- Settings ---
+        if ("setting" in keys && "namespace" in keys && "value" in keys) return "modify_system_setting"
+        if ("setting" in keys && "namespace" in keys) return "get_system_setting"
+        if ("config_id" in keys && "model_index" in keys) return "test_model_config_connection"
+        if ("function_type" in keys && "config_id" in keys) return "set_function_model_config"
+        if ("expression" in keys) return "calculate"
+        if ("task_type" in keys) return "trigger_tasker_event"
+
+        // --- Simple tools (fewer distinctive keys, check last) ---
+        if ("duration_ms" in keys) return "sleep"
+        if ("package_name" in keys && "enabled" in keys) return "set_sandbox_package_enabled"
+        if ("package_name" in keys && "activity" in keys) return "start_app"
+        if ("package_name" in keys) return "use_package"
+        if ("url" in keys) return "visit_web"
+        if ("path" in keys && "pattern" in keys) return "find_files"
+        if ("path" in keys && keys.size <= 3) return "read_file"
+        return null
     }
 
     internal fun Map<String, Any?>.toPromptTurn(
@@ -258,6 +425,9 @@ class OperitChatCompletionServer(
 
     companion object {
         private const val TAG = "HermesBridge/Server"
+
+        /** Matches a JSON object {...} embedded in assistant text. */
+        private val JSON_OBJECT_REGEX = Regex("""\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}""")
 
         /** Unescape XML entities so param values round-trip correctly. */
         private fun unescapeXml(text: String): String =

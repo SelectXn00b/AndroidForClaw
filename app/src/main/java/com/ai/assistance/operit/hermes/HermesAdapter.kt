@@ -12,8 +12,11 @@ import com.ai.assistance.operit.core.tools.AIToolHandler
 import com.ai.assistance.operit.core.tools.StringResultData
 import com.ai.assistance.operit.core.tools.packTool.PackageManager
 import com.ai.assistance.operit.data.model.FunctionType
+import com.ai.assistance.operit.data.model.PromptFunctionType
 import com.ai.assistance.operit.data.model.ToolResult
+import com.ai.assistance.operit.data.preferences.ActivePromptManager
 import com.ai.assistance.operit.data.preferences.ApiPreferences
+import com.ai.assistance.operit.data.preferences.CharacterCardManager
 import com.ai.assistance.operit.hermes.gateway.HermesGatewayPreferences
 import com.ai.assistance.operit.util.LocaleUtils
 import com.ai.assistance.operit.util.stream.Stream
@@ -43,7 +46,8 @@ class HermesAdapter private constructor(private val context: Context) {
         functionType: FunctionType = FunctionType.CHAT,
         maxTokens: Int? = null,
         chatModelConfigIdOverride: String? = null,
-        chatModelIndexOverride: Int? = null
+        chatModelIndexOverride: Int? = null,
+        gatewayMode: Boolean = false
     ): Stream<String> {
         val resolvedService = if (chatModelConfigIdOverride != null && chatModelIndexOverride != null) {
             serviceManager.getServiceForConfig(chatModelConfigIdOverride, chatModelIndexOverride)
@@ -51,11 +55,9 @@ class HermesAdapter private constructor(private val context: Context) {
             serviceManager.getServiceForFunction(functionType)
         }
 
-        // Determine whether this is a gateway call (no chatHistory provided).
-        // Gateway callers pass an empty chatHistory; the AI therefore lacks a
-        // system prompt and tool definitions.  We build both here so the model
-        // knows it is running on an Android device with full tool access.
-        val isGatewayCall = chatHistory.isEmpty()
+        // Gateway mode: caller explicitly sets gatewayMode=true.
+        // Legacy behaviour: treat empty chatHistory as gateway call.
+        val isGatewayCall = gatewayMode || chatHistory.isEmpty()
 
         val apiPrefs = ApiPreferences.getInstance(context.applicationContext)
         val enableTools = apiPrefs.enableToolsFlow.first()
@@ -63,11 +65,19 @@ class HermesAdapter private constructor(private val context: Context) {
             .lowercase().startsWith("en")
 
         // --- Tool list ---------------------------------------------------
+        // Use getAIAllCategoriesEn/Cn (NOT getAllCategories) — same as
+        // Update 48.  This gives the AI only basic tools (sleep,
+        // use_package, file tools, http, memory).  UI automation tools
+        // (get_page_info, tap, etc.) and system tools (start_app, etc.)
+        // are accessed via use_package, NOT included directly.
+        // Including internal tools (browser_*, execute_shell, etc.)
+        // causes the AI to pick wrong tools (e.g., browser_navigate
+        // instead of start_app).
         val allTools = if (isGatewayCall && enableTools) {
             val categories = if (useEnglish) {
-                SystemToolPrompts.getAllCategoriesEn()
+                SystemToolPrompts.getAIAllCategoriesEn()
             } else {
-                SystemToolPrompts.getAllCategoriesCn()
+                SystemToolPrompts.getAIAllCategoriesCn()
             }
             categories.flatMap { it.tools }
         } else null
@@ -75,10 +85,20 @@ class HermesAdapter private constructor(private val context: Context) {
         val openAiToolSchemas = allTools?.let(::toolPromptsToOpenAiSchemas) ?: emptyList()
         val validNames = extractToolNames(openAiToolSchemas)
 
+        // Pass availableTools = null so the provider does NOT send a
+        // `tools` JSON field in the HTTP request.  This keeps the model in
+        // pure text-completion mode where it can freely emit any
+        // `<tool name="system_tools:start_app">` XML — including package
+        // tools discovered via use_package.  The tool definitions are already
+        // embedded in the system prompt (useToolCallApi = false).
+        // If we passed the tool list here, the provider's enableToolCall
+        // would lock the model into function-calling mode, preventing it
+        // from calling dynamically-discovered package tools.
         val server = OperitChatCompletionServer(
             context = context.applicationContext,
             service = resolvedService,
-            availableTools = allTools
+            availableTools = null,
+            streamFromProvider = true
         )
         val dispatcher = OperitToolDispatcher(context.applicationContext)
 
@@ -87,16 +107,51 @@ class HermesAdapter private constructor(private val context: Context) {
             val pkgMgr = PackageManager.getInstance(
                 context.applicationContext,
                 AIToolHandler.getInstance(context.applicationContext))
-            val systemPrompt = SystemPromptConfig.getSystemPrompt(
+            val rawSystemPrompt = SystemPromptConfig.getSystemPrompt(
                 context = context.applicationContext,
                 packageManager = pkgMgr,
                 useEnglish = useEnglish,
                 enableTools = enableTools,
                 enableMemoryQuery = apiPrefs.enableMemoryQueryFlow.first(),
-                useToolCallApi = false   // XML-in-text: tools described inside prompt
+                useToolCallApi = false,  // XML-in-text: tools described inside prompt
+                thinkingGuidance = true  // Critical: includes tool-call example that
+                                         // teaches the model to emit <tool> XML
             )
-            val msgs = ArrayList<Map<String, Any?>>(2)
+
+            // Resolve the active character card's intro prompt so the gateway
+            // AI has the same identity/personality as the APP UI path.
+            val introPrompt = try {
+                val activeCardId = ActivePromptManager.getInstance(context.applicationContext)
+                    .resolveActiveCardIdForSend()
+                if (activeCardId != null) {
+                    CharacterCardManager.getInstance(context.applicationContext)
+                        .combinePrompts(activeCardId, promptFunctionType = PromptFunctionType.CHAT)
+                } else ""
+            } catch (e: Throwable) {
+                Log.w(TAG, "failed to resolve character card intro: ${e.message}")
+                ""
+            }
+
+            val systemPrompt = SystemPromptConfig.applyCustomPrompts(rawSystemPrompt, introPrompt)
+
+            // Build message list: system + history (if any) + current user message
+            val msgs = ArrayList<Map<String, Any?>>(chatHistory.size + 2)
             msgs.add(mapOf("role" to "system", "content" to systemPrompt))
+
+            // Include prior conversation turns from gateway history so the
+            // model has multi-turn context (memory across messages).
+            for (turn in chatHistory) {
+                val role = when (turn.kind) {
+                    PromptTurnKind.SYSTEM -> "system"
+                    PromptTurnKind.USER -> "user"
+                    PromptTurnKind.ASSISTANT -> "assistant"
+                    PromptTurnKind.TOOL_CALL -> "assistant"
+                    PromptTurnKind.TOOL_RESULT -> "tool"
+                    PromptTurnKind.SUMMARY -> "system"
+                }
+                msgs.add(mapOf("role" to role, "content" to turn.content))
+            }
+
             msgs.add(mapOf("role" to "user", "content" to message))
             msgs
         } else {
@@ -163,6 +218,12 @@ class HermesAdapter private constructor(private val context: Context) {
             }
             is AgentEvent.Final -> {
                 Log.i(TAG, "event Final turn=${event.turnsUsed} finishedNaturally=${event.finishedNaturally}")
+                // Emit a sentinel carrying the final-turn assistant text so the
+                // gateway controller can extract the clean reply without regex
+                // heuristics on the concatenated raw stream.
+                if (event.text.isNotEmpty()) {
+                    emit("${FINAL_REPLY_SENTINEL}${event.text}${FINAL_REPLY_SENTINEL_END}")
+                }
             }
         }
     }
@@ -224,6 +285,10 @@ class HermesAdapter private constructor(private val context: Context) {
 
     companion object {
         private const val TAG = "HermesBridge/Adapter"
+
+        /** Sentinels wrapping the final-turn assistant text in the raw stream. */
+        const val FINAL_REPLY_SENTINEL = "\u0000__FINAL_REPLY__\u0000"
+        const val FINAL_REPLY_SENTINEL_END = "\u0000__/FINAL_REPLY__\u0000"
 
         @Volatile
         private var instance: HermesAdapter? = null

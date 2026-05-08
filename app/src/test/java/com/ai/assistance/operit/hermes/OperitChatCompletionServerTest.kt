@@ -38,7 +38,7 @@ class OperitChatCompletionServerTest {
     // ---------- extractToolCalls ----------
 
     @Test fun extractToolCalls_noXml_returnsNull() {
-        assertNull(server.extractToolCalls("hello world, no tool tags here"))
+        assertNull(server.extractToolCalls("hello world, no tool tags here").toolCalls)
     }
 
     @Test fun extractToolCalls_singleToolWithParams_synthesizesToolCall() {
@@ -47,7 +47,7 @@ class OperitChatCompletionServerTest {
             <tool name="read_file"><param name="path">/tmp/x</param><param name="limit">10</param></tool>
             done.
         """.trimIndent()
-        val calls = server.extractToolCalls(text)
+        val calls = server.extractToolCalls(text).toolCalls
         assertNotNull(calls)
         assertEquals(1, calls!!.size)
         val call = calls[0]
@@ -64,13 +64,13 @@ class OperitChatCompletionServerTest {
             <tool name="a"><param name="x">1</param></tool>
             <tool name="b"><param name="y">2</param></tool>
         """.trimIndent()
-        val calls = server.extractToolCalls(text)
+        val calls = server.extractToolCalls(text).toolCalls
         assertNotNull(calls)
         assertEquals(listOf("a", "b"), calls!!.map { it.function.name })
     }
 
     @Test fun extractToolCalls_emptyBody_producesEmptyArgs() {
-        val calls = server.extractToolCalls("""<tool name="noop"></tool>""")
+        val calls = server.extractToolCalls("""<tool name="noop"></tool>""").toolCalls
         assertNotNull(calls)
         assertEquals("{}", calls!![0].function.arguments)
     }
@@ -80,7 +80,7 @@ class OperitChatCompletionServerTest {
             <tool name="a"><param name="k">1</param></tool>
             <tool name="a"><param name="k">2</param></tool>
         """.trimIndent()
-        val calls = server.extractToolCalls(text)!!
+        val calls = server.extractToolCalls(text).toolCalls!!
         assertEquals(2, calls.size)
         assertTrue(calls[0].id != calls[1].id)
     }
