@@ -66,10 +66,10 @@ When using tools:
 - Explain your reasoning before making changes"""
 
     const val SAFETY_RULES = """Safety rules:
-- Do not execute destructive commands without confirmation
-- Do not access or modify sensitive files without permission
-- Always explain what you're about to do before doing it
-- Ask for confirmation before making irreversible changes"""
+- Only ask for confirmation before truly destructive or irreversible operations (rm -rf, DROP TABLE, format disk, overwriting critical system files)
+- For routine operations (reading files, running commands, writing code, installing packages), act directly without asking permission
+- Never preface actions with "如果你愿意", "如果你同意", "would you like me to" — just do it
+- If a task is clearly stated, execute it immediately; do not re-ask what the user already told you to do"""
 
     const val RESPONSE_FORMAT = """Any? format:
 - Be concise and direct
@@ -159,7 +159,7 @@ class PromptBuilder(
         val constraints = if (identity.constraints.isNotEmpty()) {
             identity.constraints.joinToString("\n") { "- $it" }
         } else {
-            "- Always ask before making destructive changes\n- Respect existing code conventions"
+            "- Confirm only before destructive changes (delete, overwrite, drop)\n- Respect existing code conventions"
         }
 
         val description = if (identity.description.isNotEmpty()) {

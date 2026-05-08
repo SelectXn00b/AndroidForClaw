@@ -35,6 +35,9 @@ class GatewayRunner(
     private val config: GatewayConfig) {
     companion object {
         private const val _TAG = "GatewayRunner"
+        /** Sentinel returned by agentRunner when the run was interrupted by a new user message. */
+        const val INTERRUPTED_SENTINEL = "\u0000__INTERRUPTED__"
+        private const val MAX_INTERRUPT_DEPTH = 3
     }
 
     /** Whether the gateway is running. */
@@ -69,6 +72,12 @@ class GatewayRunner(
     /** Tracks sessions that currently have an agent runner in-flight. */
     private val _processingSessions = ConcurrentHashMap.newKeySet<String>()
 
+    /** Pending message events waiting to be processed after interrupt. Keyed by sessionKey. */
+    private val _pendingEvents = ConcurrentHashMap<String, MessageEvent>()
+
+    /** Per-session interrupt flags. When set to true, the running agentRunner should cancel. */
+    private val _interruptFlags = ConcurrentHashMap<String, AtomicBoolean>()
+
     /** Per-session /model overrides (keyed by sessionKey). */
     private val _sessionModelOverrides: ConcurrentHashMap<String, Map<String, Any?>> = ConcurrentHashMap()
 
@@ -83,6 +92,9 @@ class GatewayRunner(
      */
     @Volatile
     var agentRunner: (suspend (text: String, sessionKey: String, platform: String, chatId: String, userId: String) -> String)? = null
+
+    /** Get the interrupt flag for a session. Returns null if the session is not processing. */
+    fun getInterruptFlag(sessionKey: String): AtomicBoolean? = _interruptFlags[sessionKey]
 
     // ------------------------------------------------------------------
     // Lifecycle
@@ -236,15 +248,28 @@ class GatewayRunner(
         val platformName = event.source.platform
 
         // Per-session guard: if this session already has an agent running,
-        // drop the new message so concurrent runs don't interfere.
+        // store the new message as a pending event and signal interrupt.
         if (!_processingSessions.add(event.sessionKey)) {
-            Log.w(_TAG, "Session ${event.sessionKey} already processing, dropping message")
+            Log.i(_TAG, "Session ${event.sessionKey} busy — storing pending event and signaling interrupt")
+            @Suppress("UNCHECKED_CAST")
+            mergePendingMessageEvent(
+                _pendingEvents as MutableMap<String, MessageEvent>,
+                event.sessionKey, event)
+            _interruptFlags[event.sessionKey]?.set(true)
+            _sendBusyAck(event)
             return
         }
+
+        // Create interrupt flag IMMEDIATELY after acquiring the session lock,
+        // so that any concurrent message arriving in the busy branch above can
+        // signal us even before the agent runner starts.
+        val interruptFlag = AtomicBoolean(false)
+        _interruptFlags[event.sessionKey] = interruptFlag
 
         // Acquire session semaphore
         if (!_sessionSemaphore.tryAcquire()) {
             _processingSessions.remove(event.sessionKey)
+            _interruptFlags.remove(event.sessionKey)
             Log.w(_TAG, "Max concurrent sessions reached, dropping message")
             return
         }
@@ -315,9 +340,11 @@ class GatewayRunner(
             try { adapter?.onProcessingStart(event) } catch (e: Throwable) {
                 Log.w(_TAG, "onProcessingStart hook failed: ${e.message}")
             }
+
             var agentOk = true
             val runner = agentRunner
-            val responseText = if (runner != null) {
+            var currentEvent = event
+            var responseText = if (runner != null) {
                 try {
                     runner(
                         event.text,
@@ -337,77 +364,172 @@ class GatewayRunner(
                 "Agent loop not configured"
             }
 
-            // Run post-agent hooks
-            val postAgentResult = hookPipeline.run(
-                HookEvent.POST_AGENT,
-                sessionKey = session.sessionKey,
-                text = responseText,
-                platform = platformName,
-                chatId = event.source.chatId,
-                userId = event.source.userId)
-            val finalResponse = when (postAgentResult) {
-                is HookResult.Replace -> postAgentResult.newText
-                is HookResult.Halt -> {
-                    Log.i(_TAG, "Any? halted by post-agent hook: ${postAgentResult.reason}")
-                    return
+            // If agent was interrupted, skip delivery and fall through to pending-event loop
+            if (responseText != INTERRUPTED_SENTINEL) {
+                // Run post-agent hooks
+                val postAgentResult = hookPipeline.run(
+                    HookEvent.POST_AGENT,
+                    sessionKey = session.sessionKey,
+                    text = responseText,
+                    platform = platformName,
+                    chatId = currentEvent.source.chatId,
+                    userId = currentEvent.source.userId)
+                val finalResponse = when (postAgentResult) {
+                    is HookResult.Replace -> postAgentResult.newText
+                    is HookResult.Halt -> {
+                        Log.i(_TAG, "Any? halted by post-agent hook: ${postAgentResult.reason}")
+                        return
+                    }
+                    else -> responseText
                 }
-                else -> responseText
-            }
 
-            // Run pre-send hooks
-            val preSendResult = hookPipeline.run(
-                HookEvent.PRE_SEND,
-                sessionKey = session.sessionKey,
-                text = finalResponse,
-                platform = platformName,
-                chatId = event.source.chatId,
-                userId = event.source.userId)
-            val sendText = when (preSendResult) {
-                is HookResult.Replace -> preSendResult.newText
-                is HookResult.Halt -> {
-                    Log.i(_TAG, "Send halted by pre-send hook: ${preSendResult.reason}")
-                    return
+                // Run pre-send hooks
+                val preSendResult = hookPipeline.run(
+                    HookEvent.PRE_SEND,
+                    sessionKey = session.sessionKey,
+                    text = finalResponse,
+                    platform = platformName,
+                    chatId = currentEvent.source.chatId,
+                    userId = currentEvent.source.userId)
+                val sendText = when (preSendResult) {
+                    is HookResult.Replace -> preSendResult.newText
+                    is HookResult.Halt -> {
+                        Log.i(_TAG, "Send halted by pre-send hook: ${preSendResult.reason}")
+                        return
+                    }
+                    else -> finalResponse
                 }
-                else -> finalResponse
-            }
 
-            // Send response
-            val result = deliveryRouter.deliverText(
-                platform = platformName,
-                chatId = event.source.chatId,
-                text = sendText,
-                replyTo = event.message_id)
+                // Send response (with one retry on failure)
+                var result = deliveryRouter.deliverText(
+                    platform = platformName,
+                    chatId = currentEvent.source.chatId,
+                    text = sendText,
+                    replyTo = currentEvent.message_id)
 
-            // Record send
-            if (result.success) {
-                status.countersFor(platformName).recordSent()
+                if (!result.success) {
+                    Log.w(_TAG, "First delivery attempt failed (${result.error}); retrying after 2s...")
+                    kotlinx.coroutines.delay(2000)
+                    result = deliveryRouter.deliverText(
+                        platform = platformName,
+                        chatId = currentEvent.source.chatId,
+                        text = sendText,
+                        replyTo = null) // retry without reply-to
+                }
+
+                // Record send
+                if (result.success) {
+                    status.countersFor(platformName).recordSent()
+                } else {
+                    status.countersFor(platformName).recordError()
+                    Log.w(_TAG, "Failed to send response after retry: ${result.error}")
+                }
+
+                // Run post-send hooks
+                hookPipeline.run(
+                    HookEvent.POST_SEND,
+                    sessionKey = session.sessionKey,
+                    text = sendText,
+                    platform = platformName,
+                    chatId = currentEvent.source.chatId,
+                    userId = currentEvent.source.userId)
+
+                // Fire processing-complete hook so adapters can clear typing/reaction
+                try {
+                    adapter?.onProcessingComplete(currentEvent, success = agentOk && result.success)
+                } catch (e: Throwable) {
+                    Log.w(_TAG, "onProcessingComplete hook failed: ${e.message}")
+                }
+
+                // Record turn
+                session.turnCount.incrementAndGet()
             } else {
-                status.countersFor(platformName).recordError()
-                Log.w(_TAG, "Failed to send response: ${result.error}")
+                Log.i(_TAG, "Agent run interrupted for session ${event.sessionKey} — skipping response delivery")
+                // Still notify adapter so it can clear typing/reaction indicator for the interrupted message
+                try {
+                    adapter?.onProcessingComplete(currentEvent, success = false)
+                } catch (e: Throwable) {
+                    Log.w(_TAG, "onProcessingComplete (interrupted) hook failed: ${e.message}")
+                }
             }
 
-            // Run post-send hooks
-            hookPipeline.run(
-                HookEvent.POST_SEND,
-                sessionKey = session.sessionKey,
-                text = sendText,
-                platform = platformName,
-                chatId = event.source.chatId,
-                userId = event.source.userId)
+            // ── Pending-event loop: process messages that arrived during the agent run ──
+            var interruptDepth = 0
+            while (runner != null) {
+                val pendingEvent = _pendingEvents.remove(currentEvent.sessionKey) ?: break
+                interruptDepth++
+                if (interruptDepth > MAX_INTERRUPT_DEPTH) {
+                    Log.w(_TAG, "Interrupt depth $interruptDepth exceeded for session ${currentEvent.sessionKey}, dropping remaining")
+                    break
+                }
+                Log.i(_TAG, "Processing pending event for session ${currentEvent.sessionKey} (depth=$interruptDepth)")
 
-            // Fire processing-complete hook so adapters can clear typing/reaction
-            try {
-                adapter?.onProcessingComplete(event, success = agentOk && result.success)
-            } catch (e: Throwable) {
-                Log.w(_TAG, "onProcessingComplete hook failed: ${e.message}")
+                // Reset interrupt flag for the new run
+                interruptFlag.set(false)
+                session.lastMessageAt = _sessionNowIso()
+
+                responseText = try {
+                    runner(
+                        pendingEvent.text,
+                        session.sessionKey,
+                        platformName,
+                        pendingEvent.source.chatId,
+                        pendingEvent.source.userId
+                    )
+                } catch (e: Throwable) {
+                    Log.w(_TAG, "agentRunner threw for pending event: ${e.message}", e)
+                    "Agent loop error: ${e.message ?: e.javaClass.simpleName}"
+                }
+
+                currentEvent = pendingEvent
+
+                // If this run was also interrupted, loop back to check for another pending event
+                if (responseText == INTERRUPTED_SENTINEL) {
+                    Log.i(_TAG, "Pending event also interrupted — checking for newer message")
+                    // Clear typing indicator for the interrupted pending event
+                    try {
+                        adapter?.onProcessingComplete(pendingEvent, success = false)
+                    } catch (e: Throwable) {
+                        Log.w(_TAG, "onProcessingComplete (pending interrupted) hook failed: ${e.message}")
+                    }
+                    continue
+                }
+
+                // Deliver the pending message's response (with retry)
+                var pendingResult = deliveryRouter.deliverText(
+                    platform = platformName,
+                    chatId = pendingEvent.source.chatId,
+                    text = responseText,
+                    replyTo = pendingEvent.message_id)
+                if (!pendingResult.success) {
+                    Log.w(_TAG, "Pending delivery failed (${pendingResult.error}); retrying...")
+                    kotlinx.coroutines.delay(2000)
+                    pendingResult = deliveryRouter.deliverText(
+                        platform = platformName,
+                        chatId = pendingEvent.source.chatId,
+                        text = responseText,
+                        replyTo = null)
+                }
+                if (pendingResult.success) {
+                    status.countersFor(platformName).recordSent()
+                } else {
+                    status.countersFor(platformName).recordError()
+                    Log.w(_TAG, "Pending delivery failed after retry: ${pendingResult.error}")
+                }
+                // Clear typing indicator for the pending event
+                try {
+                    adapter?.onProcessingComplete(pendingEvent, success = pendingResult.success)
+                } catch (e: Throwable) {
+                    Log.w(_TAG, "onProcessingComplete (pending) hook failed: ${e.message}")
+                }
+                session.turnCount.incrementAndGet()
             }
-
-            // Record turn
-            session.turnCount.incrementAndGet()
         } catch (e: Exception) {
             Log.e(_TAG, "Error handling message: ${e.message}")
         } finally {
             _processingSessions.remove(event.sessionKey)
+            _interruptFlags.remove(event.sessionKey)
+            _pendingEvents.remove(event.sessionKey)
             sessionStore.get(event.sessionKey)?.let {
                 it.isProcessing = false
                 it.processingStartedAt = 0L
@@ -1010,8 +1132,24 @@ Removed: "X"""
 
     /** Queue or replace a pending message event for a session. */
     fun _queueOrReplacePendingEvent(sessionKey: String, event: MessageEvent) {
+        @Suppress("UNCHECKED_CAST")
+        mergePendingMessageEvent(
+            _pendingEvents as MutableMap<String, MessageEvent>,
+            sessionKey, event)
+        Log.d(_TAG, "Queued/replaced pending event for session $sessionKey")
+    }
+
+    /** Send a debounced busy-ack to the user. */
+    private suspend fun _sendBusyAck(event: MessageEvent) {
         val adapter = _adapters[event.source.platform] ?: return
-        Log.d(_TAG, "Queuing pending event for session $sessionKey on ${adapter.name}")
+        try {
+            adapter.send(
+                event.source.chatId,
+                "⚡ 正在中断当前任务，马上处理你的新消息。",
+                replyTo = event.message_id)
+        } catch (e: Exception) {
+            Log.d(_TAG, "Failed to send busy-ack: ${e.message}")
+        }
     }
 
     /** Handle a message arriving while the session's agent is busy.

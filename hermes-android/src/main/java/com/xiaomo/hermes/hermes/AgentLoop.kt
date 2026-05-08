@@ -2,6 +2,9 @@ package com.xiaomo.hermes.hermes
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -330,12 +333,22 @@ class HermesAgentLoop(
                 }
                 messages.add(msgDict)
 
-                // Execute each tool call
-                for (tc in assistantMsg.toolCalls) {
+                // Execute tool calls in parallel when multiple are requested.
+                // Each tool is dispatched concurrently via coroutineScope + async,
+                // then results are collected and added to messages in the original order.
+
+                // Phase 1: Validate and prepare all tool calls, emit ToolCallStart events
+                data class ToolCallPrep(
+                    val tc: ToolCall,
+                    val toolName: String,
+                    val args: Map<String, Any?>?,
+                    val earlyResult: String?,  // non-null if validation failed
+                    val earlyError: String?)
+
+                val preps = assistantMsg.toolCalls.map { tc ->
                     val toolName = tc.function.name
                     val toolArgsRaw = tc.function.arguments
 
-                    // Validate tool name (skip validation when set is empty — allow all)
                     if (validToolNames.isNotEmpty() && toolName !in validToolNames) {
                         val toolResult = JSONObject().apply {
                             put("error", "Unknown tool '$toolName'. Available tools: ${validToolNames.sorted()}")
@@ -347,67 +360,132 @@ class HermesAgentLoop(
                             error = "Unknown tool '$toolName'",
                             toolResult = toolResult))
                         Log.w(_TAG, "Model called unknown tool '$toolName' on turn ${turn + 1}")
-
-                        val persistedResult = toolResultPersister?.maybePersist(
-                            toolResult, toolName, tc.id
-                        ) ?: toolResult
-                        messages.add(mapOf(
-                            "role" to "tool",
-                            "tool_call_id" to tc.id,
-                            "content" to persistedResult))
-                        continue
-                    }
-
-                    // Parse arguments
-                    val args: Map<String, Any?>? = try {
-                        val json = JSONObject(toolArgsRaw)
-                        json.keys().asSequence().associateWith { json.get(it) }
-                    } catch (e: Exception) {
-                        null
-                    }
-
-                    val toolResult: String
-                    if (args == null) {
-                        toolResult = JSONObject().apply {
-                            put("error", "Invalid JSON in tool arguments. Please retry with valid JSON.")
-                        }.toString()
-                        toolErrors.add(ToolError(
-                            turn = turn + 1,
-                            toolName = toolName,
-                            arguments = toolArgsRaw.take(200),
-                            error = "Invalid JSON: ${toolArgsRaw.take(100)}",
-                            toolResult = toolResult))
-                        Log.w(_TAG, "Invalid JSON in tool call args for '$toolName': ${toolArgsRaw.take(200)}")
-                        emit(AgentEvent.ToolCallStart(tc.id, toolName, toolArgsRaw, turn + 1))
-                        emit(AgentEvent.ToolCallEnd(tc.id, toolName, toolResult, "Invalid JSON", turn + 1))
+                        ToolCallPrep(tc, toolName, null, toolResult, "Unknown tool")
                     } else {
-                        emit(AgentEvent.ToolCallStart(tc.id, toolName, toolArgsRaw, turn + 1))
-                        var dispatchError: String? = null
-                        toolResult = try {
-                            val submitTime = System.nanoTime()
-                            val result = toolDispatcher.dispatch(
-                                toolName = toolName,
-                                args = args,
-                                taskId = taskId,
-                                userTask = userTask)
-                            val elapsed = (System.nanoTime() - submitTime) / 1_000_000_000.0
-                            if (elapsed > 30) {
-                                Log.w(_TAG, "[$taskId] turn ${turn + 1}: $toolName took ${"%.1f".format(elapsed)}s")
-                            }
-                            result
+                        val args: Map<String, Any?>? = try {
+                            val json = JSONObject(toolArgsRaw)
+                            json.keys().asSequence().associateWith { json.get(it) }
                         } catch (e: Exception) {
-                            dispatchError = "${e::class.simpleName}: ${e.message}"
-                            val errMsg = JSONObject().apply {
-                                put("error", "Tool execution failed: $dispatchError")
+                            null
+                        }
+                        if (args == null) {
+                            val toolResult = JSONObject().apply {
+                                put("error", "Invalid JSON in tool arguments. Please retry with valid JSON.")
                             }.toString()
                             toolErrors.add(ToolError(
                                 turn = turn + 1,
                                 toolName = toolName,
                                 arguments = toolArgsRaw.take(200),
-                                error = dispatchError,
-                                toolResult = errMsg))
-                            Log.e(_TAG, "Tool '$toolName' failed on turn ${turn + 1}: ${e.message}", e)
+                                error = "Invalid JSON: ${toolArgsRaw.take(100)}",
+                                toolResult = toolResult))
+                            Log.w(_TAG, "Invalid JSON in tool call args for '$toolName': ${toolArgsRaw.take(200)}")
+                            ToolCallPrep(tc, toolName, null, toolResult, "Invalid JSON")
+                        } else {
+                            ToolCallPrep(tc, toolName, args, null, null)
+                        }
+                    }
+                }
+
+                // Emit ToolCallStart events for all tool calls, and immediately
+                // emit ToolCallEnd for validation-failed ones (early failures).
+                for (prep in preps) {
+                    emit(AgentEvent.ToolCallStart(prep.tc.id, prep.toolName, prep.tc.function.arguments, turn + 1))
+                    if (prep.earlyResult != null) {
+                        // Validation failed — emit end immediately
+                        emit(AgentEvent.ToolCallEnd(prep.tc.id, prep.toolName, prep.earlyResult, prep.earlyError, turn + 1))
+                    }
+                }
+
+                // Phase 2: Dispatch valid tool calls in parallel
+                data class ToolCallResult(
+                    val tc: ToolCall,
+                    val toolName: String,
+                    val result: String,
+                    val dispatchError: String?,
+                    val argsSnippet: String)  // first 200 chars of raw args for error reporting
+
+                val validPreps = preps.filter { it.earlyResult == null }
+                val dispatchResults: List<ToolCallResult> = if (validPreps.size <= 1) {
+                    // Single tool or none: no need for coroutineScope overhead
+                    validPreps.map { prep ->
+                        var dispatchError: String? = null
+                        val result = try {
+                            val submitTime = System.nanoTime()
+                            val r = toolDispatcher.dispatch(
+                                toolName = prep.toolName,
+                                args = prep.args!!,
+                                taskId = taskId,
+                                userTask = userTask)
+                            val elapsed = (System.nanoTime() - submitTime) / 1_000_000_000.0
+                            if (elapsed > 30) {
+                                Log.w(_TAG, "[$taskId] turn ${turn + 1}: ${prep.toolName} took ${"%.1f".format(elapsed)}s")
+                            }
+                            r
+                        } catch (e: Exception) {
+                            dispatchError = "${e::class.simpleName}: ${e.message}"
+                            val errMsg = JSONObject().apply {
+                                put("error", "Tool execution failed: $dispatchError")
+                            }.toString()
+                            Log.e(_TAG, "Tool '${prep.toolName}' failed on turn ${turn + 1}: ${e.message}", e)
                             errMsg
+                        }
+                        ToolCallResult(prep.tc, prep.toolName, result, dispatchError,
+                            prep.tc.function.arguments.take(200))
+                    }
+                } else {
+                    // Multiple tools: dispatch in parallel
+                    coroutineScope {
+                        validPreps.map { prep ->
+                            async {
+                                var dispatchError: String? = null
+                                val result = try {
+                                    val submitTime = System.nanoTime()
+                                    val r = toolDispatcher.dispatch(
+                                        toolName = prep.toolName,
+                                        args = prep.args!!,
+                                        taskId = taskId,
+                                        userTask = userTask)
+                                    val elapsed = (System.nanoTime() - submitTime) / 1_000_000_000.0
+                                    if (elapsed > 30) {
+                                        Log.w(_TAG, "[$taskId] turn ${turn + 1}: ${prep.toolName} took ${"%.1f".format(elapsed)}s")
+                                    }
+                                    r
+                                } catch (e: Exception) {
+                                    dispatchError = "${e::class.simpleName}: ${e.message}"
+                                    val errMsg = JSONObject().apply {
+                                        put("error", "Tool execution failed: $dispatchError")
+                                    }.toString()
+                                    Log.e(_TAG, "Tool '${prep.toolName}' failed on turn ${turn + 1}: ${e.message}", e)
+                                    errMsg
+                                }
+                                ToolCallResult(prep.tc, prep.toolName, result, dispatchError,
+                                    prep.tc.function.arguments.take(200))
+                            }
+                        }.awaitAll()
+                    }
+                }
+
+                // Build a lookup for dispatch results
+                val resultById = dispatchResults.associateBy { it.tc.id }
+
+                // Phase 3: Emit ToolCallEnd events and add messages in original order
+                for (prep in preps) {
+                    val toolResult: String
+                    if (prep.earlyResult != null) {
+                        // Validation-failed tool calls: early result already set
+                        toolResult = prep.earlyResult
+                    } else {
+                        val dr = resultById[prep.tc.id]!!
+                        toolResult = dr.result
+
+                        // Record dispatch errors (collected here sequentially for thread safety)
+                        if (dr.dispatchError != null) {
+                            toolErrors.add(ToolError(
+                                turn = turn + 1,
+                                toolName = prep.toolName,
+                                arguments = dr.argsSnippet,
+                                error = dr.dispatchError,
+                                toolResult = toolResult.take(500)))
                         }
 
                         // Check if the tool returned an error in its JSON result
@@ -418,41 +496,75 @@ class HermesAgentLoop(
                             if (err != null && exitCode < 0) {
                                 toolErrors.add(ToolError(
                                     turn = turn + 1,
-                                    toolName = toolName,
-                                    arguments = toolArgsRaw.take(200),
+                                    toolName = prep.toolName,
+                                    arguments = prep.tc.function.arguments.take(200),
                                     error = err,
                                     toolResult = toolResult.take(500)))
-                                if (dispatchError == null) dispatchError = err
                             }
                         } catch (_: Exception) {}
 
-                        emit(AgentEvent.ToolCallEnd(tc.id, toolName, toolResult, dispatchError, turn + 1))
+                        emit(AgentEvent.ToolCallEnd(prep.tc.id, prep.toolName, toolResult, dr.dispatchError, turn + 1))
                     }
 
                     val persistedResult = toolResultPersister?.maybePersist(
-                        toolResult, toolName, tc.id
+                        toolResult, prep.toolName, prep.tc.id
                     ) ?: toolResult
 
                     messages.add(mapOf(
                         "role" to "tool",
-                        "tool_call_id" to tc.id,
+                        "tool_call_id" to prep.tc.id,
                         "content" to persistedResult))
                 }
 
                 val turnElapsed = (System.nanoTime() - turnStart) / 1_000_000_000.0
                 Log.i(_TAG, "[$taskId] turn ${turn + 1}: ${assistantMsg.toolCalls.size} tools, total=${"%.1f".format(turnElapsed)}s")
             } else {
-                // No tool calls — model is done
+                // No tool calls — model is done (or returned empty response)
+                val finalText = assistantMsg.content ?: ""
+
+                // Detect empty AI response: the model returned nothing useful.
+                // This typically happens when the context is too large (e.g. an
+                // oversized tool result inflated input tokens beyond the model
+                // effective limit) causing 0 output tokens.
+                if (finalText.isBlank() && turn > 0) {
+                    Log.w(_TAG, "[$taskId] turn ${turn + 1}: AI returned empty response " +
+                        "with no tool calls — likely context overflow")
+                    val fallbackText = "[The AI returned an empty response. " +
+                        "This usually means the conversation context became too large " +
+                        "(e.g. a tool returned an oversized result). " +
+                        "Please try again with a more specific request.]"
+                    val msgDict = mutableMapOf<String, Any?>(
+                        "role" to "assistant",
+                        "content" to fallbackText)
+                    if (reasoning != null) {
+                        msgDict["reasoning_content"] = reasoning
+                    }
+                    messages.add(msgDict)
+
+                    emit(AgentEvent.Final(
+                        text = fallbackText,
+                        turnsUsed = turn + 1,
+                        finishedNaturally = true))
+
+                    return AgentResult(
+                        messages = messages,
+                        managedState = getManagedState(),
+                        turnsUsed = turn + 1,
+                        finishedNaturally = true,
+                        reasoningPerTurn = reasoningPerTurn,
+                        toolErrors = toolErrors)
+                }
+
                 val msgDict = mutableMapOf<String, Any?>(
                     "role" to "assistant",
-                    "content" to (assistantMsg.content ?: ""))
+                    "content" to finalText)
                 if (reasoning != null) {
                     msgDict["reasoning_content"] = reasoning
                 }
                 messages.add(msgDict)
 
                 emit(AgentEvent.Final(
-                    text = assistantMsg.content ?: "",
+                    text = finalText,
                     turnsUsed = turn + 1,
                     finishedNaturally = true))
 

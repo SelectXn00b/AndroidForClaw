@@ -13,7 +13,6 @@ import android.content.Context
 import android.util.Log
 import com.xiaomo.hermes.hermes.gateway.*
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.Channel
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -153,12 +152,6 @@ class FeishuAdapter(
     /** Processed card action IDs (for dedup). */
     private val _processedCardActions: MessageDeduplicator = MessageDeduplicator(maxSize = MAX_CARD_ACTIONS)
 
-    /** Per-chat serial processing queues. */
-    private val _chatQueues: ConcurrentHashMap<String, Channel<MessageEvent>> = ConcurrentHashMap()
-
-    /** Per-chat processing jobs. */
-    private val _chatJobs: ConcurrentHashMap<String, Job> = ConcurrentHashMap()
-
     /** Message sequence counter. */
     private val _sequence = AtomicLong(0)
 
@@ -227,9 +220,6 @@ class FeishuAdapter(
         _wsClient = null
         _webhookJob?.cancel()
         _webhookJob = null
-        _chatJobs.values.forEach { it.cancel() }
-        _chatJobs.clear()
-        _chatQueues.clear()
         markDisconnected()
         Log.i(_TAG, "Disconnected")
     }
@@ -280,10 +270,17 @@ class FeishuAdapter(
 
     /**
      * Ensure we have a valid access token, refreshing if needed.
+     * Retries once on failure to handle transient network issues.
      */
     private suspend fun _ensureAccessToken() {
         if (_accessToken.isEmpty() || System.currentTimeMillis() / 1000 >= _accessTokenExpiry) {
-            _refreshAccessToken()
+            if (!_refreshAccessToken()) {
+                // Retry once after a short delay
+                kotlinx.coroutines.delay(1000)
+                if (!_refreshAccessToken()) {
+                    Log.e(_TAG, "Access token refresh failed after retry — send will likely fail")
+                }
+            }
         }
     }
 
@@ -781,25 +778,13 @@ class FeishuAdapter(
     }
 
     /**
-     * Queue a message for serial per-chat processing.
+     * Queue a message for per-chat processing.
+     * Messages are dispatched concurrently so that a second message can reach
+     * GatewayRunner's busy-guard and trigger the interrupt mechanism while the
+     * first is still being processed by the agent.
      */
     private fun _queueForProcessing(chatId: String, event: MessageEvent) {
-        val queue = _chatQueues.getOrPut(chatId) { Channel(Channel.UNLIMITED) }
-        queue.trySend(event)
-
-        // Start processing job if not already running
-        if (_chatJobs[chatId]?.isActive != true) {
-            _chatJobs[chatId] = scope.launch {
-                _processChatQueue(chatId, queue)
-            }
-        }
-    }
-
-    /**
-     * Process messages from a chat queue serially.
-     */
-    private suspend fun _processChatQueue(chatId: String, channel: Channel<MessageEvent>) {
-        for (event in channel) {
+        scope.launch {
             try {
                 handleMessage(event)
             } catch (e: Exception) {
@@ -952,7 +937,20 @@ class FeishuAdapter(
             var lastMessageId: String? = null
 
             for (chunk in chunks) {
-                val result = _sendTextMessage(chatId, chunk, replyTo)
+                val (msgType, payload) = _buildOutboundPayload(chunk)
+                var result: SendResult
+
+                if (msgType == "post") {
+                    result = _sendPostMessage(chatId, payload, replyTo)
+                    // Fallback: if post fails for any reason, retry as plain text
+                    if (!result.success) {
+                        Log.w(_TAG, "Post message failed (${result.error}); falling back to plain text")
+                        result = _sendTextMessage(chatId, _stripMarkdownToPlainText(chunk), replyTo)
+                    }
+                } else {
+                    result = _sendTextMessage(chatId, chunk, replyTo)
+                }
+
                 if (result.success) {
                     lastMessageId = result.messageId
                 } else {
@@ -969,12 +967,34 @@ class FeishuAdapter(
 
     /**
      * Send a single text message via the Feishu IM API.
+     * Includes retry logic and reply-to fallback (sends as direct message if reply fails).
      */
     private suspend fun _sendTextMessage(
         chatId: String,
         text: String,
         replyTo: String? = null): SendResult = withContext(Dispatchers.IO) {
-        try {
+        val result = _doSendText(chatId, text, replyTo)
+        if (result.success) return@withContext result
+
+        // If reply-to failed, try without reply-to (direct send)
+        if (replyTo != null) {
+            Log.w(_TAG, "Reply send failed (${result.error}); retrying as direct message")
+            val directResult = _doSendText(chatId, text, null)
+            if (directResult.success) return@withContext directResult
+        }
+
+        // Final retry after refreshing token (covers token expiry during long tool calls)
+        Log.w(_TAG, "Send failed (${result.error}); refreshing token and retrying once")
+        _refreshAccessToken()
+        _doSendText(chatId, text, null)
+    }
+
+    /** Low-level text send — single attempt, no retry. */
+    private suspend fun _doSendText(
+        chatId: String,
+        text: String,
+        replyTo: String? = null): SendResult {
+        return try {
             _ensureAccessToken()
 
             val payload = JSONObject().apply {
@@ -1003,12 +1023,102 @@ class FeishuAdapter(
                 if (!resp.isSuccessful) {
                     val errorBody = resp.body?.string() ?: ""
                     Log.e(_TAG, "Send HTTP ${resp.code}: $errorBody")
-                    return@withContext SendResult(success = false, error = "HTTP ${resp.code}")
+                    return SendResult(success = false, error = "HTTP ${resp.code}: $errorBody")
                 }
 
                 val data = JSONObject(resp.body!!.string())
                 if (data.optInt("code", -1) != 0) {
-                    return@withContext SendResult(success = false, error = data.optString("msg"))
+                    return SendResult(success = false, error = data.optString("msg"))
+                }
+
+                val messageId = data.optJSONObject("data")?.optString("message_id")
+                SendResult(success = true, messageId = messageId)
+            }
+        } catch (e: Exception) {
+            SendResult(success = false, error = e.message)
+        }
+    }
+
+    /**
+     * Determine the optimal message type for outbound content.
+     * Returns a Pair of (msg_type, payload_string).
+     * If content contains markdown hints, upgrades to "post" type with md tag.
+     * Otherwise returns "text" type with plain text payload.
+     *
+     * Mirrors `_build_outbound_payload` (feishu.py 3570).
+     */
+    private fun _buildOutboundPayload(content: String): Pair<String, String> {
+        if (_MARKDOWN_HINT_RE.containsMatchIn(content)) {
+            return "post" to _buildMarkdownPostPayload(content)
+        }
+        val textPayload = JSONObject().apply { put("text", content) }.toString()
+        return "text" to textPayload
+    }
+
+    /**
+     * Send a single post-type message via the Feishu IM API.
+     */
+    private suspend fun _sendPostMessage(
+        chatId: String,
+        payload: String,
+        replyTo: String? = null): SendResult = withContext(Dispatchers.IO) {
+        val result = _doSendPost(chatId, payload, replyTo)
+        if (result.success) return@withContext result
+
+        // If reply-to failed, try without reply-to (direct send)
+        if (replyTo != null) {
+            Log.w(_TAG, "Post reply send failed (${result.error}); retrying as direct message")
+            val directResult = _doSendPost(chatId, payload, null)
+            if (directResult.success) return@withContext directResult
+        }
+
+        // Final retry after refreshing token
+        Log.w(_TAG, "Post send failed (${result.error}); refreshing token and retrying")
+        _refreshAccessToken()
+        _doSendPost(chatId, payload, null)
+    }
+
+    /** Low-level post send — single attempt, no retry. */
+    private suspend fun _doSendPost(
+        chatId: String,
+        payload: String,
+        replyTo: String? = null): SendResult {
+        return try {
+            _ensureAccessToken()
+
+            val requestPayload = JSONObject().apply {
+                put("receive_id", chatId)
+                put("msg_type", "post")
+                put("content", payload)
+                put("uuid", _generateUuid())
+            }
+
+            val url = if (replyTo != null) {
+                "$_domain/open-apis/im/v1/messages/$replyTo/reply"
+            } else {
+                "$_domain/open-apis/im/v1/messages?receive_id_type=chat_id"
+            }
+
+            val body = requestPayload.toString()
+                .toRequestBody("application/json; charset=utf-8".toMediaType())
+
+            val request = Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer $_accessToken")
+                .post(body)
+                .build()
+
+            _httpClient.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    val errorBody = resp.body?.string() ?: ""
+                    Log.e(_TAG, "Send post HTTP ${resp.code}: $errorBody")
+                    return SendResult(success = false, error = "HTTP ${resp.code}: $errorBody")
+                }
+
+                val data = JSONObject(resp.body!!.string())
+                if (data.optInt("code", -1) != 0) {
+                    val msg = data.optString("msg")
+                    return SendResult(success = false, error = msg)
                 }
 
                 val messageId = data.optJSONObject("data")?.optString("message_id")
