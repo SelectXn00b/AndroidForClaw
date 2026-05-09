@@ -1,20 +1,33 @@
 package com.xiaomo.hermes.hermes.tools
 
+import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 class DelegateToolTest {
 
+    @Before
+    fun setUp() {
+        _activeDelegateContext = null
+    }
+
+    @After
+    fun tearDown() {
+        _activeDelegateContext = null
+    }
+
     @Test
-    fun `DELEGATE_BLOCKED_TOOLS has three tool names`() {
-        assertEquals(3, DELEGATE_BLOCKED_TOOLS.size)
+    fun `DELEGATE_BLOCKED_TOOLS has four tool names`() {
+        assertEquals(4, DELEGATE_BLOCKED_TOOLS.size)
         assertTrue("delegate_task" in DELEGATE_BLOCKED_TOOLS)
         assertTrue("delegate_status" in DELEGATE_BLOCKED_TOOLS)
         assertTrue("delegate_cancel" in DELEGATE_BLOCKED_TOOLS)
+        assertTrue("spawn_agent" in DELEGATE_BLOCKED_TOOLS)
     }
 
     @Test
@@ -58,49 +71,50 @@ class DelegateToolTest {
         assertEquals(listOf("goal"), required)
     }
 
+    // TC-TOOL-DelegateTool: checkDelegateRequirements returns true (delegation is available)
     @Test
-    fun `checkDelegateRequirements returns false on Android`() {
-        assertFalse(checkDelegateRequirements())
+    fun `checkDelegateRequirements returns true`() {
+        assertTrue(checkDelegateRequirements())
     }
 
     @Test
     fun `_getMaxConcurrentChildren returns default when env unset`() {
         val n = _getMaxConcurrentChildren()
-        // Env mutation is impossible from JVM; if HERMES_DELEGATE_MAX_CONCURRENT
-        // happens to be set in CI we accept any int >= 1.
         assertTrue(n >= 1)
     }
 
     @Test
-    fun `_buildChildSystemPrompt includes goal and default toolsets`() {
+    fun `_buildChildSystemPrompt includes goal`() {
         val prompt = _buildChildSystemPrompt(goal = "Solve X")
-        assertTrue(prompt.contains("Goal: Solve X"))
-        assertTrue(prompt.contains("'terminal', 'file', 'web'"))
-        assertFalse(prompt.contains("Workspace:"))  // no hint
+        assertTrue(prompt.contains("YOUR TASK:"))
+        assertTrue(prompt.contains("Solve X"))
+        assertTrue(prompt.contains("focused subagent"))
+    }
+
+    @Test
+    fun `_buildChildSystemPrompt includes context when provided`() {
+        val prompt = _buildChildSystemPrompt(goal = "X", context = "Background info here")
+        assertTrue(prompt.contains("CONTEXT:"))
+        assertTrue(prompt.contains("Background info here"))
     }
 
     @Test
     fun `_buildChildSystemPrompt includes workspace hint when provided`() {
         val prompt = _buildChildSystemPrompt(goal = "X", workspaceHint = "/tmp/work")
-        assertTrue(prompt.contains("Workspace: /tmp/work"))
+        assertTrue(prompt.contains("WORKSPACE PATH:"))
+        assertTrue(prompt.contains("/tmp/work"))
     }
 
     @Test
-    fun `_buildChildSystemPrompt honors custom toolsets`() {
-        val prompt = _buildChildSystemPrompt(goal = "X", toolsets = listOf("memory", "web"))
-        assertTrue(prompt.contains("'memory', 'web'"))
-        assertFalse(prompt.contains("'terminal'"))
+    fun `_buildChildSystemPrompt omits workspace when null`() {
+        val prompt = _buildChildSystemPrompt(goal = "X")
+        assertTrue(!prompt.contains("WORKSPACE PATH:"))
     }
 
     @Test
-    fun `_resolveWorkspaceHint returns null on Android`() {
-        assertNull(_resolveWorkspaceHint(null))
-        assertNull(_resolveWorkspaceHint(Any()))
-    }
-
-    @Test
-    fun `_stripBlockedTools drops blocked and excluded toolsets`() {
-        val input = listOf("terminal", "file", "delegate_task", "debugging", "moa", "web")
+    fun `_stripBlockedTools drops delegation and memory toolset names`() {
+        // Python behavior: filters by toolset names {"delegation", "clarify", "memory", "code_execution"}
+        val input = listOf("terminal", "file", "delegation", "memory", "web", "clarify", "code_execution")
         val result = _stripBlockedTools(input)
         assertEquals(listOf("terminal", "file", "web"), result)
     }
@@ -126,36 +140,85 @@ class DelegateToolTest {
     }
 
     @Test
-    fun `_buildChildAgent returns null on Android`() {
+    fun `_buildChildAgent returns null when no DelegateContext`() {
+        // No _activeDelegateContext set → returns null
+        _activeDelegateContext = null
         assertNull(_buildChildAgent(goal = "x"))
     }
 
     @Test
-    fun `_runSingleChild returns error map`() {
-        val result = _runSingleChild(taskIndex = 2, goal = "do x")
-        assertEquals(false, result["ok"])
-        assertEquals("do x", result["goal"])
-        assertEquals(2, result["task_index"])
-        assertTrue((result["error"] as String).contains("not available"))
+    fun `_buildChildAgent returns null when depth exceeds MAX_DEPTH`() {
+        _activeDelegateContext = DelegateContext(
+            server = FakeServer(),
+            toolDispatcher = FakeDispatcher(),
+            toolSchemas = emptyList(),
+            validToolNames = setOf("terminal"),
+            depth = MAX_DEPTH,  // at limit
+            taskId = "test",
+        )
+        assertNull(_buildChildAgent(goal = "x"))
     }
 
     @Test
-    fun `delegateTask rejects empty goal with JSON error`() {
+    fun `_buildChildAgent returns loop when context is valid`() {
+        _activeDelegateContext = DelegateContext(
+            server = FakeServer(),
+            toolDispatcher = FakeDispatcher(),
+            toolSchemas = listOf(
+                mapOf("function" to mapOf("name" to "terminal", "parameters" to emptyMap<String, Any>())),
+                mapOf("function" to mapOf("name" to "delegate_task", "parameters" to emptyMap<String, Any>())),
+                mapOf("function" to mapOf("name" to "spawn_agent", "parameters" to emptyMap<String, Any>())),
+            ),
+            validToolNames = setOf("terminal", "delegate_task", "spawn_agent", "file"),
+            depth = 0,
+            taskId = "parent-1",
+        )
+        val child = _buildChildAgent(goal = "do something", maxIterations = 10)
+        assertNotNull(child)
+        // Child should NOT have delegate_task or spawn_agent in validToolNames
+        assertTrue("terminal" in child!!.validToolNames)
+        assertTrue("delegate_task" !in child.validToolNames)
+        assertTrue("spawn_agent" !in child.validToolNames)
+        assertEquals(10, child.maxTurns)
+        assertTrue(child.taskId.contains("sub"))
+    }
+
+    // TC-TOOL-DelegateTool: delegateTask without context returns error
+    @Test
+    fun `delegateTask without DelegateContext returns error`() = runBlocking {
+        _activeDelegateContext = null
+        val result = delegateTask(goal = "test")
+        assertTrue(result.contains("requires a parent agent context"))
+    }
+
+    // TC-TOOL-DelegateTool: delegateTask with empty goal returns error
+    @Test
+    fun `delegateTask rejects empty goal`() = runBlocking {
+        _activeDelegateContext = DelegateContext(
+            server = FakeServer(),
+            toolDispatcher = FakeDispatcher(),
+            toolSchemas = emptyList(),
+            validToolNames = emptySet(),
+            depth = 0,
+            taskId = "t",
+        )
         val result = delegateTask(goal = "   ")
-        assertTrue(result.contains("Task description is required"))
+        assertTrue(result.contains("'goal'") || result.contains("Provide either"))
     }
 
+    // TC-TOOL-DelegateTool: delegateTask respects depth limit
     @Test
-    fun `delegateTask rejects null goal`() {
-        val result = delegateTask(goal = null)
-        assertTrue(result.contains("Task description is required"))
-    }
-
-    @Test
-    fun `delegateTask returns not-available JSON error for non-empty goal`() {
+    fun `delegateTask at MAX_DEPTH returns depth error`() = runBlocking {
+        _activeDelegateContext = DelegateContext(
+            server = FakeServer(),
+            toolDispatcher = FakeDispatcher(),
+            toolSchemas = emptyList(),
+            validToolNames = emptySet(),
+            depth = MAX_DEPTH,
+            taskId = "t",
+        )
         val result = delegateTask(goal = "real goal")
-        assertTrue(result.contains("not available"))
-        assertFalse(result.contains("Task description is required"))
+        assertTrue(result.contains("depth limit"))
     }
 
     @Test
@@ -166,6 +229,45 @@ class DelegateToolTest {
 
     @Test
     fun `_resolveDelegationCredentials returns empty map on Android`() {
-        assertEquals(emptyMap<String, Any?>(), _resolveDelegationCredentials(emptyMap(), null))
+        // When cfg has no provider/base_url override, returns a map with null
+        // values indicating "inherit from parent" (matches Python behavior).
+        val result = _resolveDelegationCredentials(emptyMap(), null)
+        assertNull(result["provider"])
+        assertNull(result["base_url"])
+        assertNull(result["api_key"])
+        assertNull(result["api_mode"])
+    }
+
+    // ── Fakes for testing ────────────────────────────────────────────────────
+
+    private class FakeServer : com.xiaomo.hermes.hermes.ChatCompletionServer {
+        override suspend fun chatCompletion(
+            messages: List<Map<String, Any?>>,
+            tools: List<Map<String, Any?>>?,
+            temperature: Double,
+            maxTokens: Int?,
+            extraBody: Map<String, Any?>?
+        ): com.xiaomo.hermes.hermes.ChatCompletionResponse {
+            // Return a simple response with no tool calls (agent finishes)
+            return com.xiaomo.hermes.hermes.ChatCompletionResponse(
+                choices = listOf(
+                    com.xiaomo.hermes.hermes.Choice(
+                        message = com.xiaomo.hermes.hermes.AssistantMessage(
+                            content = "Task completed successfully.",
+                            toolCalls = null,
+                        )
+                    )
+                )
+            )
+        }
+    }
+
+    private class FakeDispatcher : com.xiaomo.hermes.hermes.ToolDispatcher {
+        override suspend fun dispatch(
+            toolName: String,
+            args: Map<String, Any?>,
+            taskId: String,
+            userTask: String?
+        ): String = """{"result": "ok"}"""
     }
 }

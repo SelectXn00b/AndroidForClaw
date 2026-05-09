@@ -129,14 +129,16 @@ class WebToolsTest {
         assertEquals(content, result)
     }
 
-    // ── webSearchTool Android stub returns toolError ──
+    // ── webSearchTool returns config error when no API key set ──
     @Test
     fun `webSearchTool returns toolError on Android`() {
         val result = webSearchTool("kotlin coroutines")
         val json = JSONObject(result)
         assertTrue(json.has("error"))
         val err = json.getString("error")
-        assertTrue("must mention Android: $err", err.contains("Android"))
+        // Without API keys, should mention backend/key requirement
+        assertTrue("must mention backend requirement: $err",
+            err.contains("backend") || err.contains("API") || err.contains("Android"))
     }
 
     @Test
@@ -146,13 +148,14 @@ class WebToolsTest {
         assertTrue(json.has("error"))
     }
 
-    // ── webExtractTool Android stub returns toolError ──
+    // ── webExtractTool returns config error when no API key set ──
     @Test
     fun `webExtractTool returns toolError on Android`() = runBlocking {
         val result = webExtractTool(listOf("https://ex.com"))
         val json = JSONObject(result)
         assertTrue(json.has("error"))
-        assertTrue(json.getString("error").contains("Android"))
+        assertTrue("must mention backend/key",
+            json.getString("error").let { it.contains("backend") || it.contains("API") || it.contains("Android") })
     }
 
     @Test
@@ -165,13 +168,14 @@ class WebToolsTest {
         assertTrue(json.has("error"))
     }
 
-    // ── webCrawlTool Android stub returns toolError ──
+    // ── webCrawlTool returns config error when no API key set ──
     @Test
     fun `webCrawlTool returns toolError on Android`() = runBlocking {
         val result = webCrawlTool("https://ex.com")
         val json = JSONObject(result)
         assertTrue(json.has("error"))
-        assertTrue(json.getString("error").contains("Android"))
+        assertTrue("must mention backend/key",
+            json.getString("error").let { it.contains("backend") || it.contains("API") || it.contains("Android") })
     }
 
     @Test

@@ -38,16 +38,18 @@ class TerminalToolTest {
         return m.invoke(null, *args)
     }
 
-    /** TC-TOOL-210-a: background=true returns error JSON, never runs the shell. */
+    /** TC-TOOL-210-a: background=true delegates to ProcessRegistry.spawnLocal. */
     @Test
-    fun `background not supported on android`() {
+    fun `background delegates to ProcessRegistry`() {
         val out = terminalTool(command = "echo hi", background = true)
         @Suppress("UNCHECKED_CAST")
         val parsed = gson.fromJson(out, Map::class.java) as Map<String, Any?>
-        assertEquals("background execution is not supported on Android", parsed["error"])
-        // exit_code -1 per source — Gson deserialises numbers to Double.
-        assertEquals(-1.0, parsed["exit_code"] as Double, 0.0)
-        assertEquals("", parsed["output"])
+        // On JVM host, ProcessBuilder("bash", "-lc", ...) should work
+        // The result must contain session_id and "Background process started"
+        assertEquals("Background process started", parsed["output"])
+        assertTrue("must have session_id", parsed.containsKey("session_id"))
+        assertTrue("must have pid", parsed.containsKey("pid"))
+        assertEquals(0.0, parsed["exit_code"] as Double, 0.0)
     }
 
     /**
@@ -215,9 +217,9 @@ class TerminalToolTest {
         assertNotNull(parsed["exit_code"])
     }
 
-    /** Background rejection also works via _handleTerminal map entry point. */
+    /** Background also works via _handleTerminal map entry point. */
     @Test
-    fun `handleTerminal args dispatch background rejection`() {
+    fun `handleTerminal args dispatch background`() {
         val m = ttClass.declaredMethods.first { it.name == "_handleTerminal" }
         m.isAccessible = true
         val args = mapOf<String, Any?>(
@@ -227,7 +229,8 @@ class TerminalToolTest {
         val out = m.invoke(null, args, emptyArray<Any?>()) as String
         @Suppress("UNCHECKED_CAST")
         val parsed = gson.fromJson(out, Map::class.java) as Map<String, Any?>
-        assertEquals("background execution is not supported on Android", parsed["error"])
+        assertEquals("Background process started", parsed["output"])
+        assertTrue(parsed.containsKey("session_id"))
     }
 
     /** Module-level background-regex constants are populated as expected. */
@@ -239,7 +242,94 @@ class TerminalToolTest {
         assertFalse(_SHELL_LEVEL_BACKGROUND_RE.containsMatchIn("plain command"))
         assertTrue(_INLINE_BACKGROUND_AMP_RE.containsMatchIn("a & b"))
         assertTrue(_TRAILING_BACKGROUND_AMP_RE.containsMatchIn("a &"))
-        assertTrue(_LONG_LIVED_FOREGROUND_PATTERNS.isEmpty())
+        assertTrue("patterns list should contain regexes", _LONG_LIVED_FOREGROUND_PATTERNS.isNotEmpty())
+    }
+
+    /** TC-TOOL-210-b: _interpretExitCode returns human-readable notes for known codes. */
+    @Test
+    fun `interpretExitCode returns notes for known commands`() {
+        // grep exit 1 = no matches
+        val grepNote = invokePrivate("_interpretExitCode", "grep -r foo .", 1) as String?
+        assertNotNull(grepNote)
+        assertTrue(grepNote!!.contains("No matches"))
+
+        // diff exit 1 = files differ
+        val diffNote = invokePrivate("_interpretExitCode", "diff a.txt b.txt", 1) as String?
+        assertNotNull(diffNote)
+        assertTrue(diffNote!!.contains("differ"))
+
+        // git exit 1
+        val gitNote = invokePrivate("_interpretExitCode", "git diff", 1) as String?
+        assertNotNull(gitNote)
+
+        // exit 0 always returns null
+        assertNull(invokePrivate("_interpretExitCode", "grep foo .", 0))
+
+        // unknown command + unknown code returns null
+        assertNull(invokePrivate("_interpretExitCode", "mycommand", 42))
+
+        // pipeline: extracts last segment
+        val pipeNote = invokePrivate("_interpretExitCode", "cat file | grep pattern", 1) as String?
+        assertNotNull(pipeNote)
+        assertTrue(pipeNote!!.contains("No matches"))
+    }
+
+    /** TC-TOOL-210-c: _looksLikeHelpOrVersionCommand detects help/version flags. */
+    @Test
+    fun `looksLikeHelpOrVersionCommand detects flags`() {
+        assertTrue(invokePrivate("_looksLikeHelpOrVersionCommand", "ls --help") as Boolean)
+        assertTrue(invokePrivate("_looksLikeHelpOrVersionCommand", "git -h") as Boolean)
+        assertTrue(invokePrivate("_looksLikeHelpOrVersionCommand", "node --version") as Boolean)
+        assertTrue(invokePrivate("_looksLikeHelpOrVersionCommand", "python -v") as Boolean)
+        assertFalse(invokePrivate("_looksLikeHelpOrVersionCommand", "npm run dev") as Boolean)
+        assertFalse(invokePrivate("_looksLikeHelpOrVersionCommand", "echo hello") as Boolean)
+    }
+
+    /** TC-TOOL-210-d: _foregroundBackgroundGuidance warns about long-lived processes. */
+    @Test
+    fun `foregroundBackgroundGuidance warns for long lived`() {
+        // nohup should trigger
+        val nohupGuidance = invokePrivate("_foregroundBackgroundGuidance", "nohup node server.js") as String?
+        assertNotNull(nohupGuidance)
+        assertTrue(nohupGuidance!!.contains("nohup"))
+
+        // trailing & should trigger
+        val ampGuidance = invokePrivate("_foregroundBackgroundGuidance", "python server.py &") as String?
+        assertNotNull(ampGuidance)
+        assertTrue(ampGuidance!!.contains("backgrounding"))
+
+        // npm run dev should trigger
+        val npmGuidance = invokePrivate("_foregroundBackgroundGuidance", "npm run dev") as String?
+        assertNotNull(npmGuidance)
+        assertTrue(npmGuidance!!.contains("long-lived"))
+
+        // help commands should NOT trigger
+        assertNull(invokePrivate("_foregroundBackgroundGuidance", "npm --help"))
+
+        // plain commands should NOT trigger
+        assertNull(invokePrivate("_foregroundBackgroundGuidance", "echo hello"))
+        assertNull(invokePrivate("_foregroundBackgroundGuidance", "ls -la"))
+    }
+
+    /** TC-TOOL-210-e: foreground guidance blocks execution unless force=true. */
+    @Test
+    fun `foreground guidance blocks unless forced`() {
+        // npm run dev without force returns guidance error
+        val out = terminalTool(command = "npm run dev", force = false)
+        @Suppress("UNCHECKED_CAST")
+        val parsed = gson.fromJson(out, Map::class.java) as Map<String, Any?>
+        assertTrue("should contain guidance error", (parsed["error"] as? String)?.contains("long-lived") == true)
+        assertEquals(-1.0, parsed["exit_code"] as Double, 0.0)
+
+        // with force=true, guidance is skipped (will try to execute)
+        val outForced = terminalTool(command = "npm run dev", force = true)
+        @Suppress("UNCHECKED_CAST")
+        val parsedForced = gson.fromJson(outForced, Map::class.java) as Map<String, Any?>
+        // Should NOT have guidance error (may have execution error due to no npm)
+        assertTrue(
+            "force should bypass guidance",
+            parsedForced["error"]?.toString()?.contains("long-lived") != true
+        )
     }
 
     // ── TC-TOOL-200-a: platform defaults to android ──
