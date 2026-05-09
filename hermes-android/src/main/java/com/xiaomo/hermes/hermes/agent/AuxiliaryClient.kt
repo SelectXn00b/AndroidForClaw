@@ -1217,8 +1217,75 @@ fun callLlm(
     timeout: Double? = null,
     extraBody: Map<String, Any?>? = null,
 ): Any? {
-    auxiliaryLogger.debug("callLlm($task) — Android auxiliary client not wired; returning null")
-    return null
+    // Resolve provider config: explicit params > env vars
+    val resolvedApiKey = apiKey
+        ?: System.getenv("OPENROUTER_API_KEY")
+        ?: System.getenv("OPENAI_API_KEY")
+        ?: System.getenv("AUXILIARY_API_KEY")
+    val resolvedBaseUrl = baseUrl
+        ?: (if (!System.getenv("OPENROUTER_API_KEY").isNullOrBlank()) "https://openrouter.ai/api/v1"
+           else System.getenv("OPENAI_BASE_URL")
+           ?: System.getenv("AUXILIARY_BASE_URL"))
+    val resolvedModel = model
+        ?: System.getenv("AUXILIARY_MODEL")
+        ?: "google/gemini-2.0-flash-001"
+
+    if (resolvedApiKey.isNullOrBlank() || resolvedBaseUrl.isNullOrBlank()) {
+        auxiliaryLogger.debug("callLlm($task) — no API key or base URL available; returning null")
+        return null
+    }
+
+    val providerName = provider ?: "openrouter"
+    val providerConfig = ProviderConfig(
+        name = providerName,
+        baseUrl = resolvedBaseUrl,
+        apiKey = resolvedApiKey,
+        model = resolvedModel,
+        maxTokens = maxTokens ?: 4096,
+        temperature = temperature,
+    )
+    val chain = ProviderChain(listOf(providerConfig))
+    val client = AuxiliaryClient(chain)
+
+    @Suppress("UNCHECKED_CAST")
+    val chatMessages = messages.map { msg ->
+        msg.entries.associate { (k, v) -> k to (v ?: "") } as Map<String, Any>
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    val toolsList = (tools ?: emptyList()) as List<Map<String, Any>>
+    val request = ChatRequest(
+        messages = chatMessages,
+        model = resolvedModel,
+        maxTokens = maxTokens,
+        temperature = temperature,
+        tools = toolsList,
+    )
+
+    return try {
+        val result = client.chat(request, preferredProvider = providerName)
+        val chatResp = result.response ?: return null
+        // Return in Python-compatible format: {choices: [{message: {content: ...}}]}
+        val toolCallsList: List<Map<String, Any?>> = chatResp.toolCalls.map { tc ->
+            mapOf<String, Any?>(
+                "id" to tc.id,
+                "function" to mapOf<String, Any?>("name" to tc.name, "arguments" to tc.arguments),
+            )
+        }
+        val messageMap = mapOf<String, Any?>(
+            "content" to chatResp.content,
+            "tool_calls" to toolCallsList,
+        )
+        val choiceMap = mapOf<String, Any?>("message" to messageMap)
+        mapOf<String, Any?>(
+            "choices" to listOf(choiceMap),
+            "model" to chatResp.model,
+            "provider" to chatResp.provider,
+        )
+    } catch (e: Exception) {
+        auxiliaryLogger.debug("callLlm($task) failed: ${e.message}")
+        null
+    }
 }
 
 @Suppress("UNCHECKED_CAST")
@@ -1251,8 +1318,8 @@ suspend fun asyncCallLlm(
     timeout: Double? = null,
     extraBody: Map<String, Any?>? = null,
 ): Any? {
-    auxiliaryLogger.debug("asyncCallLlm($task) — Android auxiliary client not wired; returning null")
-    return null
+    // Delegate to synchronous callLlm (OkHttp is already blocking on IO dispatcher)
+    return callLlm(task, provider, model, baseUrl, apiKey, null, messages, temperature, maxTokens, tools, timeout, extraBody)
 }
 
 // ── deep_align literals smuggled for Python parity (agent/auxiliary_client.py) ──

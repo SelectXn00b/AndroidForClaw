@@ -193,6 +193,69 @@ class HermesAgentLoop(
     }
 
     /**
+     * Dispatch a tool call, intercepting `delegate_task` to run it in-process
+     * via a child HermesAgentLoop (mirrors Python's agent-loop-level handling).
+     */
+    private suspend fun _dispatchOrDelegate(
+        toolName: String,
+        args: Map<String, Any?>,
+        userTask: String? = null,
+    ): String {
+        if (toolName == "delegate_task" || toolName == "spawn_agent") {
+            // Set DelegateContext for the duration of this call
+            val prevCtx = com.xiaomo.hermes.hermes.tools._activeDelegateContext
+            com.xiaomo.hermes.hermes.tools._activeDelegateContext =
+                com.xiaomo.hermes.hermes.tools.DelegateContext(
+                    server = server,
+                    toolDispatcher = toolDispatcher,
+                    toolSchemas = toolSchemas,
+                    validToolNames = validToolNames,
+                    depth = prevCtx?.depth ?: 0,
+                    taskId = taskId,
+                    eventSink = eventSink,
+                )
+            return try {
+                // Parse args — handle JSONArray values from the JSON parser
+                val goal = args["goal"] as? String
+                val context = args["context"] as? String
+                val toolsets = when (val ts = args["toolsets"]) {
+                    is org.json.JSONArray -> (0 until ts.length()).map { ts.getString(it) }
+                    is List<*> -> ts.filterIsInstance<String>()
+                    else -> null
+                }
+                val tasks = when (val t = args["tasks"]) {
+                    is org.json.JSONArray -> (0 until t.length()).map { idx ->
+                        val obj = t.getJSONObject(idx)
+                        obj.keys().asSequence().associateWith { key -> obj.get(key) }
+                    }
+                    is List<*> -> @Suppress("UNCHECKED_CAST") (t as? List<Map<String, Any?>>)
+                    else -> null
+                }
+                val maxIterations = when (val mi = args["max_iterations"] ?: args["max_turns"]) {
+                    is Number -> mi.toInt()
+                    else -> null
+                }
+                com.xiaomo.hermes.hermes.tools.delegateTask(
+                    goal = goal,
+                    context = context,
+                    toolsets = toolsets,
+                    tasks = tasks,
+                    maxIterations = maxIterations,
+                )
+            } finally {
+                com.xiaomo.hermes.hermes.tools._activeDelegateContext = prevCtx
+            }
+        }
+
+        // Normal dispatch
+        return toolDispatcher.dispatch(
+            toolName = toolName,
+            args = args,
+            taskId = taskId,
+            userTask = userTask)
+    }
+
+    /**
      * Execute the full agent loop using standard OpenAI tool calling.
      *
      * @param messages Initial conversation messages (system + user).
@@ -411,10 +474,9 @@ class HermesAgentLoop(
                         var dispatchError: String? = null
                         val result = try {
                             val submitTime = System.nanoTime()
-                            val r = toolDispatcher.dispatch(
+                            val r = _dispatchOrDelegate(
                                 toolName = prep.toolName,
                                 args = prep.args!!,
-                                taskId = taskId,
                                 userTask = userTask)
                             val elapsed = (System.nanoTime() - submitTime) / 1_000_000_000.0
                             if (elapsed > 30) {
@@ -440,10 +502,9 @@ class HermesAgentLoop(
                                 var dispatchError: String? = null
                                 val result = try {
                                     val submitTime = System.nanoTime()
-                                    val r = toolDispatcher.dispatch(
+                                    val r = _dispatchOrDelegate(
                                         toolName = prep.toolName,
                                         args = prep.args!!,
-                                        taskId = taskId,
                                         userTask = userTask)
                                     val elapsed = (System.nanoTime() - submitTime) / 1_000_000_000.0
                                     if (elapsed > 30) {
@@ -523,16 +584,22 @@ class HermesAgentLoop(
                 val finalText = assistantMsg.content ?: ""
 
                 // Detect empty AI response: the model returned nothing useful.
-                // This typically happens when the context is too large (e.g. an
-                // oversized tool result inflated input tokens beyond the model
-                // effective limit) causing 0 output tokens.
-                if (finalText.isBlank() && turn > 0) {
+                // This typically happens when:
+                // - The context is too large (oversized tool result inflated input tokens)
+                // - The model only produced <think> reasoning without a visible reply
+                //   (think content is now separated into reasoningContent)
+                if (finalText.isBlank() && (turn > 0 || reasoning != null)) {
                     Log.w(_TAG, "[$taskId] turn ${turn + 1}: AI returned empty response " +
-                        "with no tool calls — likely context overflow")
-                    val fallbackText = "[The AI returned an empty response. " +
-                        "This usually means the conversation context became too large " +
-                        "(e.g. a tool returned an oversized result). " +
-                        "Please try again with a more specific request.]"
+                        "with no tool calls (reasoning=${reasoning != null})")
+                    val fallbackText = if (reasoning != null) {
+                        "[The AI completed its reasoning but did not produce a visible reply. " +
+                            "Please try rephrasing your request.]"
+                    } else {
+                        "[The AI returned an empty response. " +
+                            "This usually means the conversation context became too large " +
+                            "(e.g. a tool returned an oversized result). " +
+                            "Please try again with a more specific request.]"
+                    }
                     val msgDict = mutableMapOf<String, Any?>(
                         "role" to "assistant",
                         "content" to fallbackText)

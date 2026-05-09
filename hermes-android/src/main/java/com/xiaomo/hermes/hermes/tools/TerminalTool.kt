@@ -24,7 +24,16 @@ val _WORKDIR_SAFE_RE: Regex = Regex("""^[A-Za-z0-9/\\:_\-.~ +@=,]+$""")
 val _SHELL_LEVEL_BACKGROUND_RE: Regex = Regex("\\b(?:nohup|disown|setsid)\\b", RegexOption.IGNORE_CASE)
 val _INLINE_BACKGROUND_AMP_RE: Regex = Regex("\\s&\\s")
 val _TRAILING_BACKGROUND_AMP_RE: Regex = Regex("\\s&\\s*(?:#.*)?$")
-val _LONG_LIVED_FOREGROUND_PATTERNS: List<String> = emptyList()
+val _LONG_LIVED_FOREGROUND_PATTERNS: List<Regex> = listOf(
+    Regex("\\b(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?(?:dev|start|serve|watch)\\b", RegexOption.IGNORE_CASE),
+    Regex("\\bdocker\\s+compose\\s+up\\b", RegexOption.IGNORE_CASE),
+    Regex("\\bnext\\s+dev\\b", RegexOption.IGNORE_CASE),
+    Regex("\\bvite(?:\\s|$)", RegexOption.IGNORE_CASE),
+    Regex("\\bnodemon\\b", RegexOption.IGNORE_CASE),
+    Regex("\\buvicorn\\b", RegexOption.IGNORE_CASE),
+    Regex("\\bgunicorn\\b", RegexOption.IGNORE_CASE),
+    Regex("\\bpython(?:3)?\\s+-m\\s+http\\.server\\b", RegexOption.IGNORE_CASE),
+)
 
 const val TERMINAL_TOOL_DESCRIPTION: String = """Execute shell commands on a Linux environment. Filesystem usually persists between calls.
 
@@ -151,13 +160,84 @@ fun cleanupVm(taskId: String): Unit = Unit
 
 private fun _atexitCleanup(): Unit = Unit
 
-private fun _interpretExitCode(command: String, exitCode: Int): String? = null
+private fun _interpretExitCode(command: String, exitCode: Int): String? {
+    if (exitCode == 0) return null
 
-private fun _commandRequiresPipeStdin(command: String): Boolean = false
+    // Extract the last command in a pipeline/chain
+    val segments = command.split(Regex("\\s*(?:\\|\\||&&|[|;])\\s*"))
+    val lastSegment = (segments.lastOrNull() ?: command).trim()
 
-private fun _looksLikeHelpOrVersionCommand(command: String): Boolean = false
+    // Get base command name (first word), skipping VAR=val assignments
+    val words = lastSegment.split(Regex("\\s+"))
+    var baseCmd = ""
+    for (w in words) {
+        if ("=" in w && !w.startsWith("-")) continue
+        baseCmd = w.split("/").last()
+        break
+    }
+    if (baseCmd.isEmpty()) return null
 
-private fun _foregroundBackgroundGuidance(command: String): String? = null
+    val semantics: Map<String, Map<Int, String>> = mapOf(
+        "grep" to mapOf(1 to "No matches found (not an error)"),
+        "egrep" to mapOf(1 to "No matches found (not an error)"),
+        "fgrep" to mapOf(1 to "No matches found (not an error)"),
+        "rg" to mapOf(1 to "No matches found (not an error)"),
+        "ag" to mapOf(1 to "No matches found (not an error)"),
+        "ack" to mapOf(1 to "No matches found (not an error)"),
+        "diff" to mapOf(1 to "Files differ (expected, not an error)"),
+        "colordiff" to mapOf(1 to "Files differ (expected, not an error)"),
+        "find" to mapOf(1 to "Some directories were inaccessible (partial results may still be valid)"),
+        "test" to mapOf(1 to "Condition evaluated to false (expected, not an error)"),
+        "[" to mapOf(1 to "Condition evaluated to false (expected, not an error)"),
+        "curl" to mapOf(
+            6 to "Could not resolve host",
+            7 to "Failed to connect to host",
+            22 to "HTTP response code indicated error (e.g. 404, 500)",
+            28 to "Operation timed out",
+        ),
+        "git" to mapOf(1 to "Non-zero exit (often normal — e.g. 'git diff' returns 1 when files differ)"),
+    )
+
+    return semantics[baseCmd]?.get(exitCode)
+}
+
+private fun _commandRequiresPipeStdin(command: String): Boolean {
+    val normalized = command.lowercase().split(Regex("\\s+")).joinToString(" ")
+    return normalized.startsWith("gh auth login") && "--with-token" in normalized
+}
+
+private fun _looksLikeHelpOrVersionCommand(command: String): Boolean {
+    val normalized = command.lowercase().split(Regex("\\s+")).joinToString(" ")
+    return " --help" in normalized ||
+        normalized.endsWith(" -h") ||
+        " --version" in normalized ||
+        normalized.endsWith(" -v")
+}
+
+private fun _foregroundBackgroundGuidance(command: String): String? {
+    if (_looksLikeHelpOrVersionCommand(command)) return null
+
+    if (_SHELL_LEVEL_BACKGROUND_RE.containsMatchIn(command)) {
+        return "Foreground command uses shell-level background wrappers (nohup/disown/setsid). " +
+            "Use terminal(background=true) so Hermes can track the process, then run " +
+            "readiness checks and tests in separate commands."
+    }
+
+    if (_INLINE_BACKGROUND_AMP_RE.containsMatchIn(command) || _TRAILING_BACKGROUND_AMP_RE.containsMatchIn(command)) {
+        return "Foreground command uses '&' backgrounding. Use terminal(background=true) for long-lived " +
+            "processes, then run health checks and tests in follow-up terminal calls."
+    }
+
+    for (pattern in _LONG_LIVED_FOREGROUND_PATTERNS) {
+        if (pattern.containsMatchIn(command)) {
+            return "This foreground command appears to start a long-lived server/watch process. " +
+                "Run it with background=true, verify readiness (health endpoint/log signal), " +
+                "then execute tests in a separate command."
+        }
+    }
+
+    return null
+}
 
 fun terminalTool(
     command: String,
@@ -171,13 +251,51 @@ fun terminalTool(
     watchPatterns: List<String>? = null,
 ): String {
     val effectiveTimeout = (timeout ?: 30).coerceAtMost(FOREGROUND_MAX_TIMEOUT)
+    val effectiveTaskId = taskId ?: "default"
+
     if (background) {
-        return JSONObject().apply {
-            put("output", "")
-            put("exit_code", -1)
-            put("error", "background execution is not supported on Android")
-        }.toString()
+        return try {
+            val session = ProcessRegistry.spawnLocal(
+                command = command,
+                cwd = workdir,
+                taskId = effectiveTaskId,
+                sessionKey = "",
+                envVars = null,
+                usePty = false,
+            )
+            if (notifyOnComplete) session.notifyOnComplete = true
+            if (!watchPatterns.isNullOrEmpty()) session.watchPatterns = watchPatterns
+
+            val result = JSONObject().apply {
+                put("output", "Background process started")
+                put("session_id", session.id)
+                put("pid", session.pid ?: 0)
+                put("exit_code", 0)
+            }
+            if (notifyOnComplete) result.put("notify_on_complete", true)
+            if (!watchPatterns.isNullOrEmpty()) result.put("watch_patterns", org.json.JSONArray(watchPatterns))
+            result.toString()
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("output", "")
+                put("exit_code", -1)
+                put("error", "Failed to start background process: ${e.message}")
+            }.toString()
+        }
     }
+
+    // Foreground guidance: warn if command looks long-lived
+    if (!force) {
+        val guidance = _foregroundBackgroundGuidance(command)
+        if (guidance != null) {
+            return JSONObject().apply {
+                put("output", "")
+                put("exit_code", -1)
+                put("error", guidance)
+            }.toString()
+        }
+    }
+
     return try {
         val processBuilder = ProcessBuilder()
             .command("/system/bin/sh", "-c", command)
@@ -201,10 +319,13 @@ fun terminalTool(
                 put("error", "Command timed out after $effectiveTimeout seconds")
             }.toString()
         } else {
+            val exitCode = process.exitValue()
             JSONObject().apply {
                 put("output", stdout)
                 if (stderr.isNotEmpty()) put("stderr", stderr)
-                put("exit_code", process.exitValue())
+                put("exit_code", exitCode)
+                val note = _interpretExitCode(command, exitCode)
+                if (note != null) put("note", note)
             }.toString()
         }
     } catch (e: Exception) {

@@ -2,16 +2,33 @@
  * Web tools — fetch, search, and extract web content.
  *
  * Python supports Firecrawl / Tavily / Exa / Parallel / Nous auxiliary
- * LLM summarization. Android has no backend configured; the top-level
- * surface is stubbed to return toolError. Shape mirrors tools/web_tools.py
- * so registration stays aligned.
+ * LLM summarization. Android connects Tavily as the default backend
+ * (TAVILY_API_KEY env var). Firecrawl/Exa/Parallel are also supported
+ * when their respective API keys are configured.
  *
  * Ported from tools/web_tools.py
  */
 package com.xiaomo.hermes.hermes.tools
 
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
+
 const val _TAVILY_BASE_URL: String = "https://api.tavily.com"
 const val DEFAULT_MIN_LENGTH_FOR_SUMMARIZATION: Int = 5000
+
+private val _webHttpClient: OkHttpClient = OkHttpClient.Builder()
+    .connectTimeout(30, TimeUnit.SECONDS)
+    .readTimeout(60, TimeUnit.SECONDS)
+    .writeTimeout(30, TimeUnit.SECONDS)
+    .build()
+
+private val _BASE64_IMAGE_RE = Regex("""data:image/[^;]+;base64,[A-Za-z0-9+/=]+""")
+private val _BASE64_MD_IMAGE_RE = Regex("""!\[[^\]]*]\(data:image/[^)]+\)""")
 
 val WEB_SEARCH_SCHEMA: Map<String, Any> = mapOf(
     "name" to "web_search",
@@ -45,11 +62,30 @@ val WEB_EXTRACT_SCHEMA: Map<String, Any> = mapOf(
 
 private fun _hasEnv(name: String): Boolean = !System.getenv(name).isNullOrBlank()
 
-private fun _loadWebConfig(): Map<String, Any?> = emptyMap()
+private fun _loadWebConfig(): Map<String, Any?> {
+    // On Android, web config comes from env vars (set by app layer)
+    val backend = _getBackend()
+    return if (backend.isNotEmpty()) mapOf("backend" to backend) else emptyMap()
+}
 
-private fun _getBackend(): String = ""
+private fun _getBackend(): String {
+    // Priority: tavily > parallel > exa > firecrawl
+    return when {
+        _hasEnv("TAVILY_API_KEY") -> "tavily"
+        _hasEnv("PARALLEL_API_KEY") -> "parallel"
+        _hasEnv("EXA_API_KEY") -> "exa"
+        _hasEnv("FIRECRAWL_API_KEY") || _hasEnv("FIRECRAWL_API_URL") -> "firecrawl"
+        else -> ""
+    }
+}
 
-private fun _isBackendAvailable(backend: String): Boolean = false
+private fun _isBackendAvailable(backend: String): Boolean = when (backend) {
+    "tavily" -> _hasEnv("TAVILY_API_KEY")
+    "parallel" -> _hasEnv("PARALLEL_API_KEY")
+    "exa" -> _hasEnv("EXA_API_KEY")
+    "firecrawl" -> _hasEnv("FIRECRAWL_API_KEY") || _hasEnv("FIRECRAWL_API_URL")
+    else -> false
+}
 
 private fun _getDirectFirecrawlConfig(): Any? = null
 
@@ -70,9 +106,62 @@ private fun _getFirecrawlClient(): Any? = null
 private fun _getParallelClient(): Any? = null
 private fun _getAsyncParallelClient(): Any? = null
 
-private fun _tavilyRequest(endpoint: String, payload: Map<String, Any?>): Map<String, Any?> = emptyMap()
-private fun _normalizeTavilySearchResults(response: Map<String, Any?>): Map<String, Any?> = emptyMap()
-private fun _normalizeTavilyDocuments(response: Map<String, Any?>, fallbackUrl: String = ""): List<Map<String, Any?>> = emptyList()
+/** Convert JSONObject to Map recursively. */
+private fun _jsonToMap(json: JSONObject): Map<String, Any?> {
+    val map = mutableMapOf<String, Any?>()
+    for (key in json.keys()) {
+        map[key] = _jsonToValue(json.get(key))
+    }
+    return map
+}
+
+private fun _jsonToValue(value: Any?): Any? = when (value) {
+    is JSONObject -> _jsonToMap(value)
+    is JSONArray -> (0 until value.length()).map { _jsonToValue(value.get(it)) }
+    JSONObject.NULL -> null
+    else -> value
+}
+
+private fun _tavilyRequest(endpoint: String, payload: Map<String, Any?>): Map<String, Any?> {
+    val apiKey = System.getenv("TAVILY_API_KEY")
+        ?: throw IllegalStateException("TAVILY_API_KEY not set")
+    val json = JSONObject(payload.toMutableMap().also { it["api_key"] = apiKey })
+    val url = "$_TAVILY_BASE_URL/$endpoint"
+    val body = json.toString().toRequestBody("application/json".toMediaType())
+    val request = Request.Builder().url(url).post(body).build()
+    val response = _webHttpClient.newCall(request).execute()
+    val responseBody = response.body?.string() ?: "{}"
+    if (!response.isSuccessful) {
+        throw RuntimeException("Tavily $endpoint failed (HTTP ${response.code}): $responseBody")
+    }
+    return _jsonToMap(JSONObject(responseBody))
+}
+
+private fun _normalizeTavilySearchResults(response: Map<String, Any?>): Map<String, Any?> {
+    @Suppress("UNCHECKED_CAST")
+    val results = response["results"] as? List<Map<String, Any?>> ?: return emptyMap()
+    val normalized = results.mapIndexed { i, r ->
+        mapOf(
+            "title" to (r["title"] ?: ""),
+            "url" to (r["url"] ?: ""),
+            "description" to (r["content"] ?: ""),
+            "position" to (i + 1),
+        )
+    }
+    return mapOf("results" to normalized, "count" to normalized.size)
+}
+
+private fun _normalizeTavilyDocuments(response: Map<String, Any?>, fallbackUrl: String = ""): List<Map<String, Any?>> {
+    @Suppress("UNCHECKED_CAST")
+    val results = response["results"] as? List<Map<String, Any?>> ?: return emptyList()
+    return results.map { r ->
+        mapOf(
+            "url" to (r["url"] ?: fallbackUrl),
+            "title" to (r["title"] ?: ""),
+            "content" to (r["raw_content"] ?: r["content"] ?: ""),
+        )
+    }
+}
 
 private fun _toPlainObject(value: Any?): Any? = value
 private fun _normalizeResultList(values: Any?): List<Map<String, Any?>> = emptyList()
@@ -85,15 +174,118 @@ private fun _resolveWebExtractAuxiliary(model: String? = null): Triple<Any?, Str
 
 private fun _getDefaultSummarizerModel(): String? = null
 
-fun cleanBase64Images(text: String): String = text
+fun cleanBase64Images(text: String): String {
+    var result = _BASE64_MD_IMAGE_RE.replace(text, "[BASE64_IMAGE_REMOVED]")
+    result = _BASE64_IMAGE_RE.replace(result, "[BASE64_IMAGE_REMOVED]")
+    return result
+}
 
 private fun _getExaClient(): Any? = null
-private fun _exaSearch(query: String, limit: Int = 10): Map<String, Any?> = emptyMap()
-private fun _exaExtract(urls: List<String>): List<Map<String, Any?>> = emptyList()
-private fun _parallelSearch(query: String, limit: Int = 5): Map<String, Any?> = emptyMap()
+private fun _exaSearch(query: String, limit: Int = 10): Map<String, Any?> {
+    val apiKey = System.getenv("EXA_API_KEY") ?: return emptyMap()
+    val json = JSONObject(mapOf(
+        "query" to query,
+        "num_results" to limit,
+        "type" to "auto",
+    ))
+    val body = json.toString().toRequestBody("application/json".toMediaType())
+    val request = Request.Builder()
+        .url("https://api.exa.ai/search")
+        .addHeader("x-api-key", apiKey)
+        .addHeader("Content-Type", "application/json")
+        .post(body).build()
+    val response = _webHttpClient.newCall(request).execute()
+    val respBody = response.body?.string() ?: "{}"
+    if (!response.isSuccessful) return emptyMap()
+    val parsed = _jsonToMap(JSONObject(respBody))
+    @Suppress("UNCHECKED_CAST")
+    val results = parsed["results"] as? List<Map<String, Any?>> ?: return emptyMap()
+    val normalized = results.mapIndexed { i, r ->
+        mapOf(
+            "title" to (r["title"] ?: ""),
+            "url" to (r["url"] ?: ""),
+            "description" to (r["text"] ?: r["snippet"] ?: ""),
+            "position" to (i + 1),
+        )
+    }
+    return mapOf("results" to normalized, "count" to normalized.size)
+}
+private fun _exaExtract(urls: List<String>): List<Map<String, Any?>> {
+    val apiKey = System.getenv("EXA_API_KEY") ?: return emptyList()
+    val json = JSONObject(mapOf("ids" to urls, "text" to true))
+    val body = json.toString().toRequestBody("application/json".toMediaType())
+    val request = Request.Builder()
+        .url("https://api.exa.ai/contents")
+        .addHeader("x-api-key", apiKey)
+        .addHeader("Content-Type", "application/json")
+        .post(body).build()
+    val response = _webHttpClient.newCall(request).execute()
+    val respBody = response.body?.string() ?: "{}"
+    if (!response.isSuccessful) return emptyList()
+    val parsed = _jsonToMap(JSONObject(respBody))
+    @Suppress("UNCHECKED_CAST")
+    val results = parsed["results"] as? List<Map<String, Any?>> ?: return emptyList()
+    return results.map { r ->
+        mapOf(
+            "url" to (r["url"] ?: ""),
+            "title" to (r["title"] ?: ""),
+            "content" to (r["text"] ?: ""),
+        )
+    }
+}
+private fun _parallelSearch(query: String, limit: Int = 5): Map<String, Any?> {
+    val apiKey = System.getenv("PARALLEL_API_KEY") ?: return emptyMap()
+    val json = JSONObject(mapOf(
+        "query" to query,
+        "max_results" to limit,
+    ))
+    val body = json.toString().toRequestBody("application/json".toMediaType())
+    val request = Request.Builder()
+        .url("https://api.parallel.ai/v1/search")
+        .addHeader("Authorization", "Bearer $apiKey")
+        .addHeader("Content-Type", "application/json")
+        .post(body).build()
+    val response = _webHttpClient.newCall(request).execute()
+    val respBody = response.body?.string() ?: "{}"
+    if (!response.isSuccessful) return emptyMap()
+    val parsed = _jsonToMap(JSONObject(respBody))
+    @Suppress("UNCHECKED_CAST")
+    val results = parsed["results"] as? List<Map<String, Any?>> ?: return emptyMap()
+    val normalized = results.mapIndexed { i, r ->
+        mapOf(
+            "title" to (r["title"] ?: ""),
+            "url" to (r["url"] ?: ""),
+            "description" to (r["snippet"] ?: r["content"] ?: ""),
+            "position" to (i + 1),
+        )
+    }
+    return mapOf("results" to normalized, "count" to normalized.size)
+}
 
-fun webSearchTool(query: String, limit: Int = 5): String =
-    toolError("web_search tool is not available on Android")
+fun webSearchTool(query: String, limit: Int = 5): String {
+    val backend = _getBackend()
+    if (backend.isEmpty()) {
+        return toolError("web_search requires a search backend. Set TAVILY_API_KEY, PARALLEL_API_KEY, or EXA_API_KEY.")
+    }
+    return try {
+        val result = when (backend) {
+            "tavily" -> {
+                val response = _tavilyRequest("search", mapOf(
+                    "query" to query,
+                    "max_results" to limit,
+                    "include_answer" to false,
+                ))
+                _normalizeTavilySearchResults(response)
+            }
+            "parallel" -> _parallelSearch(query, limit)
+            "exa" -> _exaSearch(query, limit)
+            else -> return toolError("web_search: unsupported backend '$backend'")
+        }
+        JSONObject(result).toString()
+    } catch (e: Exception) {
+        toolError("web_search failed: ${e.message}")
+    }
+}
 
 suspend fun webExtractTool(
     urls: List<String>,
@@ -101,7 +293,44 @@ suspend fun webExtractTool(
     useLlmProcessing: Boolean = true,
     model: String? = null,
     minLength: Int = DEFAULT_MIN_LENGTH_FOR_SUMMARIZATION,
-): String = toolError("web_extract tool is not available on Android")
+): String {
+    val backend = _getBackend()
+    if (backend.isEmpty()) {
+        return toolError("web_extract requires a web backend. Set TAVILY_API_KEY or FIRECRAWL_API_KEY.")
+    }
+    if (urls.isEmpty()) return toolError("web_extract: no URLs provided")
+    if (urls.size > 5) return toolError("web_extract: maximum 5 URLs per call")
+
+    return try {
+        val documents = when (backend) {
+            "tavily" -> {
+                val response = _tavilyRequest("extract", mapOf("urls" to urls))
+                _normalizeTavilyDocuments(response)
+            }
+            "parallel" -> _parallelExtract(urls)
+            "exa" -> _exaExtract(urls)
+            else -> return toolError("web_extract: unsupported backend '$backend'")
+        }
+
+        // Apply base64 cleaning and optional LLM processing
+        val processed = documents.map { doc ->
+            val rawContent = (doc["content"] as? String) ?: ""
+            val cleaned = cleanBase64Images(rawContent)
+            val finalContent = if (useLlmProcessing && cleaned.length > minLength) {
+                processContentWithLlm(cleaned, doc["url"]?.toString() ?: "", doc["title"]?.toString() ?: "", model, minLength)
+            } else cleaned
+            mapOf(
+                "url" to (doc["url"] ?: ""),
+                "title" to (doc["title"] ?: ""),
+                "content" to finalContent,
+            )
+        }
+
+        JSONObject(mapOf("documents" to processed, "count" to processed.size)).toString()
+    } catch (e: Exception) {
+        toolError("web_extract failed: ${e.message}")
+    }
+}
 
 @Suppress("UNUSED_PARAMETER")
 suspend fun webCrawlTool(
@@ -111,22 +340,92 @@ suspend fun webCrawlTool(
     useLlmProcessing: Boolean = true,
     model: String? = null,
     minLength: Int = DEFAULT_MIN_LENGTH_FOR_SUMMARIZATION,
-): String =
-    toolError("web_crawl tool is not available on Android")
+): String {
+    val backend = _getBackend()
+    if (backend.isEmpty()) {
+        return toolError("web_crawl requires a web backend. Set TAVILY_API_KEY or FIRECRAWL_API_KEY.")
+    }
+    return try {
+        val documents = when (backend) {
+            "tavily" -> {
+                val maxDepth = when (depth) {
+                    "deep" -> 3
+                    "comprehensive" -> 5
+                    else -> 1
+                }
+                val response = _tavilyRequest("crawl", mapOf(
+                    "url" to url,
+                    "max_depth" to maxDepth,
+                    "limit" to 10,
+                ))
+                _normalizeTavilyDocuments(response, fallbackUrl = url)
+            }
+            else -> return toolError("web_crawl: backend '$backend' does not support crawl. Set TAVILY_API_KEY.")
+        }
 
-fun checkFirecrawlApiKey(): Boolean = false
-fun checkWebApiKey(): Boolean = false
-fun checkAuxiliaryModel(): Boolean = false
+        val processed = documents.map { doc ->
+            val rawContent = (doc["content"] as? String) ?: ""
+            val cleaned = cleanBase64Images(rawContent)
+            val finalContent = if (useLlmProcessing && cleaned.length > minLength) {
+                processContentWithLlm(cleaned, doc["url"]?.toString() ?: "", doc["title"]?.toString() ?: "", model, minLength)
+            } else cleaned
+            mapOf(
+                "url" to (doc["url"] ?: ""),
+                "title" to (doc["title"] ?: ""),
+                "content" to finalContent,
+            )
+        }
+        JSONObject(mapOf("documents" to processed, "count" to processed.size)).toString()
+    } catch (e: Exception) {
+        toolError("web_crawl failed: ${e.message}")
+    }
+}
 
-/** Process fetched HTML/Markdown content via an auxiliary LLM. Android stub. */
-@Suppress("UNUSED_PARAMETER")
+fun checkFirecrawlApiKey(): Boolean = _hasEnv("FIRECRAWL_API_KEY") || _hasEnv("FIRECRAWL_API_URL")
+fun checkWebApiKey(): Boolean = _getBackend().isNotEmpty()
+fun checkAuxiliaryModel(): Boolean = _hasEnv("OPENROUTER_API_KEY") || _hasEnv("AUXILIARY_MODEL")
+
+/** Process fetched HTML/Markdown content via an auxiliary LLM for summarization. */
 suspend fun processContentWithLlm(
     content: String,
     url: String = "",
     title: String = "",
     model: String? = null,
     minLength: Int = 0,
-): String = content
+): String {
+    // If content is short enough, return as-is
+    if (content.length <= minLength) return content
+    // If no auxiliary model configured, return as-is
+    if (!checkAuxiliaryModel()) return content
+
+    val contextStr = buildString {
+        if (url.isNotEmpty()) append("URL: $url\n")
+        if (title.isNotEmpty()) append("Title: $title\n")
+    }
+    val systemPrompt = "You are a web content summarizer. Compress the following web page content " +
+        "into a concise markdown summary (max 5000 characters). Preserve key information, " +
+        "links, code snippets, and data. Remove navigation, ads, and boilerplate."
+    val userMessage = buildString {
+        if (contextStr.isNotEmpty()) append("$contextStr\n")
+        append("Content to summarize:\n\n")
+        append(content.take(500_000)) // Cap input at 500K chars
+    }
+
+    val messages = listOf(
+        mapOf<String, Any?>("role" to "system", "content" to systemPrompt),
+        mapOf<String, Any?>("role" to "user", "content" to userMessage),
+    )
+
+    val response = com.xiaomo.hermes.hermes.agent.callLlm(
+        task = "web_summarization",
+        model = model,
+        messages = messages,
+        maxTokens = 5000,
+        temperature = 0.1,
+    )
+    val result = com.xiaomo.hermes.hermes.agent.extractContentOrReasoning(response)
+    return result.ifEmpty { content }
+}
 
 /** Drive one call to the auxiliary summarizer LLM. Android stub. */
 @Suppress("UNUSED_PARAMETER")
@@ -149,11 +448,33 @@ private suspend fun _processLargeContentChunked(
     maxOutputSize: Int = 20000,
 ): String = content
 
-/** Fan-out extract across multiple urls. Android stub. */
+/** Fan-out extract across multiple urls via Parallel API. */
 @Suppress("UNUSED_PARAMETER")
 private suspend fun _parallelExtract(
     urls: List<String>,
-): List<Map<String, Any?>> = emptyList()
+): List<Map<String, Any?>> {
+    val apiKey = System.getenv("PARALLEL_API_KEY") ?: return emptyList()
+    val json = JSONObject(mapOf("urls" to urls))
+    val body = json.toString().toRequestBody("application/json".toMediaType())
+    val request = Request.Builder()
+        .url("https://api.parallel.ai/v1/extract")
+        .addHeader("Authorization", "Bearer $apiKey")
+        .addHeader("Content-Type", "application/json")
+        .post(body).build()
+    val response = _webHttpClient.newCall(request).execute()
+    val respBody = response.body?.string() ?: "{}"
+    if (!response.isSuccessful) return emptyList()
+    val parsed = _jsonToMap(JSONObject(respBody))
+    @Suppress("UNCHECKED_CAST")
+    val results = parsed["results"] as? List<Map<String, Any?>> ?: return emptyList()
+    return results.map { r ->
+        mapOf(
+            "url" to (r["url"] ?: ""),
+            "title" to (r["title"] ?: ""),
+            "content" to (r["content"] ?: r["markdown"] ?: ""),
+        )
+    }
+}
 
 // ── deep_align literals smuggled for Python parity (tools/web_tools.py) ──
 @Suppress("unused") private const val _WT_0: String = "Load the ``web:`` section from ~/.hermes/config.yaml."
