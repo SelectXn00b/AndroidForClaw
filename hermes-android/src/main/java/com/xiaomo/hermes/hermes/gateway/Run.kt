@@ -593,14 +593,31 @@ class GatewayRunner(
     }
 
     /** Whether queuing is enabled during drain. */
-    fun queueDuringDrainEnabled(): Boolean = false
+    fun queueDuringDrainEnabled(): Boolean =
+        config.extra["queue_during_drain"]?.let {
+            when (it.toString().lowercase()) {
+                "true", "1", "yes" -> true
+                else -> false
+            }
+        } ?: false
 
     // ── Voice mode (ported from gateway/run.py) ─────────────────────
 
     private val voiceModes = mutableMapOf<String, String>()
 
     /** Check if setup skill is available. */
-    fun hasSetupSkill(): Boolean = false
+    fun hasSetupSkill(): Boolean {
+        val explicitFlag = config.extra["has_setup_skill"]
+        if (explicitFlag != null) {
+            return explicitFlag.toString().lowercase() in setOf("true", "1", "yes")
+        }
+        // Walk skills directories looking for "hermes-agent-setup"
+        return try {
+            com.xiaomo.hermes.hermes.agent.getAllSkillsDirs().any { dir ->
+                dir.exists() && File(dir, "hermes-agent-setup").isDirectory
+            }
+        } catch (_: Exception) { false }
+    }
 
     /** Load voice modes from config. */
     fun loadVoiceModes(): Map<String, String> = voiceModes.toMap()
@@ -841,7 +858,20 @@ class GatewayRunner(
     suspend fun _platformReconnectWatcher(){ /* void */ }
     /** Inner handler that runs under the _running_agents sentinel guard. */
     @Suppress("UNUSED_PARAMETER")
-    suspend fun _handleMessageWithAgent(event: Any?, source: Any?, _quickKey: String, runGeneration: Int): Any? = null
+    suspend fun _handleMessageWithAgent(event: Any?, source: Any?, _quickKey: String, runGeneration: Int): Any? {
+        // On Android, the full message pipeline (hooks, agent dispatch, delivery,
+        // pending-event loop) is inlined in _handleMessage(). This method exists
+        // for Python 1:1 method parity. If called directly, delegate to agentRunner.
+        val runner = agentRunner ?: return null
+        val msgEvent = event as? MessageEvent ?: return null
+        return runner(
+            msgEvent.text,
+            _quickKey,
+            msgEvent.source.platform,
+            msgEvent.source.chatId,
+            msgEvent.source.userId
+        )
+    }
     /** Resolve current model config and return a formatted info block. */
     fun _formatSessionInfo(): String = buildString {
         val model = resolveGatewayModel()
@@ -1985,7 +2015,24 @@ fun _expandWhatsappAuthAliases(entries: List<String>?): List<String> {
 }
 
 /** Resolve runtime agent kwargs merged from defaults + platform overrides. */
-fun _resolveRuntimeAgentKwargs(): Map<String, Any?> = emptyMap()
+fun _resolveRuntimeAgentKwargs(): Map<String, Any?> {
+    val apiKey = System.getenv("OPENROUTER_API_KEY")
+        ?: System.getenv("OPENAI_API_KEY")
+        ?: System.getenv("HERMES_API_KEY")
+    val baseUrl = if (!System.getenv("OPENROUTER_API_KEY").isNullOrBlank()) "https://openrouter.ai/api/v1"
+        else System.getenv("OPENAI_BASE_URL")
+            ?: System.getenv("HERMES_BASE_URL")
+    val provider = System.getenv("HERMES_INFERENCE_PROVIDER") ?: ""
+    return mapOf<String, Any?>(
+        "api_key" to apiKey,
+        "base_url" to baseUrl,
+        "provider" to provider.ifEmpty { null },
+        "api_mode" to System.getenv("HERMES_API_MODE"),
+        "command" to null,
+        "args" to emptyList<String>(),
+        "credential_pool" to null
+    ).filterValues { it != null }
+}
 
 /** Build a media placeholder string for a non-text attachment. */
 fun _buildMediaPlaceholder(event: Any?): String {
@@ -2005,9 +2052,12 @@ fun _buildMediaPlaceholder(event: Any?): String {
     return "[$label]"
 }
 
-/** Pop the next pending event for a session, or null. */
+/** Pop the next pending event for a session, or null.
+ *  Delegates to the module-level pending-message queue for the given session. */
 @Suppress("UNUSED_PARAMETER")
-fun _dequeuePendingEvent(adapter: Any?, sessionKey: String): Any? = null
+fun _dequeuePendingEvent(adapter: Any?, sessionKey: String): Any? {
+    return com.xiaomo.hermes.hermes.gateway.platforms.getPendingMessage(sessionKey)
+}
 
 /** True if a message is a control-flow interrupt (stop/reset/timeout/etc). */
 fun _isControlInterruptMessage(reason: String?): Boolean {
@@ -2043,8 +2093,24 @@ fun _checkUnavailableSkill(commandName: String?): String? {
 /** Build a deterministic config key from a platform descriptor. */
 fun _platformConfigKey(platform: String): String = platform
 
-/** Load gateway YAML/JSON config — Android returns empty map (injected). */
-fun _loadGatewayConfig(): Map<String, Any?> = emptyMap()
+/** Load gateway JSON config from hermes home, returning {} on any error. */
+fun _loadGatewayConfig(): Map<String, Any?> {
+    return try {
+        val hermesHome = com.xiaomo.hermes.hermes.getHermesHome()
+        val configFile = File(hermesHome, "config.json")
+        if (!configFile.exists()) return emptyMap()
+        val text = configFile.readText()
+        val json = JSONObject(text)
+        // Flatten JSONObject to a Map
+        val result = mutableMapOf<String, Any?>()
+        for (key in json.keys()) {
+            result[key] = json.opt(key)
+        }
+        result
+    } catch (_: Exception) {
+        emptyMap()
+    }
+}
 
 /** Parse "platform:chatId" session key into (platform, chatId). */
 fun _parseSessionKey(sessionKey: String): Pair<String, String> {
