@@ -1,17 +1,23 @@
 package com.xiaomo.hermes.hermes.tools
 
+import android.util.Log
 import com.google.gson.Gson
+import com.xiaomo.hermes.hermes.AgentEventSink
+import com.xiaomo.hermes.hermes.ChatCompletionServer
+import com.xiaomo.hermes.hermes.HermesAgentLoop
+import com.xiaomo.hermes.hermes.ToolDispatcher
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 /**
  * Delegate Tool — spawn a sub-agent to handle a task.
  *
  * 1:1 对齐 hermes/tools/delegate_tool.py
  *
- * Android: true sub-process / sub-agent spawning is not available, so each
- * function below mirrors the Python signature but returns a safe "delegation
- * unavailable" fallback. The module-level constants are kept 1:1 so that
- * callers and introspection tooling see the same API surface as the desktop
- * Python build.
+ * Android implementation: constructs a child HermesAgentLoop using the parent's
+ * ChatCompletionServer and ToolDispatcher, runs it with isolated conversation,
+ * and returns the child's summary as a JSON result.
  */
 
 // ── Module-level constants ───────────────────────────────────────────────
@@ -20,6 +26,7 @@ val DELEGATE_BLOCKED_TOOLS: Set<String> = setOf(
     "delegate_task",
     "delegate_status",
     "delegate_cancel",
+    "spawn_agent",
 )
 
 val _EXCLUDED_TOOLSET_NAMES: Set<String> = setOf(
@@ -54,30 +61,80 @@ val DELEGATE_TASK_SCHEMA: Map<String, Any?> = mapOf(
 
 private val _gson = Gson()
 
+private const val _TAG = "DelegateTool"
 
-// ── Module-level functions (Android fallbacks) ───────────────────────────
+/**
+ * Context injected by HermesAgentLoop before dispatching delegate_task.
+ * Carries parent loop resources so child loops can be constructed.
+ * Android-specific — no Python equivalent (Python uses parent_agent object).
+ */
+data class DelegateContext(
+    val server: ChatCompletionServer,
+    val toolDispatcher: ToolDispatcher,
+    val toolSchemas: List<Map<String, Any?>>,
+    val validToolNames: Set<String>,
+    val depth: Int = 0,
+    val taskId: String = "",
+    val eventSink: AgentEventSink? = null,
+)
+
+/**
+ * Active context for the currently-running delegate_task invocation.
+ * Set/restored by HermesAgentLoop around the delegateTask() call.
+ */
+internal var _activeDelegateContext: DelegateContext? = null
+
+
+// ── Module-level functions ───────────────────────────────────────────────
 
 fun _getMaxConcurrentChildren(): Int {
     val raw = System.getenv("HERMES_DELEGATE_MAX_CONCURRENT")?.trim()
     return raw?.toIntOrNull()?.coerceAtLeast(1) ?: _DEFAULT_MAX_CONCURRENT_CHILDREN
 }
 
-fun checkDelegateRequirements(): Boolean = false
+fun checkDelegateRequirements(): Boolean = true
 
 fun _buildChildSystemPrompt(
     goal: String,
-    toolsets: List<String> = DEFAULT_TOOLSETS,
+    context: String? = null,
     workspaceHint: String? = null,
 ): String {
-    val hint = workspaceHint?.let { "\nWorkspace: $it" } ?: ""
-    val tsetLine = toolsets.joinToString(", ") { "'$it'" }
-    return "You are a Hermes delegated sub-agent.$hint\nGoal: $goal\nAllowed toolsets: $tsetLine\n"
+    val parts = mutableListOf(
+        "You are a focused subagent working on a specific delegated task.",
+        "",
+        "YOUR TASK:",
+        goal
+    )
+    if (!context.isNullOrBlank()) {
+        parts.add("\nCONTEXT:")
+        parts.add(context)
+    }
+    if (!workspaceHint.isNullOrBlank()) {
+        parts.add("\nWORKSPACE PATH:")
+        parts.add(workspaceHint)
+        parts.add("Use this exact path for local repository/workdir operations unless the task explicitly says otherwise.")
+    }
+    parts.add("""
+
+Complete this task using the tools available to you. When finished, provide a clear, concise summary of:
+- What you did
+- What you found or accomplished
+- Any files you created or modified
+- Any issues encountered
+
+Important workspace rule: Never assume a repository lives at /workspace/... or any other container-style path unless the task/context explicitly gives that path. If no exact local path is provided, discover it first before issuing git/workdir-specific commands.
+
+Be thorough but concise -- your response is returned to the parent agent as a summary.""")
+    return parts.joinToString("\n")
 }
 
-fun _resolveWorkspaceHint(parentAgent: Any?): String? = null
+fun _resolveWorkspaceHint(parentAgent: Any?): String? {
+    return System.getenv("TERMINAL_CWD")
+}
 
 fun _stripBlockedTools(toolsets: List<String>): List<String> {
-    return toolsets.filter { it !in DELEGATE_BLOCKED_TOOLS && it !in _EXCLUDED_TOOLSET_NAMES }
+    val blockedToolsetNames = setOf("delegation", "clarify", "memory", "code_execution")
+    return toolsets.filter { it !in blockedToolsetNames }
 }
 
 fun _buildChildProgressCallback(
@@ -103,24 +160,146 @@ fun _buildChildAgent(
     overrideApiMode: String? = null,
     overrideAcpCommand: String? = null,
     overrideAcpArgs: List<String>? = null,
-): Any? = null
+): HermesAgentLoop? {
+    val ctx = _activeDelegateContext ?: return null
+    if (ctx.depth >= MAX_DEPTH) return null
 
-fun _runSingleChild(
-    taskIndex: Int,
-    goal: String,
-    child: Any? = null,
-    parentAgent: Any? = null,
-): Map<String, Any?> {
-    return mapOf(
-        "ok" to false,
-        "error" to "Delegate tool is not available on Android",
-        "goal" to goal,
-        "task_index" to taskIndex,
+    // Resolve child tool names: parent's valid tools minus blocked
+    val childToolNames = ctx.validToolNames.filter { name ->
+        name !in DELEGATE_BLOCKED_TOOLS
+    }.toSet()
+
+    // Filter schemas to only child-allowed tools
+    val childSchemas = ctx.toolSchemas.filter { schema ->
+        @Suppress("UNCHECKED_CAST")
+        val fn = schema["function"] as? Map<String, Any?> ?: return@filter false
+        val name = fn["name"] as? String ?: return@filter false
+        name in childToolNames
+    }
+
+    val childTaskId = "${ctx.taskId}_sub${taskIndex}"
+
+    return HermesAgentLoop(
+        server = ctx.server,
+        toolSchemas = childSchemas,
+        validToolNames = childToolNames,
+        toolDispatcher = ctx.toolDispatcher,
+        maxTurns = maxIterations,
+        taskId = childTaskId,
     )
 }
 
+suspend fun _runSingleChild(
+    taskIndex: Int,
+    goal: String,
+    child: HermesAgentLoop,
+    context: String? = null,
+    parentContext: DelegateContext? = null,
+): Map<String, Any?> {
+    val childStart = System.nanoTime()
+    return try {
+        val childPrompt = _buildChildSystemPrompt(goal, context)
+        val messages = mutableListOf<Map<String, Any?>>(
+            mapOf("role" to "system", "content" to childPrompt),
+            mapOf("role" to "user", "content" to goal)
+        )
+
+        // Set child delegate context (depth+1) to block recursive delegation
+        val prevCtx = _activeDelegateContext
+        val effectiveParent = parentContext ?: prevCtx
+        if (effectiveParent != null) {
+            _activeDelegateContext = effectiveParent.copy(depth = effectiveParent.depth + 1)
+        }
+
+        val result = try {
+            child.run(messages)
+        } finally {
+            _activeDelegateContext = prevCtx
+        }
+
+        val duration = (System.nanoTime() - childStart) / 1_000_000_000.0
+
+        // Extract summary from last assistant message
+        val summary = messages.lastOrNull { it["role"] == "assistant" }
+            ?.get("content") as? String ?: ""
+
+        val status = if (summary.isNotBlank()) "completed" else "failed"
+        val exitReason = if (result.finishedNaturally) "completed" else "max_iterations"
+
+        // Build tool trace from messages
+        val toolTrace = _buildToolTrace(messages)
+
+        val entry = mutableMapOf<String, Any?>(
+            "task_index" to taskIndex,
+            "status" to status,
+            "summary" to summary,
+            "api_calls" to result.turnsUsed,
+            "duration_seconds" to Math.round(duration * 100.0) / 100.0,
+            "exit_reason" to exitReason,
+            "tokens" to mapOf("input" to 0, "output" to 0),
+            "tool_trace" to toolTrace,
+        )
+        if (status == "failed") {
+            entry["error"] = "Subagent did not produce a response."
+        }
+        Log.d(_TAG, "Child $taskIndex completed: status=$status, turns=${result.turnsUsed}, " +
+            "duration=${"%.1f".format(duration)}s")
+        entry
+    } catch (e: Exception) {
+        val duration = (System.nanoTime() - childStart) / 1_000_000_000.0
+        Log.e(_TAG, "Child $taskIndex failed: ${e.message}", e)
+        mapOf(
+            "task_index" to taskIndex,
+            "status" to "error",
+            "summary" to null,
+            "error" to "${e::class.simpleName}: ${e.message}",
+            "api_calls" to 0,
+            "duration_seconds" to Math.round(duration * 100.0) / 100.0,
+        )
+    }
+}
+
+/** Build tool trace from conversation messages (mirrors Python logic). */
+private fun _buildToolTrace(messages: List<Map<String, Any?>>): List<Map<String, Any?>> {
+    val toolTrace = mutableListOf<MutableMap<String, Any?>>()
+    val traceById = mutableMapOf<String, MutableMap<String, Any?>>()
+
+    for (msg in messages) {
+        if (msg["role"] == "assistant") {
+            @Suppress("UNCHECKED_CAST")
+            val toolCalls = msg["tool_calls"] as? List<Map<String, Any?>> ?: continue
+            for (tc in toolCalls) {
+                @Suppress("UNCHECKED_CAST")
+                val fn = tc["function"] as? Map<String, Any?> ?: continue
+                val entry = mutableMapOf<String, Any?>(
+                    "tool" to (fn["name"] as? String ?: "unknown"),
+                    "args_bytes" to ((fn["arguments"] as? String)?.length ?: 0),
+                )
+                toolTrace.add(entry)
+                val tcId = tc["id"] as? String
+                if (tcId != null) traceById[tcId] = entry
+            }
+        } else if (msg["role"] == "tool") {
+            val content = msg["content"] as? String ?: ""
+            val isError = content.length >= 5 && "error" in content.take(80).lowercase()
+            val resultMeta = mapOf<String, Any?>(
+                "result_bytes" to content.length,
+                "status" to if (isError) "error" else "ok",
+            )
+            val tcId = msg["tool_call_id"] as? String
+            val target = if (tcId != null) traceById[tcId] else null
+            if (target != null) {
+                target.putAll(resultMeta)
+            } else if (toolTrace.isNotEmpty()) {
+                toolTrace.last().putAll(resultMeta)
+            }
+        }
+    }
+    return toolTrace
+}
+
 @Suppress("UNUSED_PARAMETER")
-fun delegateTask(
+suspend fun delegateTask(
     goal: String? = null,
     context: String? = null,
     toolsets: List<String>? = null,
@@ -130,10 +309,95 @@ fun delegateTask(
     acpArgs: List<String>? = null,
     parentAgent: Any? = null,
 ): String {
-    if (goal.isNullOrBlank()) {
-        return _gson.toJson(mapOf("error" to "Task description is required"))
+    val ctx = _activeDelegateContext
+    if (ctx == null) {
+        return _gson.toJson(mapOf("error" to "delegate_task requires a parent agent context."))
     }
-    return _gson.toJson(mapOf("error" to "Delegate tool is not available on Android"))
+
+    // Depth limit
+    if (ctx.depth >= MAX_DEPTH) {
+        return _gson.toJson(mapOf("error" to
+            "Delegation depth limit reached ($MAX_DEPTH). Subagents cannot spawn further subagents."))
+    }
+
+    // Normalize to task list
+    val maxChildren = _getMaxConcurrentChildren()
+    val effectiveMaxIter = maxIterations ?: DEFAULT_MAX_ITERATIONS
+
+    val taskList: List<Map<String, Any?>> = when {
+        tasks != null && tasks.isNotEmpty() -> {
+            if (tasks.size > maxChildren) {
+                return _gson.toJson(mapOf("error" to
+                    "Too many tasks: ${tasks.size} provided, but max_concurrent_children is $maxChildren. " +
+                    "Either reduce the task count, split into multiple delegate_task calls, or increase " +
+                    "delegation.max_concurrent_children in config.yaml."))
+            }
+            tasks
+        }
+        !goal.isNullOrBlank() -> listOf(mapOf<String, Any?>(
+            "goal" to goal, "context" to context, "toolsets" to toolsets))
+        else -> return _gson.toJson(mapOf("error" to
+            "Provide either 'goal' (single task) or 'tasks' (batch)."))
+    }
+
+    if (taskList.isEmpty()) {
+        return _gson.toJson(mapOf("error" to "No tasks provided."))
+    }
+
+    // Validate each task has a goal
+    for ((i, t) in taskList.withIndex()) {
+        val tGoal = (t["goal"] as? String)?.trim() ?: ""
+        if (tGoal.isBlank()) {
+            return _gson.toJson(mapOf("error" to "Task $i is missing a 'goal'."))
+        }
+    }
+
+    Log.d(_TAG, "delegate_task: ${taskList.size} task(s), depth=${ctx.depth}, maxIter=$effectiveMaxIter")
+
+    val overallStart = System.nanoTime()
+    val results = mutableListOf<Map<String, Any?>>()
+
+    if (taskList.size == 1) {
+        val t = taskList[0]
+        val tGoal = t["goal"] as String
+        val tContext = t["context"] as? String
+        val child = _buildChildAgent(
+            taskIndex = 0, goal = tGoal, context = tContext,
+            toolsets = toolsets, maxIterations = effectiveMaxIter,
+        ) ?: return _gson.toJson(mapOf("error" to "Failed to build child agent (depth limit or no context)"))
+
+        results.add(_runSingleChild(0, tGoal, child, tContext, ctx))
+    } else {
+        // Batch: parallel via coroutines
+        coroutineScope {
+            val deferreds = taskList.mapIndexed { i, t ->
+                val tGoal = t["goal"] as String
+                val tContext = t["context"] as? String
+                async {
+                    val child = _buildChildAgent(
+                        taskIndex = i, goal = tGoal, context = tContext,
+                        toolsets = toolsets, maxIterations = effectiveMaxIter,
+                    )
+                    if (child != null) {
+                        _runSingleChild(i, tGoal, child, tContext, ctx)
+                    } else {
+                        mapOf<String, Any?>("task_index" to i, "status" to "error",
+                            "error" to "Failed to build child agent", "api_calls" to 0,
+                            "duration_seconds" to 0.0)
+                    }
+                }
+            }
+            results.addAll(deferreds.awaitAll())
+        }
+        results.sortBy { (it["task_index"] as? Int) ?: 0 }
+    }
+
+    val totalDuration = (System.nanoTime() - overallStart) / 1_000_000_000.0
+    Log.d(_TAG, "delegate_task completed: ${results.size} result(s), total=${"%.1f".format(totalDuration)}s")
+    return _gson.toJson(mapOf(
+        "results" to results,
+        "total_duration_seconds" to Math.round(totalDuration * 100.0) / 100.0,
+    ))
 }
 
 fun _resolveChildCredentialPool(
@@ -144,9 +408,66 @@ fun _resolveChildCredentialPool(
 fun _resolveDelegationCredentials(
     cfg: Map<String, Any?>,
     parentAgent: Any?,
-): Map<String, Any?> = emptyMap()
+): Map<String, Any?> {
+    val configuredModel = (cfg["model"] as? String)?.trim()?.ifEmpty { null }
+    val configuredProvider = (cfg["provider"] as? String)?.trim()?.ifEmpty { null }
+    val configuredBaseUrl = (cfg["base_url"] as? String)?.trim()?.ifEmpty { null }
+    val configuredApiKey = (cfg["api_key"] as? String)?.trim()?.ifEmpty { null }
 
-private fun _loadConfig(): Map<String, Any?> = emptyMap()
+    if (configuredBaseUrl != null) {
+        // Direct endpoint mode
+        val apiKey = configuredApiKey
+            ?: System.getenv("OPENAI_API_KEY")?.trim()?.ifEmpty { null }
+        return mapOf(
+            "model" to configuredModel,
+            "provider" to "custom",
+            "base_url" to configuredBaseUrl,
+            "api_key" to apiKey,
+            "api_mode" to "chat_completions",
+        )
+    }
+
+    if (configuredProvider == null) {
+        // No override — child inherits from parent
+        return mapOf(
+            "model" to configuredModel,
+            "provider" to null,
+            "base_url" to null,
+            "api_key" to null,
+            "api_mode" to null,
+        )
+    }
+
+    // Provider configured — resolve from env
+    val apiKey = System.getenv("OPENROUTER_API_KEY")?.trim()?.ifEmpty { null }
+        ?: System.getenv("OPENAI_API_KEY")?.trim()?.ifEmpty { null }
+        ?: System.getenv("HERMES_API_KEY")?.trim()?.ifEmpty { null }
+    val baseUrl = if (!System.getenv("OPENROUTER_API_KEY").isNullOrBlank()) "https://openrouter.ai/api/v1"
+        else System.getenv("OPENAI_BASE_URL")?.trim()?.ifEmpty { null }
+    return mapOf(
+        "model" to configuredModel,
+        "provider" to configuredProvider,
+        "base_url" to baseUrl,
+        "api_key" to apiKey,
+        "api_mode" to "chat_completions",
+    )
+}
+
+private fun _loadConfig(): Map<String, Any?> {
+    return try {
+        val hermesHome = com.xiaomo.hermes.hermes.getHermesHome()
+        val configFile = java.io.File(hermesHome, "config.json")
+        if (!configFile.exists()) return emptyMap()
+        val text = configFile.readText(Charsets.UTF_8)
+        val json = org.json.JSONObject(text)
+        val delegation = json.optJSONObject("delegation") ?: return emptyMap()
+        val result = mutableMapOf<String, Any?>()
+        for (key in delegation.keys()) {
+            result[key] = delegation.opt(key)
+        }
+        result
+    } catch (_: Exception) { emptyMap() }
+}
 
 // ── deep_align literals smuggled for Python parity (tools/delegate_tool.py) ──
 @Suppress("unused") private val _DT_0: String = """Read delegation.max_concurrent_children from config, falling back to
