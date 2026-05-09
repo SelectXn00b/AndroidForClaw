@@ -1968,9 +1968,51 @@ fun checkForSkillUpdates(
     return emptyList()
 }
 
-fun _loadHermesIndex(): Map<String, Any?>? = null
+fun _loadHermesIndex(): Map<String, Any?>? {
+    val cacheFile = File(SkillsHub.HERMES_INDEX_CACHE_FILE)
+    // Check local cache first
+    if (cacheFile.exists()) {
+        try {
+            val age = (System.currentTimeMillis() - cacheFile.lastModified()) / 1000
+            if (age < SkillsHub.HERMES_INDEX_TTL) {
+                val text = cacheFile.readText(Charsets.UTF_8)
+                val obj = JSONObject(text)
+                val map = mutableMapOf<String, Any?>()
+                obj.keys().forEach { k -> map[k] = obj.opt(k) }
+                return map
+            }
+        } catch (_: Exception) {}
+    }
+    // Fetch from remote
+    return try {
+        val conn = (URL(SkillsHub.HERMES_INDEX_URL).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"; connectTimeout = 15000; readTimeout = 15000
+        }
+        val code = conn.responseCode
+        if (code != 200) { conn.disconnect(); return _loadStaleIndexCache() }
+        val body = conn.inputStream.bufferedReader().use { it.readText() }
+        conn.disconnect()
+        val obj = JSONObject(body)
+        if (!obj.has("skills")) return _loadStaleIndexCache()
+        // Cache locally
+        try { cacheFile.parentFile?.mkdirs(); cacheFile.writeText(body, Charsets.UTF_8) } catch (_: Exception) {}
+        val map = mutableMapOf<String, Any?>()
+        obj.keys().forEach { k -> map[k] = obj.opt(k) }
+        map
+    } catch (_: Exception) { _loadStaleIndexCache() }
+}
 
-fun _loadStaleIndexCache(): Map<String, Any?>? = null
+fun _loadStaleIndexCache(): Map<String, Any?>? {
+    val cacheFile = File(SkillsHub.HERMES_INDEX_CACHE_FILE)
+    if (!cacheFile.exists()) return null
+    return try {
+        val text = cacheFile.readText(Charsets.UTF_8)
+        val obj = JSONObject(text)
+        val map = mutableMapOf<String, Any?>()
+        obj.keys().forEach { k -> map[k] = obj.opt(k) }
+        map
+    } catch (_: Exception) { null }
+}
 
 fun createSourceRouter(auth: GitHubAuth? = null): List<SkillSource> {
     val resolvedAuth = auth ?: GitHubAuth()

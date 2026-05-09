@@ -140,7 +140,11 @@ fun _captureRequiredEnvironmentVariables(
     }
 }
 
-fun _isGatewaySurface(): Boolean = false
+fun _isGatewaySurface(): Boolean {
+    if (!System.getenv("HERMES_GATEWAY_SESSION").isNullOrBlank()) return true
+    if (!System.getenv("HERMES_SESSION_PLATFORM").isNullOrBlank()) return true
+    return false
+}
 
 fun _getTerminalBackendName(): String = "android"
 
@@ -159,7 +163,12 @@ fun _remainingRequiredEnvironmentNames(
         .filter { !_isEnvVarPersisted(it, env) }
 }
 
-fun _gatewaySetupHint(): String = ""
+fun _gatewaySetupHint(): String {
+    if (!_isGatewaySurface()) return ""
+    val home = com.xiaomo.hermes.hermes.displayHermesHome()
+    return "Secure secret entry is not supported over messaging. " +
+        "Load this skill in the local CLI to be prompted, or add the key to $home/.env manually."
+}
 
 @Suppress("UNUSED_PARAMETER")
 fun _buildSetupNote(
