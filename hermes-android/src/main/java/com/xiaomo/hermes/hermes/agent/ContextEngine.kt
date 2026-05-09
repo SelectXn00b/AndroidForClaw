@@ -84,9 +84,16 @@ abstract class ContextEngine {
     // ── Pre-flight check ──────────────────────────────────────────────
 
     /** Quick rough check before the API call (no real token count yet).
-     *  Default returns False (skip pre-flight). Override if your engine
-     *  can do a cheap estimate. */
-    open fun shouldCompressPreflight(messages: List<Map<String, Any>>): Boolean = false
+     *  Uses a char/4 heuristic as a rough token estimate. Returns true
+     *  if estimated usage exceeds 80% of contextLength. */
+    open fun shouldCompressPreflight(messages: List<Map<String, Any>>): Boolean {
+        if (contextLength <= 0) return false
+        val charEstimate = messages.sumOf { msg ->
+            (msg["content"] as? String)?.length ?: 0
+        }
+        val tokenEstimate = charEstimate / 4
+        return tokenEstimate > (contextLength * 0.8).toLong()
+    }
 
     // ── Session lifecycle ─────────────────────────────────────────────
 
