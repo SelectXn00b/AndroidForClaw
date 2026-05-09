@@ -19,9 +19,10 @@ import org.json.JSONObject
  * OpenRouter chat completions are largely OpenAI-compatible, but reasoning is controlled via
  * the unified `reasoning` object instead of the app's generic `enableThinking` toggle.
  *
- * We align the default reasoning request shape with RikkaHub's OpenRouter handling:
+ * We align the default reasoning request shape with OpenRouter's unified reasoning API:
  * - thinking on: `reasoning: {}` or `reasoning.max_tokens = <budget>`
- * - thinking off: `reasoning: { enabled: false, max_tokens: 0 }`
+ * - thinking off: `reasoning: { exclude: true }` — accepted by both reasoning-mandatory
+ *   and non-reasoning models (strips reasoning from response without rejecting the request)
  *
  * This provider keeps the shared OpenAI request/response handling while applying OpenRouter's
  * request-body conventions and default headers.
@@ -100,7 +101,7 @@ open class OpenRouterProvider(
         val reasoningObject = requestJson.optJSONObject("reasoning")
         val existingHasExplicitReasoningControl =
             reasoningObject?.let {
-                it.has("enabled") || it.has("max_tokens") || it.has("effort")
+                it.has("enabled") || it.has("max_tokens") || it.has("effort") || it.has("exclude")
             } == true
 
         when {
@@ -135,12 +136,18 @@ open class OpenRouterProvider(
                         }
                     )
                 } else {
-                    finalReasoningObject.put("enabled", false)
-                    finalReasoningObject.put("max_tokens", 0)
+                    // Use reasoning.exclude=true instead of reasoning.enabled=false:
+                    // some reasoning-mandatory models on OpenRouter's auto-router (e.g.
+                    // openrouter/free fallbacks) return 400 "Reasoning is mandatory" when
+                    // enabled=false is sent. `exclude=true` is accepted by both
+                    // reasoning-mandatory and non-reasoning models — it tells OpenRouter
+                    // to strip reasoning content from the response without disabling it
+                    // at the model level.
+                    finalReasoningObject.put("exclude", true)
                     requestJson.put("reasoning", finalReasoningObject)
                     AppLogger.d(
                         "OpenRouterProvider",
-                        "OpenRouter thinking disabled via reasoning.enabled=false and max_tokens=0"
+                        "OpenRouter thinking disabled via reasoning.exclude=true"
                     )
                 }
             }
