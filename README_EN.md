@@ -261,7 +261,7 @@ adb install app/build/outputs/apk/release/app-release.apk
 
 <img src="docs/images/wechat-qrcode.png" width="300" alt="WeChat Group QR Code">
 
-**Scan to join WeChat group** — Valid for 7 days
+**Scan to join WeChat group (AndroidClaw)** — Valid until May 17
 
 </div>
 

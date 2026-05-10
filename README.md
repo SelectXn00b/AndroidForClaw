@@ -260,7 +260,7 @@ adb install app/build/outputs/apk/release/app-release.apk
 
 <img src="docs/images/wechat-qrcode.png" width="300" alt="微信群二维码">
 
-**扫码加入微信群** - 7天内有效
+**扫码加入微信群（AndroidClaw）** - 5月17日前有效
 
 </div>
 
