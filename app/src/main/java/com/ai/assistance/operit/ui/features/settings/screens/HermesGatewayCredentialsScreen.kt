@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import com.ai.assistance.operit.R
 import com.ai.assistance.operit.hermes.gateway.HermesGatewayPreferences
 import com.ai.assistance.operit.ui.components.CustomScaffold
+import com.ai.assistance.operit.util.AppLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -119,9 +120,16 @@ private fun PlatformCredentialsCard(
     prefs: HermesGatewayPreferences,
 ) {
     val state = remember(platform) {
-        mutableStateMapOf<String, String>().apply {
+        val t0 = System.nanoTime()
+        val map = mutableStateMapOf<String, String>().apply {
             fields.forEach { put(it.key, prefs.readSecret(platform, it.key)) }
         }
+        val dtMs = (System.nanoTime() - t0) / 1_000_000
+        AppLogger.i(
+            "settings-perf",
+            "credentials prefill platform=$platform fields=${fields.size} dt=${dtMs}ms"
+        )
+        map
     }
 
     var savedFlash by remember(platform) { mutableStateOf(false) }

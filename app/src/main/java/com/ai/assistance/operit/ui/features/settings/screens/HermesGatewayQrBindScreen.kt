@@ -37,6 +37,7 @@ import com.ai.assistance.operit.R
 import com.ai.assistance.operit.hermes.gateway.HermesGatewayPreferences
 import com.ai.assistance.operit.services.gateway.GatewayForegroundService
 import com.ai.assistance.operit.ui.components.CustomScaffold
+import com.ai.assistance.operit.util.AppLogger
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
@@ -80,9 +81,18 @@ private fun FeishuQrBindCard() {
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var userCode by remember { mutableStateOf("") }
     var isRunning by remember { mutableStateOf(false) }
-    var appId by remember { mutableStateOf(prefs.readSecret(HermesGatewayPreferences.PLATFORM_FEISHU, HermesGatewayPreferences.SECRET_FEISHU_APP_ID)) }
-    var domain by remember { mutableStateOf(prefs.readSecret(HermesGatewayPreferences.PLATFORM_FEISHU, HermesGatewayPreferences.SECRET_FEISHU_DOMAIN).ifEmpty { "feishu" }) }
-    var botName by remember { mutableStateOf(prefs.readSecret(HermesGatewayPreferences.PLATFORM_FEISHU, HermesGatewayPreferences.SECRET_FEISHU_BOT_NAME)) }
+    val feishuInitial = remember {
+        val t0 = System.nanoTime()
+        val a = prefs.readSecret(HermesGatewayPreferences.PLATFORM_FEISHU, HermesGatewayPreferences.SECRET_FEISHU_APP_ID)
+        val d = prefs.readSecret(HermesGatewayPreferences.PLATFORM_FEISHU, HermesGatewayPreferences.SECRET_FEISHU_DOMAIN).ifEmpty { "feishu" }
+        val b = prefs.readSecret(HermesGatewayPreferences.PLATFORM_FEISHU, HermesGatewayPreferences.SECRET_FEISHU_BOT_NAME)
+        val dtMs = (System.nanoTime() - t0) / 1_000_000
+        AppLogger.i("settings-perf", "qr-bind feishu prefill 3-reads dt=${dtMs}ms")
+        Triple(a, d, b)
+    }
+    var appId by remember { mutableStateOf(feishuInitial.first) }
+    var domain by remember { mutableStateOf(feishuInitial.second) }
+    var botName by remember { mutableStateOf(feishuInitial.third) }
     var loginJob by remember { mutableStateOf<Job?>(null) }
 
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -297,7 +307,13 @@ private fun WeixinQrBindCard() {
     var statusText by remember { mutableStateOf("") }
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var isRunning by remember { mutableStateOf(false) }
-    var accountId by remember { mutableStateOf(prefs.readSecret(HermesGatewayPreferences.PLATFORM_WEIXIN, HermesGatewayPreferences.SECRET_WEIXIN_ACCOUNT_ID)) }
+    var accountId by remember {
+        val t0 = System.nanoTime()
+        val v = prefs.readSecret(HermesGatewayPreferences.PLATFORM_WEIXIN, HermesGatewayPreferences.SECRET_WEIXIN_ACCOUNT_ID)
+        val dtMs = (System.nanoTime() - t0) / 1_000_000
+        AppLogger.i("settings-perf", "qr-bind weixin prefill 1-read dt=${dtMs}ms")
+        mutableStateOf(v)
+    }
     var loginJob by remember { mutableStateOf<Job?>(null) }
 
     Card(modifier = Modifier.fillMaxWidth()) {

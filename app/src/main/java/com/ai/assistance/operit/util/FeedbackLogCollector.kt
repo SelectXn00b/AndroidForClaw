@@ -1,5 +1,6 @@
 package com.ai.assistance.operit.util
 
+import com.ai.assistance.operit.core.application.OperitApplication
 import com.xiaomo.hermes.hermes.getHermesHome
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -15,14 +16,17 @@ object FeedbackLogCollector {
         val hermesAgentLogs: String,
         val hermesAgentLogLineCount: Int,
         val packageLogs: String,
-        val hasPackageLogs: Boolean
+        val hasPackageLogs: Boolean,
+        val anrReport: String,
+        val hasAnrReport: Boolean
     )
 
     suspend fun collectAll(
         appLogLines: Int = 200,
         hermesErrorLogLines: Int = 100,
         hermesAgentLogLines: Int = 100,
-        packageLogLines: Int = 100
+        packageLogLines: Int = 100,
+        anrReportLines: Int = 200
     ): CollectedLogs = withContext(Dispatchers.IO) {
         // 1. App log (operit.log)
         val appLogFile = AppLogger.getLogFile()
@@ -46,6 +50,17 @@ object FeedbackLogCollector {
         } catch (_: Exception) { null }
         val (pkgLogs, _) = readTailOfFile(latestPkgLog, packageLogLines)
 
+        // 5. Latest ANR report (saved by AnrMonitor on stop)
+        val anrDir = try {
+            OperitApplication.instance.getExternalFilesDir("anr_reports")
+        } catch (_: Throwable) { null }
+        val latestAnrReport = try {
+            anrDir?.listFiles()
+                ?.filter { it.extension == "txt" && it.name.startsWith("anr_report_") }
+                ?.maxByOrNull { it.lastModified() }
+        } catch (_: Exception) { null }
+        val (anrReport, anrCount) = readTailOfFile(latestAnrReport, anrReportLines)
+
         CollectedLogs(
             appLogs = appLogs,
             appLogLineCount = appCount,
@@ -54,7 +69,9 @@ object FeedbackLogCollector {
             hermesAgentLogs = agentLogs,
             hermesAgentLogLineCount = agentCount,
             packageLogs = pkgLogs,
-            hasPackageLogs = pkgLogs.isNotBlank()
+            hasPackageLogs = pkgLogs.isNotBlank(),
+            anrReport = anrReport,
+            hasAnrReport = anrCount > 0
         )
     }
 

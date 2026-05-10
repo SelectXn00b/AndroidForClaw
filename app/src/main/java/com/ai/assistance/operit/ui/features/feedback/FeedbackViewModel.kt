@@ -1,12 +1,15 @@
 package com.ai.assistance.operit.ui.features.feedback
 
+import android.app.ActivityManager
 import android.app.Application
+import android.content.Context
 import android.os.Build
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.ai.assistance.operit.core.application.ActivityLifecycleManager
 import com.ai.assistance.operit.data.api.FeedbackApiService
 import com.ai.assistance.operit.data.model.feedback.DeviceInfo
 import com.ai.assistance.operit.data.model.feedback.ErrorContext
@@ -42,6 +45,9 @@ class FeedbackViewModel(application: Application) : AndroidViewModel(application
     var hasPackageLogs by mutableStateOf(false)
         private set
 
+    var hasAnrReport by mutableStateOf(false)
+        private set
+
     private var collectedLogs: FeedbackLogCollector.CollectedLogs? = null
     private var errorContext: ErrorContext? = null
 
@@ -70,6 +76,7 @@ class FeedbackViewModel(application: Application) : AndroidViewModel(application
             hermesErrorLogCount = logs.hermesErrorLogLineCount
             hermesAgentLogCount = logs.hermesAgentLogLineCount
             hasPackageLogs = logs.hasPackageLogs
+            hasAnrReport = logs.hasAnrReport
         }
     }
 
@@ -93,7 +100,8 @@ class FeedbackViewModel(application: Application) : AndroidViewModel(application
                 errorContext = errorContext,
                 hermesErrorLogs = logs?.hermesErrorLogs?.takeIf { it.isNotBlank() },
                 hermesAgentLogs = logs?.hermesAgentLogs?.takeIf { it.isNotBlank() },
-                packageLogs = logs?.packageLogs?.takeIf { it.isNotBlank() }
+                packageLogs = logs?.packageLogs?.takeIf { it.isNotBlank() },
+                anrReport = logs?.anrReport?.takeIf { it.isNotBlank() }
             )
 
             feedbackApiService.submitFeedback(request).fold(
@@ -117,6 +125,7 @@ class FeedbackViewModel(application: Application) : AndroidViewModel(application
         hermesErrorLogCount = 0
         hermesAgentLogCount = 0
         hasPackageLogs = false
+        hasAnrReport = false
         submitSuccess = false
         errorMessage = null
     }
@@ -139,6 +148,23 @@ class FeedbackViewModel(application: Application) : AndroidViewModel(application
         } catch (_: Exception) {
             null
         }
+
+        // Memory snapshot — useful when diagnosing freezes / OOM correlations.
+        val memInfo = try {
+            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            ActivityManager.MemoryInfo().also { am?.getMemoryInfo(it) }
+        } catch (_: Throwable) {
+            null
+        }
+        val rt = Runtime.getRuntime()
+        val heapUsedBytes = rt.totalMemory() - rt.freeMemory()
+
+        val topActivity = try {
+            ActivityLifecycleManager.getCurrentActivity()?.javaClass?.simpleName
+        } catch (_: Throwable) {
+            null
+        }
+
         return DeviceInfo(
             model = Build.MODEL,
             osVersion = Build.VERSION.RELEASE,
@@ -149,7 +175,14 @@ class FeedbackViewModel(application: Application) : AndroidViewModel(application
             } else {
                 @Suppress("DEPRECATION")
                 packageInfo?.versionCode?.toLong() ?: 0L
-            }
+            },
+            availableRamMb = memInfo?.availMem?.div(1024 * 1024) ?: 0L,
+            totalRamMb = memInfo?.totalMem?.div(1024 * 1024) ?: 0L,
+            lowMemory = memInfo?.lowMemory ?: false,
+            appHeapUsedMb = heapUsedBytes / (1024 * 1024),
+            appHeapMaxMb = rt.maxMemory() / (1024 * 1024),
+            topActivity = topActivity,
+            manufacturer = Build.MANUFACTURER
         )
     }
 }

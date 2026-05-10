@@ -130,6 +130,11 @@ class OperitApplication : Application(), ImageLoaderFactory, WorkConfiguration.P
             AppLogger.resetLogFile()
         }
 
+        // Install frame-skip logger + StrictMode (debug only) before any heavy work,
+        // so that "main thread blocked Xms" events at startup are captured in operit.log
+        // and shipped to the feedback server.
+        com.ai.assistance.operit.util.MainThreadHealthInstaller.install()
+
         ensureWorkManagerInitialized()
 
         if (isCrashReportRecoveryStartup) {

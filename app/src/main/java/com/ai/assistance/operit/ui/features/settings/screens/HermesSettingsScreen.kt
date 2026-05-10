@@ -28,16 +28,24 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ai.assistance.operit.R
+import com.ai.assistance.operit.hermes.gateway.HermesGatewayPreferences
 import com.ai.assistance.operit.ui.components.CustomScaffold
+import com.ai.assistance.operit.util.AppLogger
+import android.os.SystemClock
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun HermesSettingsScreen(
@@ -47,6 +55,15 @@ fun HermesSettingsScreen(
     navigateToGatewayService: () -> Unit,
     navigateToQrBind: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val prefs = remember { HermesGatewayPreferences.getInstance(context) }
+    // Pre-warm EncryptedSharedPreferences off the main thread so that when the
+    // user taps a sub-card, the credentials/QR sub-screen's `remember { ... readSecret(...) }`
+    // path doesn't pay the AndroidKeyStore + Tink cold-init cost (300–2000 ms on
+    // some devices) on the main thread. See `hermes-perf` logs for actual timings.
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) { prefs.warmUpSecrets() }
+    }
     CustomScaffold { padding: PaddingValues ->
         Column(
             modifier = Modifier
@@ -60,31 +77,31 @@ fun HermesSettingsScreen(
                 title = stringResource(R.string.screen_title_hermes_gateway_credentials),
                 subtitle = stringResource(R.string.hermes_settings_gateway_credentials_subtitle),
                 icon = Icons.Default.VpnKey,
-                onClick = navigateToCredentials,
+                onClick = { logTap("credentials"); navigateToCredentials() },
             )
             HermesSubScreenCard(
                 title = stringResource(R.string.screen_title_hermes_gateway_policies),
                 subtitle = stringResource(R.string.hermes_settings_gateway_policies_subtitle),
                 icon = Icons.Default.Rule,
-                onClick = navigateToPolicies,
+                onClick = { logTap("policies"); navigateToPolicies() },
             )
             HermesSubScreenCard(
                 title = stringResource(R.string.screen_title_hermes_agent_params),
                 subtitle = stringResource(R.string.hermes_settings_agent_params_subtitle),
                 icon = Icons.Default.Tune,
-                onClick = navigateToAgentParams,
+                onClick = { logTap("agent_params"); navigateToAgentParams() },
             )
             HermesSubScreenCard(
                 title = stringResource(R.string.screen_title_hermes_gateway_service),
                 subtitle = stringResource(R.string.hermes_settings_gateway_service_subtitle),
                 icon = Icons.Default.PowerSettingsNew,
-                onClick = navigateToGatewayService,
+                onClick = { logTap("gateway_service"); navigateToGatewayService() },
             )
             HermesSubScreenCard(
                 title = stringResource(R.string.screen_title_hermes_gateway_qr_bind),
                 subtitle = stringResource(R.string.hermes_settings_gateway_qr_bind_subtitle),
                 icon = Icons.Default.QrCode,
-                onClick = navigateToQrBind,
+                onClick = { logTap("qr_bind"); navigateToQrBind() },
             )
             Spacer(Modifier.size(8.dp))
             Text(
@@ -94,6 +111,13 @@ fun HermesSettingsScreen(
             )
         }
     }
+}
+
+private fun logTap(card: String) {
+    AppLogger.i(
+        "settings-perf",
+        "settings-hub: tapped $card at uptimeMs=${SystemClock.uptimeMillis()}"
+    )
 }
 
 @Composable

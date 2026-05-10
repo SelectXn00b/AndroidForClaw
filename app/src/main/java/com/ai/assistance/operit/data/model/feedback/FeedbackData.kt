@@ -18,7 +18,8 @@ data class FeedbackRequest(
     val errorContext: ErrorContext? = null,
     val hermesErrorLogs: String? = null,
     val hermesAgentLogs: String? = null,
-    val packageLogs: String? = null
+    val packageLogs: String? = null,
+    val anrReport: String? = null
 )
 
 @Serializable
@@ -27,7 +28,16 @@ data class DeviceInfo(
     val osVersion: String,
     val sdkVersion: Int,
     val appVersion: String,
-    val appVersionCode: Long
+    val appVersionCode: Long,
+    // Runtime state at submission time — useful for diagnosing freezes / OOM.
+    // Optional with safe defaults so old clients deserialize unchanged.
+    val availableRamMb: Long = 0L,
+    val totalRamMb: Long = 0L,
+    val lowMemory: Boolean = false,
+    val appHeapUsedMb: Long = 0L,
+    val appHeapMaxMb: Long = 0L,
+    val topActivity: String? = null,
+    val manufacturer: String? = null
 )
 
 @Serializable

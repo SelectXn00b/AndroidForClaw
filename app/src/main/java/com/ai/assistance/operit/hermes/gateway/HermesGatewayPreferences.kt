@@ -2,6 +2,8 @@ package com.ai.assistance.operit.hermes.gateway
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Looper
+import android.os.Trace
 import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -12,8 +14,10 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.ai.assistance.operit.util.AppLogger
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Preferences for the Hermes gateway feature.
@@ -85,22 +89,68 @@ class HermesGatewayPreferences private constructor(private val context: Context)
 
     // ── Per-platform secrets (encrypted) ───────────────────────────────
 
-    fun readSecret(platformKey: String, field: String): String =
-        _secrets.getString(secretKey(platformKey, field), "") ?: ""
+    fun readSecret(platformKey: String, field: String): String {
+        warnIfMainThread("readSecret($platformKey,$field)")
+        return _secrets.getString(secretKey(platformKey, field), "") ?: ""
+    }
 
     fun writeSecret(platformKey: String, field: String, value: String) {
+        warnIfMainThread("writeSecret($platformKey,$field)")
         _secrets.edit().putString(secretKey(platformKey, field), value).apply()
     }
 
     fun clearSecrets(platformKey: String) {
+        warnIfMainThread("clearSecrets($platformKey)")
         val prefix = "${platformKey}__"
         val editor = _secrets.edit()
         _secrets.all.keys.filter { it.startsWith(prefix) }.forEach { editor.remove(it) }
         editor.apply()
     }
 
+    /**
+     * Touch [_secrets] from a background thread to pre-warm the AndroidKeyStore /
+     * EncryptedSharedPreferences first-init cost (300–2000 ms on slower devices).
+     *
+     * Safe to call multiple times — `by lazy` makes subsequent calls cheap.
+     * Should be invoked from a background coroutine (e.g. `Dispatchers.IO`) before
+     * any UI screen reads/writes secrets, so composition / `onClick` paths never
+     * pay the cold-init cost on the main thread.
+     */
+    fun warmUpSecrets() {
+        val t0 = System.nanoTime()
+        @Suppress("UNUSED_VARIABLE")
+        val s = _secrets
+        val dtMs = (System.nanoTime() - t0) / 1_000_000
+        AppLogger.i(
+            "hermes-perf",
+            "HermesGatewayPreferences.warmUpSecrets dt=${dtMs}ms thread=${Thread.currentThread().name}"
+        )
+    }
+
+    private fun warnIfMainThread(method: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) return
+        // Throttle: at most one warn per (method, second) to avoid log floods
+        // when an OutlinedTextField triggers many writeSecret calls.
+        val now = System.currentTimeMillis()
+        val last = lastMainThreadWarnMs.get()
+        if (now - last < 1000L) return
+        if (!lastMainThreadWarnMs.compareAndSet(last, now)) return
+        val caller = Throwable().stackTrace
+            .drop(2)
+            .firstOrNull { !it.className.startsWith("com.ai.assistance.operit.hermes.gateway.HermesGatewayPreferences") }
+            ?.toString()
+            ?: "unknown"
+        AppLogger.w(
+            "hermes-perf",
+            "$method called on MAIN thread caller=$caller"
+        )
+    }
+
     companion object {
         @Volatile private var INSTANCE: HermesGatewayPreferences? = null
+
+        // Throttle for warnIfMainThread; shared across the (singleton) instance.
+        private val lastMainThreadWarnMs = AtomicLong(0L)
 
         fun getInstance(context: Context): HermesGatewayPreferences =
             INSTANCE ?: synchronized(this) {
@@ -145,20 +195,47 @@ class HermesGatewayPreferences private constructor(private val context: Context)
         private fun platformPolicyKey(platformKey: String, field: String) = "platform_${platformKey}_${field}"
         private fun secretKey(platformKey: String, field: String) = "${platformKey}__${field}"
 
-        private fun openSecretStore(context: Context): SharedPreferences = try {
-            val masterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-            EncryptedSharedPreferences.create(
-                context,
-                "hermes_gateway_secrets",
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-            )
-        } catch (e: Throwable) {
-            Log.w("HermesGatewayPreferences", "EncryptedSharedPreferences unavailable, falling back to plain store: ${e.message}")
-            context.getSharedPreferences("hermes_gateway_secrets_plain", Context.MODE_PRIVATE)
+        private fun openSecretStore(context: Context): SharedPreferences {
+            val onMain = Looper.myLooper() == Looper.getMainLooper()
+            val t0 = System.nanoTime()
+            Trace.beginSection("hermes-secrets-init")
+            try {
+                return try {
+                    val masterKey = MasterKey.Builder(context)
+                        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                        .build()
+                    EncryptedSharedPreferences.create(
+                        context,
+                        "hermes_gateway_secrets",
+                        masterKey,
+                        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+                    )
+                } catch (e: Throwable) {
+                    Log.w(
+                        "HermesGatewayPreferences",
+                        "EncryptedSharedPreferences unavailable, falling back to plain store: ${e.message}"
+                    )
+                    context.getSharedPreferences("hermes_gateway_secrets_plain", Context.MODE_PRIVATE)
+                }
+            } finally {
+                Trace.endSection()
+                val dtMs = (System.nanoTime() - t0) / 1_000_000
+                val tag = "hermes-perf"
+                val msg = "openSecretStore (EncryptedSharedPreferences first-init) dt=${dtMs}ms onMainThread=$onMain"
+                if (dtMs > 200 || onMain) {
+                    AppLogger.w(tag, msg)
+                    if (onMain) {
+                        // Stack trace tells us which screen's remember{} triggered the cold-init.
+                        AppLogger.w(
+                            tag,
+                            "openSecretStore main-thread cold-init stack=${Throwable().stackTraceToString().take(2000)}"
+                        )
+                    }
+                } else {
+                    AppLogger.i(tag, msg)
+                }
+            }
         }
     }
 }

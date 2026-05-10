@@ -342,35 +342,60 @@ class AnrMonitor(
     }
     
     /**
-     * 分析堆栈跟踪，提取并列出堆栈中的包名（仅保留com.ai.assistance.operit包）
+     * 分析堆栈跟踪，提取并列出堆栈中的相关包名
+     * - 应用包 (com.xiaomo.androidforclaw / com.ai.assistance.operit / com.xiaomo.hermes)
+     * - 常见的"主线程I/O"嫌疑库 (androidx.security.crypto, com.google.crypto.tink,
+     *   androidx.datastore, android.app.SharedPreferencesImpl, androidx.room, okhttp3,
+     *   java.net, java.io.File*, android.security.keystore)
+     * 这样当ANR的栈停在加密/数据库/网络/文件系统调用里时，分析section不会是空的。
      */
     private fun analyzeStackTrace(stackTrace: String): String {
         val analysis = StringBuilder()
-        val targetPackage = "com.xiaomo.androidforclaw"
-        val lines = mutableListOf<String>()
-        
+        val appPackages = listOf(
+            "com.xiaomo.androidforclaw",
+            "com.ai.assistance.operit",
+            "com.xiaomo.hermes"
+        )
+        val suspectLibraryPrefixes = listOf(
+            "androidx.security.crypto",
+            "com.google.crypto.tink",
+            "androidx.datastore",
+            "android.app.SharedPreferencesImpl",
+            "android.app.ContextImpl",
+            "androidx.room",
+            "android.database.sqlite",
+            "okhttp3",
+            "java.net",
+            "java.io.File",
+            "java.io.RandomAccessFile",
+            "android.security.keystore",
+            "android.security.KeyStore"
+        )
+        val appLines = mutableListOf<String>()
+        val libLines = mutableListOf<String>()
+
         for (line in stackTrace.lines()) {
-            // 匹配堆栈行格式: at package.Class.method(File.java:line)
             val atIndex = line.indexOf("at ")
-            if (atIndex >= 0) {
-                val stackPart = line.substring(atIndex + 3).trim()
-                // 只保留com.ai.assistance.operit包的堆栈
-                if (stackPart.startsWith(targetPackage)) {
-                    lines.add(line.trim())
-                }
+            if (atIndex < 0) continue
+            val stackPart = line.substring(atIndex + 3).trim()
+            when {
+                appPackages.any { stackPart.startsWith(it) } -> appLines.add(line.trim())
+                suspectLibraryPrefixes.any { stackPart.startsWith(it) } -> libLines.add(line.trim())
             }
         }
-        
-        // 输出捕捉到的堆栈行
-        if (lines.isNotEmpty()) {
-            analysis.append(context.getString(R.string.anr_package_calls, targetPackage, lines.size))
-            lines.forEach { line ->
-                analysis.append("$line\n")
-            }
-        } else {
-            analysis.append(context.getString(R.string.anr_cannot_extract_package_info, targetPackage))
+
+        if (appLines.isNotEmpty()) {
+            analysis.append(context.getString(R.string.anr_package_calls, appPackages.joinToString(","), appLines.size))
+            appLines.forEach { analysis.append("$it\n") }
         }
-        
+        if (libLines.isNotEmpty()) {
+            analysis.append("\n[suspect library frames] count=${libLines.size}\n")
+            libLines.forEach { analysis.append("$it\n") }
+        }
+        if (appLines.isEmpty() && libLines.isEmpty()) {
+            analysis.append(context.getString(R.string.anr_cannot_extract_package_info, appPackages.joinToString(",")))
+        }
+
         return analysis.toString()
     }
     
