@@ -1642,6 +1642,101 @@ class StandardChatManagerTool(private val context: Context) {
     }
 
     /**
+     * Spawn a sub-agent with independent context to execute a delegated task.
+     * The sub-agent gets a fresh conversation history, a focused system prompt,
+     * and returns its final result to the parent agent.
+     */
+    suspend fun spawnAgent(tool: AITool): ToolResult {
+        return try {
+            val goal = tool.parameters.find { it.name == "goal" }?.value?.trim()
+            if (goal.isNullOrBlank()) {
+                return ToolResult(
+                    toolName = tool.name,
+                    success = false,
+                    result = MessageSendResultData(chatId = "", message = ""),
+                    error = "Invalid parameter: missing goal"
+                )
+            }
+
+            val context = tool.parameters.find { it.name == "context" }?.value?.trim()
+                ?.takeIf { it.isNotBlank() }
+            val maxTurnsParam = tool.parameters.find { it.name == "max_turns" }?.value?.trim()
+            val maxTurns = maxTurnsParam?.toIntOrNull() ?: 15
+
+            // Build the sub-agent's task message
+            val taskMessage = buildString {
+                append("## Task\n")
+                append(goal)
+                if (context != null) {
+                    append("\n\n## Context\n")
+                    append(context)
+                }
+                append("\n\n## Instructions\n")
+                append("Complete the task above. Be concise and focused. ")
+                append("Report your final result clearly when done.")
+            }
+
+            // Sub-agent system prompt: focused, no recursive spawning
+            val subAgentSystemPrompt = buildString {
+                append("You are a focused sub-agent executing a delegated task. ")
+                append("You have access to all tools except spawn_agent (no recursive delegation). ")
+                append("Complete the task efficiently and report your result. ")
+                append("Do not ask the user for clarification — work with what you have.")
+            }
+
+            AppLogger.d(TAG, "spawn_agent: goal='${goal.take(80)}' maxTurns=$maxTurns")
+
+            // Use a dedicated chat instance for isolation
+            val subAgentId = "sub_${java.util.UUID.randomUUID().toString().take(8)}"
+            val enhancedService = EnhancedAIService.getInstance(appContext)
+
+            val responseBuilder = StringBuilder()
+            val responseStream = enhancedService.sendMessage(
+                message = taskMessage,
+                chatHistory = emptyList(), // Fresh independent context
+                maxTokens = 48000,
+                tokenUsageThreshold = 0.70,
+                customSystemPromptTemplate = subAgentSystemPrompt,
+                isSubTask = true, // Enables auto-continue
+                stream = true
+            )
+
+            responseStream.collect { chunk ->
+                responseBuilder.append(chunk)
+            }
+
+            val fullResponse = responseBuilder.toString()
+            // Clip the response to a reasonable size for the parent agent
+            val clippedResponse = if (fullResponse.length > 4000) {
+                fullResponse.takeLast(4000) + "\n\n[Response clipped, showing last 4000 chars]"
+            } else {
+                fullResponse
+            }
+
+            AppLogger.d(TAG, "spawn_agent: completed, response length=${fullResponse.length}")
+
+            ToolResult(
+                toolName = tool.name,
+                success = true,
+                result = MessageSendResultData(
+                    chatId = subAgentId,
+                    message = goal,
+                    aiResponse = clippedResponse,
+                    receivedAt = System.currentTimeMillis()
+                )
+            )
+        } catch (e: Exception) {
+            AppLogger.e(TAG, "spawn_agent failed", e)
+            ToolResult(
+                toolName = tool.name,
+                success = false,
+                result = MessageSendResultData(chatId = "", message = ""),
+                error = "Sub-agent execution failed: ${e.message}"
+            )
+        }
+    }
+
+    /**
      * 列出所有角色卡
      */
     suspend fun listCharacterCards(tool: AITool): ToolResult {

@@ -9,6 +9,7 @@ import com.ai.assistance.operit.data.model.ModelParameter
 import com.ai.assistance.operit.data.model.ToolPrompt
 import com.ai.assistance.operit.hermes.gateway.GatewayFileLogger
 import com.ai.assistance.operit.util.ChatMarkupRegex
+import com.ai.assistance.operit.util.ChatUtils
 import com.xiaomo.hermes.hermes.AssistantMessage
 import com.xiaomo.hermes.hermes.ChatCompletionResponse
 import com.xiaomo.hermes.hermes.ChatCompletionServer
@@ -93,6 +94,19 @@ class OperitChatCompletionServer(
         val toolCalls = extractResult.toolCalls
         val displayText = extractResult.cleanedText
 
+        // Extract inline <think>...</think> from content and separate into reasoningContent.
+        // All models that produce <think> tags intend them as hidden reasoning, never as
+        // visible response text. This ensures AgentLoop properly emits Thinking events
+        // and only treats post-think text as the assistant's visible reply.
+        val (contentWithoutThink, thinkingContent) = ChatUtils.extractThinkingContent(displayText)
+        val finalContent = contentWithoutThink.ifBlank { null }
+        val finalReasoning = thinkingContent.ifBlank { null }
+
+        if (finalReasoning != null) {
+            Log.d(TAG, "chatCompletion: extracted reasoning (${finalReasoning.length} chars), " +
+                "visible content: ${finalContent?.length ?: 0} chars")
+        }
+
         Log.d(TAG, "chatCompletion OUT: textLen=${fullText.length} " +
             "toolCalls=${toolCalls?.size ?: 0} " +
             "tokens(in=${service.inputTokenCount} cached=${service.cachedInputTokenCount} " +
@@ -114,8 +128,9 @@ class OperitChatCompletionServer(
             choices = listOf(
                 Choice(
                     message = AssistantMessage(
-                        content = displayText,
-                        toolCalls = toolCalls
+                        content = finalContent ?: displayText,
+                        toolCalls = toolCalls,
+                        reasoningContent = finalReasoning
                     )
                 )
             )

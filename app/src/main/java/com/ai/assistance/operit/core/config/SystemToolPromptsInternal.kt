@@ -1219,6 +1219,31 @@ object SystemToolPromptsInternal {
                                 )
                         ),
                         ToolPrompt(
+                            name = "spawn_agent",
+                            description = "Spawn a sub-agent with independent context to handle a delegated task. The sub-agent runs with a fresh conversation history, executes the goal using available tools, and returns its final result. Use this to parallelize work or delegate complex sub-tasks.",
+                            parametersStructured =
+                                listOf(
+                                    ToolParameterSchema(
+                                        name = "goal",
+                                        type = "string",
+                                        description = "Clear description of what the sub-agent should accomplish",
+                                        required = true
+                                    ),
+                                    ToolParameterSchema(
+                                        name = "context",
+                                        type = "string",
+                                        description = "Optional background context or relevant information for the sub-agent",
+                                        required = false
+                                    ),
+                                    ToolParameterSchema(
+                                        name = "max_turns",
+                                        type = "integer",
+                                        description = "Maximum number of agent turns (default 15)",
+                                        required = false
+                                    )
+                                )
+                        ),
+                        ToolPrompt(
                             name = "list_character_cards",
                             description = "List all role cards.",
                             parametersStructured = listOf()
@@ -3835,6 +3860,31 @@ object SystemToolPromptsInternal {
                                         name = "stream",
                                         type = "boolean",
                                         description = "可选，是否使用流式输出",
+                                        required = false
+                                    )
+                                )
+                        ),
+                        ToolPrompt(
+                            name = "spawn_agent",
+                            description = "派发子 Agent 执行独立任务。子 Agent 拥有独立上下文，执行完毕后返回结果。适合并行处理或委托复杂子任务。",
+                            parametersStructured =
+                                listOf(
+                                    ToolParameterSchema(
+                                        name = "goal",
+                                        type = "string",
+                                        description = "子 Agent 需要完成的任务描述",
+                                        required = true
+                                    ),
+                                    ToolParameterSchema(
+                                        name = "context",
+                                        type = "string",
+                                        description = "可选，提供给子 Agent 的背景信息",
+                                        required = false
+                                    ),
+                                    ToolParameterSchema(
+                                        name = "max_turns",
+                                        type = "integer",
+                                        description = "最大执行轮数（默认 15）",
                                         required = false
                                     )
                                 )

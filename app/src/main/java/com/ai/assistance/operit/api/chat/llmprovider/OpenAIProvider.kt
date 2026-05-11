@@ -1438,19 +1438,28 @@ open class OpenAIProvider(
 
         val errorText = resolveRetryErrorText(context, exception)
 
-        // Multimodal image fallback: if a 4xx error occurred and the request contained
-        // multimodal images, this is likely an API compatibility issue (not a transient error).
-        // Disable vision and allow ONE retry with text-only content, regardless of enableRetry.
+        // Multimodal image fallback: only trigger when the error clearly indicates
+        // the API does not support the image format. Check for HTTP 400 with image-related
+        // keywords in the error body. Other 4xx errors (401 auth, 403 forbidden, 422 validation)
+        // should NOT trigger image removal — they have different root causes.
         if (exception is NonRetriableException &&
             requestContainedMultimodalImages && !visionDisabledForRetry) {
-            AppLogger.w(
-                "AIService",
-                "【发送消息】4xx错误且请求包含多模态图片内容，将禁用图片后重试: ${exception.message}"
+            val errorMsg = exception.message?.lowercase() ?: ""
+            val isImageRelatedError = errorMsg.contains("400") && (
+                errorMsg.contains("image") || errorMsg.contains("vision") ||
+                errorMsg.contains("multimodal") || errorMsg.contains("content_type") ||
+                errorMsg.contains("invalid_request") || errorMsg.contains("does not support")
             )
-            visionDisabledForRetry = true
-            requestContainedMultimodalImages = false
-            onNonFatalError(buildRetryMessage("API不支持图片格式，正在移除图片重试", retryCount + 1))
-            return retryCount + 1
+            if (isImageRelatedError) {
+                AppLogger.w(
+                    "AIService",
+                    "【发送消息】400错误且与图片格式相关，将禁用图片后重试: ${exception.message}"
+                )
+                visionDisabledForRetry = true
+                requestContainedMultimodalImages = false
+                onNonFatalError(buildRetryMessage("API不支持图片格式，正在移除图片重试", retryCount + 1))
+                return retryCount + 1
+            }
         }
 
         if (!enableRetry) {
@@ -2364,7 +2373,10 @@ open class OpenAIProvider(
                                 "AIService",
                                 "【发送消息】API请求失败，状态码: ${response.code}，错误信息: $errorBody"
                             )
-                            // 4xx错误仍保留单独的异常类型，具体是否重试由统一策略决定
+                            // 4xx错误：429 (rate limit) 走可重试路径，其余 4xx 不重试
+                            if (response.code == 429) {
+                                throw IOException(context.getString(R.string.openai_error_api_request_failed_with_status, response.code, errorBody))
+                            }
                             if (response.code in 400..499) {
                                 throw NonRetriableException(context.getString(R.string.openai_error_api_request_failed_with_status, response.code, errorBody))
                             }

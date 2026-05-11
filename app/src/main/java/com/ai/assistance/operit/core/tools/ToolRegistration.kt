@@ -1355,6 +1355,17 @@ fun registerAllTools(handler: AIToolHandler, context: Context) {
             executor = { tool -> runBlocking(Dispatchers.IO) { chatManagerTool.sendMessageToAIAdvanced(tool) } }
     )
 
+    // 派发子 Agent 执行独立任务
+    handler.registerTool(
+            name = "spawn_agent",
+            descriptionGenerator = { tool ->
+                val goal = tool.parameters.find { it.name == "goal" }?.value ?: ""
+                val preview = if (goal.length > 40) "${goal.take(40)}..." else goal
+                "Spawning sub-agent: $preview"
+            },
+            executor = { tool -> runBlocking(Dispatchers.IO) { chatManagerTool.spawnAgent(tool) } }
+    )
+
     // 列出所有角色卡
     handler.registerTool(
             name = "list_character_cards",
