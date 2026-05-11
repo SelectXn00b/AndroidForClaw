@@ -41,6 +41,12 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Foreground service（Hermes Gateway 长连接 / AI 网络保活 / 悬浮聊天 / 录音 等）-->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
     <!-- 在<uses-permission>部分添加语音识别所需权限 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
@@ -307,7 +313,12 @@
         <service
             android:name=".services.FloatingChatService"
             android:enabled="true"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="dataSync|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="floating chat overlay attached to user-active session" />
+        </service>
 
         <service
             android:name=".core.tools.system.ScreenCaptureService"
@@ -328,7 +339,12 @@
         <service
             android:name=".api.chat.AIForegroundService"
             android:enabled="true"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="dataSync|specialUse|microphone">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="long-running AI chat session keep-alive" />
+        </service>
         
         <!-- 添加广播接收器配置 -->
         <receiver
@@ -376,12 +392,14 @@
         <service
             android:name=".services.UIDebuggerService"
             android:enabled="true"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <service
             android:name=".services.skillrecorder.SkillRecorderService"
             android:enabled="true"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
         
         <!-- Voice Assistant Widget Receiver -->
         <receiver
@@ -461,7 +479,8 @@
         <service
             android:name=".services.gateway.GatewayForegroundService"
             android:enabled="true"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <receiver
             android:name=".services.gateway.GatewayBootReceiver"
