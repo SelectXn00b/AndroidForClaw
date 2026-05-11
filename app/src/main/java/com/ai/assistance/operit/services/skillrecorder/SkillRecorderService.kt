@@ -8,6 +8,8 @@ import android.os.IBinder
 import android.provider.Settings
 import com.ai.assistance.operit.core.skillrecorder.FrameCapture
 import com.ai.assistance.operit.core.skillrecorder.SkillSummarizer
+import com.ai.assistance.operit.core.skillrecorder.TouchEventMonitor
+import com.ai.assistance.operit.core.skillrecorder.CoordinateElementMatcher
 import com.ai.assistance.operit.core.tools.system.action.ActionListener
 import com.ai.assistance.operit.core.tools.system.action.ActionManager
 import com.ai.assistance.operit.data.model.skillrecorder.BuilderStep
@@ -298,6 +300,7 @@ class SkillRecorderService : Service() {
 
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private lateinit var frameCapture: FrameCapture
+    private var touchEventMonitor: TouchEventMonitor? = null
     private var timerJob: Job? = null
     private var pollingJob: Job? = null
     private var startTimeMs = 0L
@@ -357,7 +360,22 @@ class SkillRecorderService : Service() {
             onActionEvent(event)
         }
 
-        // 启动 UI 轮询
+        // 启动触摸坐标监听（通过 Shizuku getevent 获取精确点击坐标）
+        serviceScope.launch {
+            try {
+                val monitor = TouchEventMonitor(this@SkillRecorderService)
+                touchEventMonitor = monitor
+                monitor.start { touchEvent ->
+                    onTouchEvent(touchEvent)
+                }
+                AppLogger.i(TAG, "触摸坐标监听已启动（getevent）")
+            } catch (e: Exception) {
+                AppLogger.w(TAG, "触摸坐标监听启动失败（降级为 UI 轮询模式）: ${e.message}")
+                // 如果 getevent 不可用，保持原有 hash 轮询作为 fallback
+            }
+        }
+
+        // 启动 UI 轮询（仅检测 SCREEN_CHANGE，CLICK 由 TouchEventMonitor 驱动）
         pollingJob = serviceScope.launch {
             lastActivityName = try {
                 UIHierarchyManager.getCurrentActivityName(this@SkillRecorderService)
@@ -381,6 +399,8 @@ class SkillRecorderService : Service() {
 
     /**
      * Poll UIHierarchyManager for Activity / UI hierarchy changes.
+     * When TouchEventMonitor is active, this only detects SCREEN_CHANGE.
+     * Falls back to hash-based CLICK inference only if touch monitor is not running.
      */
     private suspend fun pollUiChanges() {
         try {
@@ -412,10 +432,9 @@ class SkillRecorderService : Service() {
                 return
             }
 
-            // Same activity but UI content changed → likely user interaction (click, scroll, etc.)
-            // Generate a CLICK event so FrameCapture captures the UI hierarchy at this moment.
-            // The AI summarizer will infer what was clicked from the before/after UI context.
-            if (currentUiHash != 0 && currentUiHash != lastUiHierarchyHash) {
+            // UI hash changed — only generate CLICK if touch monitor is NOT active
+            // (when touch monitor is active, CLICKs come from real touch coordinates)
+            if (touchEventMonitor == null && currentUiHash != 0 && currentUiHash != lastUiHierarchyHash) {
                 val event = ActionListener.ActionEvent(
                     timestamp = now,
                     actionType = ActionListener.ActionType.CLICK,
@@ -426,6 +445,9 @@ class SkillRecorderService : Service() {
                 )
                 lastUiHierarchyHash = currentUiHash
                 onActionEvent(event)
+            } else {
+                // Still update hash for SCREEN_CHANGE tracking
+                lastUiHierarchyHash = currentUiHash
             }
 
             lastActivityName = currentActivity
@@ -458,6 +480,10 @@ class SkillRecorderService : Service() {
         // 先将状态改为非 STEP_RECORDING，防止 onActionEvent 再产生新帧
         _recordingState.value = RecordingState.STEP_PAUSED
 
+        // 停止触摸监听
+        touchEventMonitor?.stop()
+        touchEventMonitor = null
+
         // 停止轮询和事件回调（不再产生新事件）
         pollingJob?.cancel()
         pollingJob = null
@@ -477,6 +503,10 @@ class SkillRecorderService : Service() {
     }
 
     private fun discardRecording() {
+        // 停止触摸监听
+        touchEventMonitor?.stop()
+        touchEventMonitor = null
+
         pollingJob?.cancel()
         pollingJob = null
         ActionManager.getInstance(this).unregisterEventCallback(CALLBACK_ID)
@@ -502,6 +532,66 @@ class SkillRecorderService : Service() {
             val frame = frameCapture.processEvent(event, _stepFrameBuffer)
             if (frame != null) {
                 _stepFrameCount.value = _stepFrameBuffer.size
+            }
+        }
+    }
+
+    /**
+     * 处理来自 TouchEventMonitor 的真实触摸事件。
+     * 获取当前 UI 树 → 坐标匹配元素 → 生成带完整元素信息的 CLICK 事件。
+     */
+    private fun onTouchEvent(touchEvent: TouchEventMonitor.TouchEvent) {
+        if (_recordingState.value != RecordingState.STEP_RECORDING) return
+
+        serviceScope.launch {
+            try {
+                // 获取当前 UI 层级
+                val uiHierarchy = try {
+                    UIHierarchyManager.getUIHierarchy(this@SkillRecorderService) ?: ""
+                } catch (_: Exception) { "" }
+
+                // 用坐标在 UI 树中查找被点击的元素
+                val matched = if (uiHierarchy.isNotBlank()) {
+                    CoordinateElementMatcher.findElementAtCoordinate(
+                        uiHierarchy, touchEvent.x, touchEvent.y
+                    )
+                } else null
+
+                val currentActivity = try {
+                    UIHierarchyManager.getCurrentActivityName(this@SkillRecorderService)
+                } catch (_: Exception) { null }
+
+                // 生成带完整元素信息的 CLICK 事件
+                val event = ActionListener.ActionEvent(
+                    timestamp = touchEvent.timestamp,
+                    actionType = ActionListener.ActionType.CLICK,
+                    coordinates = Pair(touchEvent.x, touchEvent.y),
+                    elementInfo = if (matched != null) {
+                        ActionListener.ElementInfo(
+                            className = matched.className,
+                            text = matched.text,
+                            contentDescription = matched.contentDescription,
+                            resourceId = matched.resourceId,
+                            bounds = matched.bounds,
+                            packageName = currentActivity?.substringBeforeLast(".", "")
+                        )
+                    } else {
+                        ActionListener.ElementInfo(
+                            packageName = currentActivity?.substringBeforeLast(".", "")
+                        )
+                    },
+                    additionalData = mapOf("source" to "touch_coordinate")
+                )
+
+                onActionEvent(event)
+
+                if (matched != null) {
+                    AppLogger.d(TAG, "Touch → 元素匹配: text=${matched.text}, desc=${matched.contentDescription}, id=${matched.resourceId}")
+                } else {
+                    AppLogger.d(TAG, "Touch @ (${touchEvent.x}, ${touchEvent.y}) 未匹配到元素")
+                }
+            } catch (e: Exception) {
+                AppLogger.w(TAG, "处理触摸事件失败: ${e.message}")
             }
         }
     }
@@ -535,6 +625,8 @@ class SkillRecorderService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        touchEventMonitor?.stop()
+        touchEventMonitor = null
         timerJob?.cancel()
         pollingJob?.cancel()
         pollingJob = null

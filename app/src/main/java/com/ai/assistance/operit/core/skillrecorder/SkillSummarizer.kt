@@ -275,27 +275,28 @@ $stepsText
                     sb.appendLine("## 步骤 $stepNum: $sectionTitle（固定路径）")
                     sb.appendLine()
 
-                    // 前提条件
-                    val firstFrame = step.frames.firstOrNull()
+                    // 前提条件 — 用包名（不用内部类名如 ComposeView/FrameLayout）
                     val mainPackage = step.frames.mapNotNull { it.packageName }
                         .groupingBy { it }.eachCount()
                         .maxByOrNull { it.value }?.key
-                    if (mainPackage != null || firstFrame?.activityName != null) {
-                        val parts = mutableListOf<String>()
-                        if (mainPackage != null) parts.add("应用 $mainPackage")
-                        if (firstFrame?.activityName != null) parts.add("当前在 ${firstFrame.activityName}")
-                        sb.appendLine("> 前提：已打开${parts.joinToString("，")}")
+                    // 找第一个有意义的 Activity 名（排除内部 View 类名）
+                    val meaningfulActivity = step.frames.mapNotNull { it.activityName }
+                        .firstOrNull { !isInternalClassName(it) }
+                    if (mainPackage != null) {
+                        val actPart = if (meaningfulActivity != null) "，当前在 $meaningfulActivity" else ""
+                        sb.appendLine("> 前提：已打开应用 $mainPackage$actPart")
                     }
-                    sb.appendLine("> ⚡ 以下为录制的固定操作路径，按顺序精确执行即可。")
+                    sb.appendLine("> ⚡ 以下为录制的固定操作路径，按顺序精确执行即可。不要跳步、不要自行判断捷径。")
                     sb.appendLine()
 
+                    // 过滤掉 SCREEN_CHANGE 帧（它不是用户操作，是页面自动切换的结果）
+                    val actionFrames = step.frames.filter { it.eventType != "SCREEN_CHANGE" }
                     // 合并连续 SCROLL
-                    val condensed = FrameSimplifier.condenseFrames(step.frames)
+                    val condensed = FrameSimplifier.condenseFrames(actionFrames)
                     var actionNum = 1
                     for (frame in condensed) {
                         val desc = formatFrameAsInstruction(frame)
-                        val activityPart = frame.activityName?.let { " (Activity: $it)" } ?: ""
-                        sb.appendLine("$actionNum. $desc$activityPart")
+                        sb.appendLine("$actionNum. $desc")
                         actionNum++
                     }
                     sb.appendLine()
@@ -317,6 +318,20 @@ $stepsText
     }
 
     /**
+     * 判断 Activity/View 名称是否为内部类名（不应暴露给 AI 作为导航信息）。
+     */
+    private fun isInternalClassName(name: String): Boolean {
+        val internalPrefixes = listOf(
+            "androidx.compose.ui.platform.",
+            "android.widget.",
+            "android.view.",
+            "androidx.recyclerview.",
+            "androidx.viewpager."
+        )
+        return internalPrefixes.any { name.startsWith(it) }
+    }
+
+    /**
      * 将单个帧格式化为操作指令文本。
      * 直接使用 EventDetails 中的元素信息（ClickTargetInferrer 已在录制阶段填充）。
      */
@@ -332,12 +347,12 @@ $stepsText
                     if (frame.previousUiHierarchy.isNotBlank()) {
                         val candidates = extractClickableSummary(frame.previousUiHierarchy)
                         if (candidates.isNotBlank()) {
-                            "点击操作（界面可点击元素：$candidates）"
+                            "点击界面上某个元素（候选目标：$candidates）— 请用 get_screen_info 确认后点击最可能的目标"
                         } else {
-                            "点击操作"
+                            "点击界面上某个元素 — 请用 get_screen_info 查看当前界面后点击"
                         }
                     } else {
-                        "点击操作"
+                        "点击界面上某个元素 — 请用 get_screen_info 查看当前界面后点击"
                     }
                 } else {
                     "点击 $selector"
@@ -357,7 +372,8 @@ $stepsText
                 if (mergedCount != null) "向下滚动 ${mergedCount} 次" else "向下滚动"
             }
             "SCREEN_CHANGE" -> {
-                "页面切换到 ${frame.activityName ?: "新页面"}"
+                // 不应该到这里（已在上面过滤），但作为防御：
+                "（页面自动切换到 ${frame.activityName ?: "新页面"}，无需操作）"
             }
             else -> frame.eventType
         }
