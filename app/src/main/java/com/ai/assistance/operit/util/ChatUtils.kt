@@ -46,22 +46,32 @@ object ChatUtils {
 
     /**
      * 提取think标签内的内容（用于DeepSeek的reasoning_content）
+     *
+     * 同时处理：
+     * 1. `<think>...</think>` / `<thinking>...</thinking>` 闭合标签 — 取标签内文本作为 reasoning
+     * 2. `<think>...` / `<thinking>...` 未闭合（被截断 / 流式中断）— 把开始标签到字符串末尾整段当 reasoning
+     *    避免脏数据（带开放 `<think>`）落库后污染下一轮请求历史，导致部分模型空回复（飞书无响应 bug）
+     *
+     * 行为与 [removeThinkingContent] 对齐（都用 `\z` fallback），消除两个工具函数的不一致。
+     *
      * @param content 包含think标签的内容
      * @return Pair(移除think标签后的内容, think标签内的内容)
      */
     fun extractThinkingContent(content: String): Pair<String, String> {
-        val thinkPattern = "<think(?:ing)?>([\\s\\S]*?)</think(?:ing)?>".toRegex(RegexOption.DOT_MATCHES_ALL)
+        // 闭合标签优先匹配（贪婪到最近的 </think>）；如无闭合则吃到字符串末尾。
+        // 使用两个独立 group 区分闭合 / 未闭合分支，便于提取捕获文本。
+        val thinkPattern = "<think(?:ing)?>([\\s\\S]*?)(?:</think(?:ing)?>|\\z)".toRegex(RegexOption.DOT_MATCHES_ALL)
         val thinkMatches = thinkPattern.findAll(content)
-        
+
         // 收集所有think标签内的内容
         val thinkingContent = thinkMatches.joinToString("\n") { it.groupValues[1].trim() }
-        
-        // 移除think标签和search标签
+
+        // 移除think标签和search标签（两者都支持未闭合 fallback）
         val contentWithoutThink = content
             .replace(thinkPattern, "")
-            .replace("<search>.*?(</search>|\\z)".toRegex(RegexOption.DOT_MATCHES_ALL), "")
+            .replace("<search>[\\s\\S]*?(</search>|\\z)".toRegex(RegexOption.DOT_MATCHES_ALL), "")
             .trim()
-        
+
         return Pair(contentWithoutThink, thinkingContent)
     }
 

@@ -27,6 +27,7 @@ data class PromptTurn(
     val kind: PromptTurnKind,
     val content: String,
     val toolName: String? = null,
+    val reasoningContent: String? = null,
     val metadata: Map<String, Any?> = emptyMap()
 ) {
     val role: String
@@ -45,12 +46,14 @@ data class PromptTurn(
             role: String,
             content: String,
             toolName: String? = null,
+            reasoningContent: String? = null,
             metadata: Map<String, Any?> = emptyMap()
         ): PromptTurn {
             return PromptTurn(
                 kind = PromptTurnKind.fromRole(role),
                 content = content,
                 toolName = toolName,
+                reasoningContent = reasoningContent,
                 metadata = metadata
             )
         }
@@ -102,7 +105,19 @@ fun List<PromptTurn>.mergeAdjacentTurns(
 
 fun List<Pair<String, String>>.toPromptTurns(): List<PromptTurn> {
     return map { (role, content) ->
-        PromptTurn.fromRole(role = role, content = content)
+        // For assistant messages, extract inline <think>...</think> into reasoningContent
+        // so MiMo thinking-mode can roundtrip it. Other providers ignore the field.
+        if (role.trim().lowercase() in setOf("assistant", "ai")) {
+            val (cleaned, thinking) = com.ai.assistance.operit.util.ChatUtils.extractThinkingContent(content)
+            val rc = thinking.ifBlank { null }
+            if (rc != null) {
+                com.ai.assistance.operit.hermes.gateway.GatewayFileLogger.w("PromptTurn",
+                    "[MIMO_DBG] toPromptTurns assistant: extracted reasoning=len=${rc.length}")
+            }
+            PromptTurn.fromRole(role = role, content = cleaned, reasoningContent = rc)
+        } else {
+            PromptTurn.fromRole(role = role, content = content)
+        }
     }
 }
 

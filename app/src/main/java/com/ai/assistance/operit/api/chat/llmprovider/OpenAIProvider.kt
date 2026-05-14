@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Environment
 import android.util.Base64
 import com.ai.assistance.operit.R
+import com.ai.assistance.operit.hermes.gateway.GatewayFileLogger
 import com.ai.assistance.operit.core.chat.hooks.PromptTurn
 import com.ai.assistance.operit.core.chat.hooks.PromptTurnKind
 import com.ai.assistance.operit.data.model.ApiProviderType
@@ -688,7 +689,13 @@ open class OpenAIProvider(
         turn: PromptTurn,
         preserveThinkInHistory: Boolean
     ): String {
-        return if (!preserveThinkInHistory && turn.kind == PromptTurnKind.ASSISTANT) {
+        // Strip think tags from assistant-side history when not explicitly preserved.
+        // Covers both ASSISTANT and TOOL_CALL kinds — both are "assistant" role to OpenAI
+        // and can carry think tags (closed or unclosed). Without this, dirty open-think
+        // tags from truncated streams pollute the next request and cause some models
+        // (DeepSeek / OpenRouter / MiMo think) to reply empty after auto-summary.
+        return if (!preserveThinkInHistory &&
+            (turn.kind == PromptTurnKind.ASSISTANT || turn.kind == PromptTurnKind.TOOL_CALL)) {
             ChatUtils.removeThinkingContent(turn.content)
         } else {
             turn.content
@@ -859,6 +866,7 @@ open class OpenAIProvider(
         val effectiveHistory = providerReadyHistory
 
         var queuedAssistantToolText: String? = null
+        var queuedAssistantReasoning: String? = null
         var queuedToolCalls = JSONArray()
         val queuedToolCallIds = mutableListOf<String>()
         val openToolCallIds = mutableListOf<String>()
@@ -873,8 +881,15 @@ open class OpenAIProvider(
                 }
         }
 
-        fun queueToolCalls(textContent: String, toolCalls: JSONArray) {
+        fun queueToolCalls(textContent: String, toolCalls: JSONArray, reasoningContent: String? = null) {
+            GatewayFileLogger.w("AIService", "[MIMO_DBG] queueToolCalls: " +
+                "rc=${if (reasoningContent != null) "len=${reasoningContent.length}" else "NULL"} " +
+                "queuedRC=${if (queuedAssistantReasoning != null) "len=${queuedAssistantReasoning?.length}" else "NULL"} " +
+                "toolCallsCount=${toolCalls.length()}")
             appendQueuedAssistantToolText(textContent)
+            if (!reasoningContent.isNullOrEmpty() && queuedAssistantReasoning.isNullOrEmpty()) {
+                queuedAssistantReasoning = reasoningContent
+            }
             for (i in 0 until toolCalls.length()) {
                 val toolCall = toolCalls.optJSONObject(i) ?: continue
                 queuedToolCalls.put(toolCall)
@@ -887,6 +902,9 @@ open class OpenAIProvider(
 
         fun emitQueuedToolCallsIfNeeded() {
             if (queuedToolCalls.length() == 0) return
+            GatewayFileLogger.w("AIService", "[MIMO_DBG] emitQueuedToolCallsIfNeeded: " +
+                "queuedRC=${if (queuedAssistantReasoning != null) "len=${queuedAssistantReasoning?.length}" else "NULL"} " +
+                "toolCalls=${queuedToolCalls.length()}")
 
             val historyMessage = JSONObject()
             historyMessage.put("role", "assistant")
@@ -900,10 +918,16 @@ open class OpenAIProvider(
                 historyMessage.put("content", null)
             }
             historyMessage.put("tool_calls", queuedToolCalls)
+            // Round-trip reasoning_content for MiMo thinking mode (required when tool_calls in history).
+            // See: https://platform.xiaomimimo.com/static/docs/usage-guide/passing-back-reasoning_content.md
+            queuedAssistantReasoning?.takeIf { it.isNotEmpty() }?.let {
+                historyMessage.put("reasoning_content", it)
+            }
             messagesArray.put(historyMessage)
 
             openToolCallIds.addAll(queuedToolCallIds)
             queuedAssistantToolText = null
+            queuedAssistantReasoning = null
             queuedToolCalls = JSONArray()
             queuedToolCallIds.clear()
         }
@@ -969,7 +993,9 @@ open class OpenAIProvider(
                                 if (openToolCallIds.isNotEmpty()) {
                                     flushOpenToolCallsAsCancelled("assistant_tool_call_before_result")
                                 }
-                                queueToolCalls(textContent, toolCalls)
+                                GatewayFileLogger.w("AIService", "[MIMO_DBG] ASSISTANT branch: " +
+                                    "turn.rc=${if (turn.reasoningContent != null) "len=${turn.reasoningContent?.length}" else "NULL"}")
+                                queueToolCalls(textContent, toolCalls, turn.reasoningContent)
                             } else {
                                 flushOpenToolCallsAsCancelled("assistant_boundary")
                                 val effectiveContent = if (content.isBlank()) {
@@ -982,6 +1008,9 @@ open class OpenAIProvider(
                                     JSONObject().apply {
                                         put("role", "assistant")
                                         put("content", buildContentField(context, effectiveContent))
+                                        turn.reasoningContent?.takeIf { it.isNotEmpty() }?.let {
+                                            put("reasoning_content", it)
+                                        }
                                     }
                                 )
                             }
@@ -1000,7 +1029,9 @@ open class OpenAIProvider(
                                 if (openToolCallIds.isNotEmpty()) {
                                     flushOpenToolCallsAsCancelled("typed_tool_call_before_result")
                                 }
-                                queueToolCalls(textContent, toolCalls)
+                                GatewayFileLogger.w("AIService", "[MIMO_DBG] TOOL_CALL branch: " +
+                                    "turn.rc=${if (turn.reasoningContent != null) "len=${turn.reasoningContent?.length}" else "NULL"}")
+                                queueToolCalls(textContent, toolCalls, turn.reasoningContent)
                             } else {
                                 flushOpenToolCallsAsCancelled("typed_tool_call_without_payload")
                                 val effectiveContent = if (content.isBlank()) "[Empty]" else content
@@ -1008,6 +1039,9 @@ open class OpenAIProvider(
                                     JSONObject().apply {
                                         put("role", "assistant")
                                         put("content", buildContentField(context, effectiveContent))
+                                        turn.reasoningContent?.takeIf { it.isNotEmpty() }?.let {
+                                            put("reasoning_content", it)
+                                        }
                                     }
                                 )
                             }
@@ -1082,12 +1116,42 @@ open class OpenAIProvider(
                     }
 
                     historyMessage.put("content", buildContentField(context, effectiveContent))
+                    if (role == "assistant") {
+                        turn.reasoningContent?.takeIf { it.isNotEmpty() }?.let {
+                            historyMessage.put("reasoning_content", it)
+                        }
+                    }
                     messagesArray.put(historyMessage)
                 }
             }
         }
 
         flushOpenToolCallsAsCancelled("history_end")
+
+        // [MIMO_DBG] Audit: dump every assistant message's reasoning_content presence
+        try {
+            val audit = StringBuilder("[MIMO_DBG] messages dump (")
+                .append(messagesArray.length()).append(" total):\n")
+            for (i in 0 until messagesArray.length()) {
+                val m = messagesArray.optJSONObject(i) ?: continue
+                val role = m.optString("role", "?")
+                val toolCallsArr = m.optJSONArray("tool_calls")
+                val hasToolCalls = toolCallsArr != null && toolCallsArr.length() > 0
+                val hasReasoning = m.has("reasoning_content") && !m.isNull("reasoning_content")
+                val reasoningLen = if (hasReasoning) m.optString("reasoning_content", "").length else 0
+                if (role == "assistant") {
+                    audit.append("  [").append(i).append("] role=assistant ")
+                        .append("tool_calls=").append(hasToolCalls).append(" ")
+                        .append("reasoning_content=").append(if (hasReasoning) "len=$reasoningLen" else "MISSING")
+                        .append("\n")
+                }
+            }
+            GatewayFileLogger.w("AIService", audit.toString())
+            AppLogger.w("AIService", audit.toString())
+        } catch (e: Exception) {
+            GatewayFileLogger.w("AIService", "[MIMO_DBG] audit failed: ${e.message}")
+            AppLogger.w("AIService", "[MIMO_DBG] audit failed: ${e.message}")
+        }
 
         return Pair(messagesArray, tokenCount)
     }
@@ -1447,8 +1511,7 @@ open class OpenAIProvider(
             val errorMsg = exception.message?.lowercase() ?: ""
             val isImageRelatedError = errorMsg.contains("400") && (
                 errorMsg.contains("image") || errorMsg.contains("vision") ||
-                errorMsg.contains("multimodal") || errorMsg.contains("content_type") ||
-                errorMsg.contains("invalid_request") || errorMsg.contains("does not support")
+                errorMsg.contains("multimodal") || errorMsg.contains("content_type")
             )
             if (isImageRelatedError) {
                 AppLogger.w(

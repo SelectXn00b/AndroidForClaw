@@ -23,7 +23,7 @@
 | CORE | 4 (alignment) | 0 | §2 三件套对齐脚本 |
 | PARSER | 36 | 0 | `MissingParsersTest.kt` + `DeepseekV3ParserTest.kt` + `Glm45ParserTest.kt` + `KimiK2ParserTest.kt` + `MistralParserTest.kt` |
 | AGENT (ErrorClassifier) | 48 | 0 | `ErrorClassifierTest.kt` |
-| AGENT (Helpers) | 22 | 0 | `AgentHelpersTest.kt` |
+| AGENT (Helpers) | 29 | 0 | `AgentHelpersTest.kt` + `ChatUtilsTest.kt` |
 | AGENT (FileSafety) | 10 | 0 | `FileSafetyTest.kt` |
 | AGENT (TurnLoop) | 3 (E2E) + 6 (unit) | 0 | `scripts/e2e/*.sh` + `HermesAgentLoopBeforeNextTurnTest.kt` |
 | AGENT (CredentialPool) | 0 | 7 | `CredentialPoolTest` (待建) |
@@ -226,6 +226,24 @@ CORE 域的两条顶层约束（R-CORE-001 1:1 对齐 / R-CORE-002 冲突以 Her
 | TC-AGENT-135-a | R-AGENT-003 | `generateFromMessages New Chat when no user` | ✅ |
 | TC-AGENT-136-a | R-AGENT-003 | `TITLE_PROMPT contains instructions` | ✅ |
 | TC-AGENT-137-a | R-AGENT-003 | `generateTitle returns null stub` | ✅ |
+
+### ChatUtils — Thinking 标签提取（飞书自动总结无响应 bug 修复）
+
+测试类: `app/src/test/java/com/ai/assistance/operit/util/ChatUtilsTest.kt`
+
+背景: commit 57725517 在 `OperitChatCompletionServer.chatCompletion()` 引入 `ChatUtils.extractThinkingContent`，原正则 `<think(?:ing)?>([\s\S]*?)</think(?:ing)?>` 不兼容**未闭合** `<think>`（流式被截断 / 模型输出不完整时）。脏开放 think 标签落库 → 下一轮请求历史被污染 → 部分模型（DeepSeek / OpenRouter / MiMo think）首轮空回复 → AgentLoop 空回复兜底在 `turn==0 && reasoning==null` 不触发 → 飞书网关读到空消息，用户必须 `/new` 才能恢复。
+
+修复: `extractThinkingContent` 与同文件 `removeThinkingContent` 对齐，未闭合分支用 `\z` 吃到末尾；`OpenAIProvider.comparableContentForTurn` 的清洗扩到 `TOOL_CALL` kind；`EnhancedAIService.toOpenAiMessages`（飞书 / bot relay 路径）发请求前对 assistant/tool_result 历史 content 过一次 `removeThinkingContent`。
+
+| TC | 验 R | 测试方法 | 状态 |
+|---|---|---|---|
+| TC-AGENT-003-thinkfix-a | R-AGENT-003 | `extractThinkingContent_handlesUnclosedThink` | ✅ |
+| TC-AGENT-003-thinkfix-b | R-AGENT-003 | `extractThinkingContent_handlesUnclosedThinking` | ✅ |
+| TC-AGENT-003-thinkfix-c | R-AGENT-003 | `extractThinkingContent_closedTagStillExtractsCorrectly` | ✅ |
+| TC-AGENT-003-thinkfix-d | R-AGENT-003 | `extractThinkingContent_noThinkTagPreservesContent` | ✅ |
+| TC-AGENT-003-thinkfix-e | R-AGENT-003 | `extractThinkingContent_closedFollowedByUnclosed` | ✅ |
+| TC-AGENT-003-thinkfix-f | R-AGENT-003 | `extractThinkingContent_alignsWithRemoveThinkingContent_closed` | ✅ |
+| TC-AGENT-003-thinkfix-g | R-AGENT-003 | `extractThinkingContent_alignsWithRemoveThinkingContent_unclosed` | ✅ |
 
 ---
 
@@ -1043,7 +1061,7 @@ SAFETY 大多通过引用其它域的 TC 覆盖；此处列集成层 smoke。
 | CORE | 2 | 5 | 5 (alignment) | 0 |
 | PARSER | 10 | 36 | 36 | 0 |
 | AGENT (ErrorClassifier) | 1 | 48 | 48 | 0 |
-| AGENT (Helpers) | 1 | 22 | 22 | 0 |
+| AGENT (Helpers) | 1 | 29 | 29 | 0 |
 | AGENT (FileSafety) | 1 | 10 | 10 | 0 |
 | AGENT (TurnLoop) | 1 | 9 | 9 (3 E2E + 6 unit) | 0 |
 | AGENT (CredentialPool) | 1 | 7 | 0 | 7 |
@@ -1057,7 +1075,7 @@ SAFETY 大多通过引用其它域的 TC 覆盖；此处列集成层 smoke。
 | SAFETY | 2 | 10 | 9 | 1 |
 | CONFIG | (删除) | 23 | 0 | 23 |
 | UI | 1 | 30 | 0 | 30 |
-| **合计** | **42** | **585** | **335** | **250** |
+| **合计** | **42** | **592** | **342** | **250** |
 
 > CONFIG 域 23 条 TC 在 requirements.md 三轮 prune 后归并到 R-GW-001 / R-GW-006 / R-UI-001，保留 TC 行以便 Phase 3 落地（测试类本身不受域归并影响）。
 

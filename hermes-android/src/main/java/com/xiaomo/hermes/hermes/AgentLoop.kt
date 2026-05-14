@@ -394,6 +394,9 @@ class HermesAgentLoop(
                 if (reasoning != null) {
                     msgDict["reasoning_content"] = reasoning
                 }
+                Log.w(_TAG, "[MIMO_DBG] AgentLoop add assistant+toolCalls: " +
+                    "reasoning=${if (reasoning != null) "len=${reasoning.length}" else "NULL"} " +
+                    "content=${(assistantMsg.content ?: "").length} chars")
                 messages.add(msgDict)
 
                 // Execute tool calls in parallel when multiple are requested.

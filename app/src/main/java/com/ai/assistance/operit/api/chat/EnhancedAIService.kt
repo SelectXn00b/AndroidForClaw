@@ -1328,15 +1328,32 @@ class EnhancedAIService private constructor(private val context: Context) {
                 PromptTurnKind.TOOL_RESULT -> "tool"
                 PromptTurnKind.SUMMARY -> "system"
             }
+            // Sanitize assistant/tool_call history content before sending to provider:
+            // strip any <think>/<thinking>/<search> blocks (including unclosed ones from
+            // truncated streams). Without this, dirty open-think tags from prior turns
+            // pollute the request and cause some models (DeepSeek / OpenRouter / MiMo think)
+            // to reply empty after auto-summary, surfacing as "Feishu unresponsive, /new fixes it".
+            val sanitizedContent = if (role == "assistant" || role == "tool") {
+                ChatUtils.removeThinkingContent(turn.content)
+            } else {
+                turn.content
+            }
             val base = mutableMapOf<String, Any?>(
                 "role" to role,
-                "content" to turn.content
+                "content" to sanitizedContent
             )
             if (role == "tool" && turn.toolName != null) {
                 // No original id available; synthesize a stable placeholder so
                 // downstream code doesn't crash on missing tool_call_id.
                 base["tool_call_id"] = "history_${turn.toolName}"
                 base["name"] = turn.toolName
+            }
+            // Roundtrip reasoning_content back to MiMo (required when assistant
+            // history contains tool_calls in thinking mode).
+            if (role == "assistant" && turn.reasoningContent != null) {
+                base["reasoning_content"] = turn.reasoningContent
+                GatewayFileLogger.w("AIService",
+                    "[MIMO_DBG] toOpenAiMessages assistant: reasoning_content=len=${turn.reasoningContent.length}")
             }
             base.toMap()
         }
@@ -1360,9 +1377,14 @@ class EnhancedAIService private constructor(private val context: Context) {
                 )
                 "assistant" -> {
                     val hasToolCalls = (msg["tool_calls"] as? List<*>)?.isNotEmpty() == true
+                    val reasoning = msg["reasoning_content"] as? String
+                    GatewayFileLogger.w("AIService", "[MIMO_DBG] toPromptTurnsForHistory assistant: " +
+                        "hasToolCalls=$hasToolCalls " +
+                        "reasoning_content=${if (reasoning != null) "len=${reasoning.length}" else "MISSING"}")
                     PromptTurn(
                         kind = if (hasToolCalls) PromptTurnKind.TOOL_CALL else PromptTurnKind.ASSISTANT,
-                        content = rawContent
+                        content = rawContent,
+                        reasoningContent = reasoning
                     )
                 }
                 else -> PromptTurn(kind = PromptTurnKind.USER, content = rawContent)

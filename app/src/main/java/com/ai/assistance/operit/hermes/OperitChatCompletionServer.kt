@@ -106,6 +106,10 @@ class OperitChatCompletionServer(
             Log.d(TAG, "chatCompletion: extracted reasoning (${finalReasoning.length} chars), " +
                 "visible content: ${finalContent?.length ?: 0} chars")
         }
+        GatewayFileLogger.w(TAG, "[MIMO_DBG] chatCompletion OUT: " +
+            "reasoning=${if (finalReasoning != null) "len=${finalReasoning.length}" else "NULL"} " +
+            "content=${finalContent?.length ?: 0} chars " +
+            "toolCalls=${toolCalls?.size ?: 0}")
 
         Log.d(TAG, "chatCompletion OUT: textLen=${fullText.length} " +
             "toolCalls=${toolCalls?.size ?: 0} " +
@@ -347,6 +351,17 @@ class OperitChatCompletionServer(
         toolCallIdToName: Map<String, String>
     ): PromptTurn {
         val role = (this["role"] as? String) ?: "user"
+        if (role == "assistant") {
+            val rc = this["reasoning_content"]
+            val rcInfo = when {
+                rc == null -> "MISSING"
+                rc is String -> "len=${rc.length}"
+                else -> "type=${rc::class.simpleName}"
+            }
+            val hasTC = (this["tool_calls"] as? List<*>)?.isNotEmpty() == true
+            Log.w(TAG, "[MIMO_DBG] toPromptTurn assistant: tool_calls=$hasTC reasoning_content=$rcInfo")
+            GatewayFileLogger.w(TAG, "[MIMO_DBG] toPromptTurn assistant: tool_calls=$hasTC reasoning_content=$rcInfo")
+        }
         val rawContent = when (val c = this["content"]) {
             is String -> c
             is List<*> -> c.filterIsInstance<Map<*, *>>()
@@ -413,13 +428,20 @@ class OperitChatCompletionServer(
             }
             return PromptTurn(
                 kind = PromptTurnKind.TOOL_CALL,
-                content = rebuiltContent
+                content = rebuiltContent,
+                reasoningContent = this["reasoning_content"] as? String
             )
         }
 
         val kind = PromptTurnKind.fromRole(role)
         val toolName = this["name"] as? String
-        return PromptTurn(kind = kind, content = rawContent, toolName = toolName)
+        val reasoningContent = if (role == "assistant") this["reasoning_content"] as? String else null
+        return PromptTurn(
+            kind = kind,
+            content = rawContent,
+            toolName = toolName,
+            reasoningContent = reasoningContent
+        )
     }
 
     internal fun detectToolResultStatus(json: String): String {

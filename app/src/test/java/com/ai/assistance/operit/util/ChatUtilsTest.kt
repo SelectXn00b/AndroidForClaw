@@ -118,4 +118,56 @@ class ChatUtilsTest {
         val turn = PromptTurn(PromptTurnKind.USER, "hello")
         assertTrue(ChatUtils.stripGeminiThoughtSignatureMetaTurns(listOf(turn)).single() === turn)
     }
+
+    // --- TC-AGENT-003-thinkfix-* : 飞书自动总结后部分模型空回复 bug 修复 ---
+    // 见 docs/hermes-test-cases.md 域 AGENT — Helpers 段（R-AGENT-003）
+
+    /** TC-AGENT-003-thinkfix-a: extractThinkingContent 处理未闭合 <think>，整段当 reasoning 剥离 */
+    @Test fun extractThinkingContent_handlesUnclosedThink() {
+        val (content, reasoning) = ChatUtils.extractThinkingContent("<think>truncated draft")
+        assertEquals("", content)
+        assertEquals("truncated draft", reasoning)
+    }
+
+    /** TC-AGENT-003-thinkfix-b: extractThinkingContent 处理未闭合 <thinking>，整段当 reasoning 剥离 */
+    @Test fun extractThinkingContent_handlesUnclosedThinking() {
+        val (content, reasoning) = ChatUtils.extractThinkingContent("<thinking>truncated draft")
+        assertEquals("", content)
+        assertEquals("truncated draft", reasoning)
+    }
+
+    /** TC-AGENT-003-thinkfix-c: extractThinkingContent 闭合标签后跟正文，未闭合分支不影响闭合分支 */
+    @Test fun extractThinkingContent_closedTagStillExtractsCorrectly() {
+        val (content, reasoning) = ChatUtils.extractThinkingContent("<think>r</think>visible")
+        assertEquals("visible", content)
+        assertEquals("r", reasoning)
+    }
+
+    /** TC-AGENT-003-thinkfix-d: extractThinkingContent 没有 think 标签时正文原样返回 */
+    @Test fun extractThinkingContent_noThinkTagPreservesContent() {
+        val (content, reasoning) = ChatUtils.extractThinkingContent("just plain answer")
+        assertEquals("just plain answer", content)
+        assertEquals("", reasoning)
+    }
+
+    /** TC-AGENT-003-thinkfix-e: extractThinkingContent 闭合 + 未闭合混合，闭合先匹配，剩余未闭合到末尾 */
+    @Test fun extractThinkingContent_closedFollowedByUnclosed() {
+        val (content, reasoning) = ChatUtils.extractThinkingContent("<think>a</think>mid<think>b unfinished")
+        assertEquals("mid", content)
+        assertEquals("a\nb unfinished", reasoning)
+    }
+
+    /** TC-AGENT-003-thinkfix-f: extractThinkingContent 行为与 removeThinkingContent 在闭合场景一致 */
+    @Test fun extractThinkingContent_alignsWithRemoveThinkingContent_closed() {
+        val input = "<think>r</think>answer"
+        val (content, _) = ChatUtils.extractThinkingContent(input)
+        assertEquals(ChatUtils.removeThinkingContent(input), content)
+    }
+
+    /** TC-AGENT-003-thinkfix-g: extractThinkingContent 行为与 removeThinkingContent 在未闭合场景一致 */
+    @Test fun extractThinkingContent_alignsWithRemoveThinkingContent_unclosed() {
+        val input = "prefix<think>truncated"
+        val (content, _) = ChatUtils.extractThinkingContent(input)
+        assertEquals(ChatUtils.removeThinkingContent(input), content)
+    }
 }
