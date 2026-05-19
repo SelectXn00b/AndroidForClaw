@@ -81,3 +81,6 @@ __pycache__/
 
 # Broken Claude Code IPC symlinks that leak into repo root (aha_ipc_native_* in $TMPDIR)
 /lib*.dylib
+
+# locally-built debug APKs that occasionally drop into repo root
+/app-debug-update*.apk
