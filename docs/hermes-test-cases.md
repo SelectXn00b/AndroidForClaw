@@ -775,6 +775,22 @@ R-AGENT-001 描述 agent turn-loop 内核，验收以 **E2E 为主**（§3 三�
 | TC-GW-102-a | R-GW-003 | markdown >1 段 | 按段拆分 | unit | `WeixinMarkdownTest#chunk split` ✅ |
 | TC-GW-103-a | R-GW-003 | `qrLogin()` 成功 | 账号持久化 + 返 state | integration | `WeixinPersistenceTest#qr login persists` ✅ |
 
+### Weixin.kt — 入站媒体采集（bugfix：图片消息丢失）
+
+背景: 用户在微信里发图后，agent 端只收到空文本（或纯文字部分）。Python 上游 `gateway/platforms/weixin.py:1325-1357` 在 `_process_incoming_event` 里对 `item_list` 同时做 `_extract_text` 与 `_collect_media`，把下载并解密后的本地路径塞进 `MessageEvent.media_urls`/`media_types`。Kotlin `Weixin._handleInbound`（`Weixin.kt:310-356`）只调 `_extractText`，且当 `text.isBlank()` 时直接 `return`，导致纯图片入站被无声丢弃；即便 `MessageEvent.mediaUrls`/`mediaTypes` 字段存在（`Base.kt:131,133`），也从不被填充。
+
+修复方向（合规于 R-GW-003 既有需求"消息收发对齐 Python 上游"）: 1) 翻译 Python `_collect_media` / `_download_image` / `_download_video` / `_download_file` / `_download_voice` 子集（首批至少 image，覆盖最常见用例）到 Kotlin；2) `_handleInbound` 在 text 为空但 mediaPaths 非空时也建 `MessageEvent`；3) `MessageEvent` 携带 `mediaUrls`/`mediaTypes` 透传给 `agentRunner`。本节 TC 是 bugfix 的失败侧捕获 + 修复后回归保险。
+
+| TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
+|---|---|---|---|---|---|
+| TC-GW-104-a | R-GW-003 | `ITEM_*` 常量值 | `ITEM_TEXT=1, ITEM_IMAGE=2, ITEM_VOICE=3, ITEM_FILE=4, ITEM_VIDEO=5`（与 Python `weixin.py:121-125` 一致） | unit | `WeixinMediaCollectTest#item_constants_match_python` 🟡 |
+| TC-GW-105-a | R-GW-003 | `_handleInbound` 收到只含 `ITEM_IMAGE` item 的 `item_list`（无 text item） | 不再在 `text.isBlank()` 处提前 return；`handleMessage` 收到 `MessageEvent` 且 `mediaUrls` 包含 1 个本地 cache 路径，`mediaTypes=["image/jpeg"]` | unit | `WeixinMediaCollectTest#image_only_inbound_does_not_drop` 🟡 |
+| TC-GW-106-a | R-GW-003 | `_handleInbound` 收到 text + 1 张图（混合 item_list） | `MessageEvent.text` = 文本部分；`mediaUrls.size==1`；`mediaTypes==["image/jpeg"]` | unit | `WeixinMediaCollectTest#text_plus_image_keeps_both` 🟡 |
+| TC-GW-107-a | R-GW-003 | `_handleInbound` 收到 `ref_msg.message_item.type==ITEM_IMAGE`（被引用的图） | ref 图也进 `mediaUrls`（与 Python 上游 `weixin.py:1331-1334` 行为一致） | unit | `WeixinMediaCollectTest#ref_message_image_collected` 🟡 |
+| TC-GW-108-a | R-GW-003 | `_collectMedia` 给 `ITEM_VIDEO` / `ITEM_FILE` / `ITEM_VOICE` 分别构造 stub item | 各类型 mediaType 字符串与 Python `_collect_media` 表对齐（`video/mp4` / 文件 mime / `audio/silk`）；缺少必填字段时 path 为 null 不入列表 | unit | `WeixinMediaCollectTest#non_image_branches_match_python_table` 🟡 |
+| TC-GW-109-a | R-GW-003 | `_downloadImage` 解密失败抛异常 | 不传播给 `_handleInbound`；返回 null；event 仍可被构造（媒体只是少一项） | unit | `WeixinMediaCollectTest#download_failure_does_not_crash_inbound` 🟡 |
+| TC-GW-110-a | R-GW-003 | `MessageEvent` 经 `Run.kt` `agentRunner` 调用点 | `event.mediaUrls` / `event.mediaTypes` 被透传到 `agentRunner` 的对应参数（验证 Run.kt 的 dispatch lambda 不再丢弃媒体字段） | unit | `RunAgentRunnerMediaTest#mediaUrls_passthrough` 🟡 |
+
 ### WeCom 簇
 
 | TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
@@ -1001,6 +1017,23 @@ SAFETY 大多通过引用其它域的 TC 覆盖；此处列集成层 smoke。
 | TC-CONFIG-025-a | R-GW-006 | `gatewayChatTitle` 长 100 字符 | 截断 24 | unit | `HermesGatewayControllerTest#chat title truncation` 🟢 |
 | TC-CONFIG-026-a | R-GW-006 | agent 返空 reply | 使用 fallback 文本 | integration | `HermesGatewayControllerTest#empty reply fallback` 🟡 |
 | TC-CONFIG-027-a | R-GW-006 | persist 抛 IOException | 吞 + logcat ERROR | integration | `HermesGatewayControllerTest#persist swallow` 🟡 |
+
+### HermesGatewayAutoStarter.kt — 应用启动时自恢复前台服务（bugfix：用户开启网关后下次冷启动失效）
+
+背景: R-GW-006 已经规定"随应用/开机自启策略"应当生效。但生产代码里仅 `GatewayBootReceiver` 监听 BOOT_COMPLETED + 同时要求 `autoStartOnBoot && serviceEnabled` 才启动；`OperitApplication.onCreate()` 与 `ActivityLifecycleManager` 没有任何 `serviceEnabledFlow` 读取或 `GatewayForegroundService.start(...)` 调用（与 `ExternalChatHttpAutoStarter` 在 `ActivityLifecycleManager.kt:130` 进入前台时被触发的对照路径不同）。结果: 用户在设置页打开网关 → 杀进程 / 系统重启服务 → 下次打开 app 网关不会回来；只有真正"重启手机 + autoStartOnBoot=true"的小众路径会复活。这是 R-GW-006 既有需求未被代码满足的盲区，按 §0.1 走 bugfix 流程（不动 ①，加 TC + 测试 + 修代码）。
+
+修复方向: 仿 `ExternalChatHttpAutoStarter`（`integrations/http/ExternalChatHttpAutoStarter.kt:1-55`）写 `HermesGatewayAutoStarter.ensureRunningIfEnabled(ctx, reason)`，仅当 `serviceEnabledFlow` 当前值为 true 且服务尚未运行时调用 `GatewayForegroundService.start(ctx)`。在 `ActivityLifecycleManager` 的"应用进入前台"hook 里和 `ExternalChatHttpAutoStarter` 并列调用。`autoStartOnBootFlow` 维持只控 `GatewayBootReceiver` 的语义不变。
+
+| TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
+|---|---|---|---|---|---|
+| TC-GW-220-a | R-GW-006 | `serviceEnabledFlow` 当前值 = true，service 当前未运行，调 `HermesGatewayAutoStarter.ensureRunningIfEnabled(ctx, reason)` | 调用 `GatewayForegroundService.start(ctx)` 一次（捕获通过 fake context / spy） | unit | `HermesGatewayAutoStarterTest#starts when enabled` 🟡 |
+| TC-GW-220-b | R-GW-006 | `serviceEnabledFlow` 当前值 = false | **不**调 `GatewayForegroundService.start` | unit | `HermesGatewayAutoStarterTest#skips when disabled` 🟡 |
+| TC-GW-220-c | R-GW-006 | `serviceEnabledFlow` = true，但 `HermesGatewayController.status.value == RUNNING`（已运行） | **不**重复 start | unit | `HermesGatewayAutoStarterTest#noop when already running` 🟡 |
+| TC-GW-220-d | R-GW-006 | 在同一个进程里连续调 `ensureRunningIfEnabled` 两次 | 第二次因为 `ensureInProgress` 互斥被跳过（与 `ExternalChatHttpAutoStarter` 同款保护） | unit | `HermesGatewayAutoStarterTest#reentrancy guard` 🟡 |
+| TC-GW-221-a | R-GW-006 | `ActivityLifecycleManager` 应用进入前台时 | 同时触发 `ExternalChatHttpAutoStarter.ensureRunningIfEnabled` **和** `HermesGatewayAutoStarter.ensureRunningIfEnabled`（双 starter 并列） | unit | `ActivityLifecycleManagerHermesGatewayTest#foreground_triggers_gateway_autostart` 🟡 |
+| TC-GW-222-a | R-GW-006 | 用户在设置页 toggle 网关 ON → 退出 app → 冷启动重新打开 app | 应用前台 hook 调 `HermesGatewayAutoStarter` → `serviceEnabledFlow=true` → 起前台服务 → `controller.status` 走 `STARTING → RUNNING` | integration | `HermesGatewayAutoStarterRobolectricTest#cold_start_restores_running_gateway` 🟡 |
+| TC-GW-223-a | R-GW-006 | `autoStartOnBootFlow` 仅控 `GatewayBootReceiver`（独立维度，不和应用内自启耦合） | `HermesGatewayAutoStarter` 不读 `autoStartOnBootFlow`；改 `autoStartOnBootFlow=false` 不影响应用内自启 | unit | `HermesGatewayAutoStarterTest#does_not_read_auto_start_on_boot` 🟡 |
+
 
 ---
 
