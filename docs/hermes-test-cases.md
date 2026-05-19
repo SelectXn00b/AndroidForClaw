@@ -245,6 +245,26 @@ CORE 域的两条顶层约束（R-CORE-001 1:1 对齐 / R-CORE-002 冲突以 Her
 | TC-AGENT-003-thinkfix-f | R-AGENT-003 | `extractThinkingContent_alignsWithRemoveThinkingContent_closed` | ✅ |
 | TC-AGENT-003-thinkfix-g | R-AGENT-003 | `extractThinkingContent_alignsWithRemoveThinkingContent_unclosed` | ✅ |
 
+### StructuredToolCallBridge — `compileHistoryForProvider` 保留 `reasoningContent`（飞书自动总结后空回复 bug 真因修复）
+
+测试类: `app/src/test/java/com/ai/assistance/operit/api/chat/llmprovider/StructuredToolCallBridgeTest.kt`
+
+背景: thinkfix 段（上）只解决了"脏 `<think>` 污染历史 content"，但飞书自动总结后空回复仍偶发。真因：`StructuredToolCallBridge.compileHistoryForProvider` 在合并 ASSISTANT / TOOL_CALL turn 进同一 ProviderHistoryBlock 时**完全丢弃了 `reasoningContent` 字段**。MiMo thinking-mode 协议要求带 `tool_calls` 的 assistant 历史必须回传 `reasoning_content`，否则返回 400 code:3 → 飞书显示 (empty response)。同时在 `EnhancedAIService.toOpenAiMessages` 里给 assistant 角色补一条 fallback：当 `turn.reasoningContent` 为空但 content 内嵌 `<think>...</think>` 时，用 `ChatUtils.extractThinkingContent` 抽出来当 reasoning_content。
+
+修复点:
+- `StructuredToolCallBridge.kt`: `flushCurrentBlock` 把 `currentReasoningContent` 写进 `PromptTurn.reasoningContent`；`appendToBlock` 在 ASSISTANT block 上取第一个非空 `reasoningContent` 保留（与 `OpenAIProvider.queueToolCalls` 行为一致），不被后续 turn 覆盖；USER / TOOL_RESULT block 不带 reasoning。
+- `EnhancedAIService.toOpenAiMessages`: assistant 角色用 `extractThinkingContent` 拆分 content / 内嵌 think；`turn.reasoningContent` 优先，否则用抽出来的 think 当 fallback 写进 OpenAI 消息的 `reasoning_content` 字段。
+
+| TC | 验 R | 测试方法 | 状态 |
+|---|---|---|---|
+| TC-AGENT-003-rcfix-a | R-AGENT-003 | `compileHistoryForProvider_preservesReasoningContentOnSingleAssistantTurn` | 🟡 |
+| TC-AGENT-003-rcfix-b | R-AGENT-003 | `compileHistoryForProvider_preservesFirstNonEmptyReasoningOnMergedAssistantTurns` | 🟡 |
+| TC-AGENT-003-rcfix-c | R-AGENT-003 | `compileHistoryForProvider_keepsReasoningWhenAssistantThenToolCallMerged` | 🟡 |
+| TC-AGENT-003-rcfix-d | R-AGENT-003 | `compileHistoryForProvider_userBlockHasNoReasoning` | 🟡 |
+| TC-AGENT-003-rcfix-e | R-AGENT-003 | `compileHistoryForProvider_toolResultBlockHasNoReasoning` | 🟡 |
+| TC-AGENT-003-rcfix-f | R-AGENT-003 | `compileHistoryForProvider_summaryMergedIntoUserBlockDoesNotLeakReasoning` | 🟡 |
+| TC-AGENT-003-rcfix-g | R-AGENT-003 | `compileHistoryForProvider_emptyHistoryReturnsEmpty` | 🟡 |
+
 ---
 
 ## 域 AGENT — FileSafety

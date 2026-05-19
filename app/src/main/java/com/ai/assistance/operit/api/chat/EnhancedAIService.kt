@@ -1328,15 +1328,27 @@ class EnhancedAIService private constructor(private val context: Context) {
                 PromptTurnKind.TOOL_RESULT -> "tool"
                 PromptTurnKind.SUMMARY -> "system"
             }
-            // Sanitize assistant/tool_call history content before sending to provider:
-            // strip any <think>/<thinking>/<search> blocks (including unclosed ones from
-            // truncated streams). Without this, dirty open-think tags from prior turns
-            // pollute the request and cause some models (DeepSeek / OpenRouter / MiMo think)
-            // to reply empty after auto-summary, surfacing as "Feishu unresponsive, /new fixes it".
-            val sanitizedContent = if (role == "assistant" || role == "tool") {
-                ChatUtils.removeThinkingContent(turn.content)
-            } else {
-                turn.content
+            // For assistant/tool_call history: extract inline <think>...</think> as
+            // reasoning_content (required by MiMo thinking-mode roundtrip), keep the
+            // remaining text as visible content. PromptTurn.reasoningContent (if
+            // already populated by upstream) takes priority. Tool messages get a
+            // plain sanitize.
+            val sanitizedContent: String
+            val extractedReasoning: String?
+            when (role) {
+                "assistant" -> {
+                    val (cleaned, thinking) = ChatUtils.extractThinkingContent(turn.content)
+                    sanitizedContent = cleaned
+                    extractedReasoning = thinking.ifBlank { null }
+                }
+                "tool" -> {
+                    sanitizedContent = ChatUtils.removeThinkingContent(turn.content)
+                    extractedReasoning = null
+                }
+                else -> {
+                    sanitizedContent = turn.content
+                    extractedReasoning = null
+                }
             }
             val base = mutableMapOf<String, Any?>(
                 "role" to role,
@@ -1348,12 +1360,11 @@ class EnhancedAIService private constructor(private val context: Context) {
                 base["tool_call_id"] = "history_${turn.toolName}"
                 base["name"] = turn.toolName
             }
-            // Roundtrip reasoning_content back to MiMo (required when assistant
-            // history contains tool_calls in thinking mode).
-            if (role == "assistant" && turn.reasoningContent != null) {
-                base["reasoning_content"] = turn.reasoningContent
-                GatewayFileLogger.w("AIService",
-                    "[MIMO_DBG] toOpenAiMessages assistant: reasoning_content=len=${turn.reasoningContent.length}")
+            if (role == "assistant") {
+                val rc = turn.reasoningContent ?: extractedReasoning
+                if (rc != null) {
+                    base["reasoning_content"] = rc
+                }
             }
             base.toMap()
         }

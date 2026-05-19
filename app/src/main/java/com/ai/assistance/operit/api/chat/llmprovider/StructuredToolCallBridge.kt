@@ -49,6 +49,11 @@ internal object StructuredToolCallBridge {
         var currentBlockType: ProviderHistoryBlockType? = null
         var currentContent = StringBuilder()
         var currentMetadata: Map<String, Any?> = emptyMap()
+        // 保留第一个非空 reasoningContent（与 OpenAIProvider.queueToolCalls 行为一致：
+        // 取第一个非空保留）。MiMo 文档要求带 tool_calls 的 assistant 历史必须回传
+        // reasoning_content，否则返回 400 code:3。详见 docs/hermes-test-cases.md
+        // R-AGENT-003 的 TC-AGENT-003-rcfix-* 段。
+        var currentReasoningContent: String? = null
 
         fun flushCurrentBlock() {
             val blockType = currentBlockType ?: return
@@ -62,12 +67,14 @@ internal object StructuredToolCallBridge {
                                 if (useToolCall) PromptTurnKind.TOOL_RESULT else PromptTurnKind.USER
                         },
                     content = currentContent.toString().trim(),
+                    reasoningContent = currentReasoningContent,
                     metadata = currentMetadata
                 )
             )
             currentBlockType = null
             currentContent = StringBuilder()
             currentMetadata = emptyMap()
+            currentReasoningContent = null
         }
 
         fun appendToBlock(blockType: ProviderHistoryBlockType, turn: PromptTurn) {
@@ -84,6 +91,14 @@ internal object StructuredToolCallBridge {
             }
             if (turn.metadata.isNotEmpty()) {
                 currentMetadata = currentMetadata + turn.metadata
+            }
+            // 仅 ASSISTANT block 保留 reasoningContent（USER / TOOL_RESULT 不带）；
+            // 取第一个非空，后续 turn 的 reasoningContent 不覆盖（与 queueToolCalls 行为一致）。
+            if (blockType == ProviderHistoryBlockType.ASSISTANT &&
+                currentReasoningContent.isNullOrEmpty() &&
+                !turn.reasoningContent.isNullOrEmpty()
+            ) {
+                currentReasoningContent = turn.reasoningContent
             }
         }
 
