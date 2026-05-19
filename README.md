@@ -6,7 +6,7 @@
 
 > **让 AI 真正掌控你的 Android 手机。**
 
-1:1 复刻 [Hermes](https://github.com/nicepkg/hermes) 框架的 Kotlin 版 Agent Loop，嵌入 Android 平台，实现完整 AI Agent 能力：看屏幕、点 App、跑代码、连平台。
+**Hermes 内核 + Operit 壳** — 把 [Hermes](https://github.com/NousResearch/hermes-agent) 的 Agent Loop 1:1 翻译成 Kotlin 作为内核，跑在 [Operit](https://github.com/AAswordman/Operit) 的 Android 应用壳里，实现完整 AI Agent 能力：看屏幕、点 App、跑代码、连平台。
 
 **[详细文档](https://vcn23e479dhx.feishu.cn/wiki/UZtFwM6t9iArPVkMvRccwSran6d)** | **[快速开始](#快速开始)** | **[社区](#社区)**
 
@@ -231,8 +231,9 @@ adb install app/build/outputs/apk/release/app-release.apk
 
 | 项目 | 说明 |
 |------|------|
-| [Hermes](https://github.com/nicepkg/hermes) | AI Agent 框架（桌面端） |
-| [Hermes for Android](https://github.com/SelectXn00b/HermesApp) | Hermes Android 客户端（本项目） |
+| [Hermes](https://github.com/NousResearch/hermes-agent) | AI Agent 框架（桌面端，本项目内核来源） |
+| [Operit](https://github.com/AAswordman/Operit) | Android AI 助手（本项目应用壳来源） |
+| [Hermes for Android](https://github.com/SelectXn00b/HermesApp) | Hermes 内核 × Operit 壳（本项目） |
 
 ---
 
@@ -268,7 +269,8 @@ adb install app/build/outputs/apk/release/app-release.apk
 
 ## 相关链接
 
-- [Hermes](https://github.com/nicepkg/hermes) — 架构参照
+- [Hermes](https://github.com/NousResearch/hermes-agent) — Agent 内核来源（架构参照）
+- [Operit](https://github.com/AAswordman/Operit) — Android 应用壳来源
 - [ClawHub](https://clawhub.com) — 技能市场
 - [架构文档](ARCHITECTURE.md) — 详细设计
 

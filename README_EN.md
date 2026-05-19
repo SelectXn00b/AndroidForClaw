@@ -6,7 +6,7 @@
 
 > **Let AI truly control your Android phone.**
 
-A 1:1 Kotlin port of the [Hermes](https://github.com/nicepkg/hermes) agent loop embedded into Android, delivering full AI Agent capabilities on your phone: see the screen, tap apps, run code, connect platforms.
+**Hermes kernel + Operit shell** — A 1:1 Kotlin port of the [Hermes](https://github.com/NousResearch/hermes-agent) agent loop running as the kernel inside the [Operit](https://github.com/AAswordman/Operit) Android app shell, delivering full AI Agent capabilities on your phone: see the screen, tap apps, run code, connect platforms.
 
 **[Docs (Chinese)](https://vcn23e479dhx.feishu.cn/wiki/UZtFwM6t9iArPVkMvRccwSran6d)** | **[Quick Start](#quick-start)** | **[Community](#community)** | **[中文文档](README.md)**
 
@@ -232,8 +232,9 @@ adb install app/build/outputs/apk/release/app-release.apk
 
 | Project | Description |
 |---------|-------------|
-| [Hermes](https://github.com/nicepkg/hermes) | AI Agent framework (Desktop) |
-| [Hermes for Android](https://github.com/SelectXn00b/HermesApp) | Hermes Android client (this project) |
+| [Hermes](https://github.com/NousResearch/hermes-agent) | AI Agent framework (Desktop, source of this project's kernel) |
+| [Operit](https://github.com/AAswordman/Operit) | Android AI assistant (source of this project's app shell) |
+| [Hermes for Android](https://github.com/SelectXn00b/HermesApp) | Hermes kernel × Operit shell (this project) |
 
 ---
 
@@ -269,7 +270,8 @@ adb install app/build/outputs/apk/release/app-release.apk
 
 ## Links
 
-- [Hermes](https://github.com/nicepkg/hermes) — Architecture reference
+- [Hermes](https://github.com/NousResearch/hermes-agent) — Agent kernel source (architecture reference)
+- [Operit](https://github.com/AAswordman/Operit) — Android app shell source
 - [ClawHub](https://clawhub.com) — Skill marketplace
 - [Architecture Doc](ARCHITECTURE.md) — Detailed design
 
