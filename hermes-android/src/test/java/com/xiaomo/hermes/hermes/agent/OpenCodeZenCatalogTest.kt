@@ -235,6 +235,25 @@ class OpenCodeZenCatalogTest {
     }
 
     /**
+     * TC-AGENT-200-i: when BASELINE_FREE_MODEL is among live `-free` ids,
+     * prefer it over the first-`-free` semantic. Empirical observation:
+     * other live `-free` ids (e.g. deepseek-v4-flash-free) return
+     * FreeUsageLimitError on shared public-key while nemotron-3-super-free
+     * works. Stability > naive ordering.
+     */
+    @Test
+    fun `selectDefaultFreeModelLive prefersBaselineWhenServedByLive`() {
+        val catalog = emptyMap<String, Any>()
+        val live = listOf(
+            "deepseek-v4-flash-free",                    // first -free, demoted
+            OpenCodeZenCatalog.BASELINE_FREE_MODEL,      // BASELINE wins
+            "qwen3.6-plus-free"
+        )
+        val picked = OpenCodeZenCatalog.selectDefaultFreeModelLive(catalog) { live }
+        assertEquals(OpenCodeZenCatalog.BASELINE_FREE_MODEL, picked)
+    }
+
+    /**
      * TC-AGENT-200-i: live-fetch returns null → falls back to catalog.
      */
     @Test

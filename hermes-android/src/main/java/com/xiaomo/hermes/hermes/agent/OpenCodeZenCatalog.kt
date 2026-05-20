@@ -140,7 +140,9 @@ object OpenCodeZenCatalog {
      * Three-tier resolution: live OpenCode Zen `/v1/models` `-free` ids →
      * models.dev catalog → [BASELINE_FREE_MODEL]. When [liveIds] is non-null,
      * filters to ids ending with `-free` (OpenCode Zen's free-tier naming
-     * convention) and returns the first match. Live-fetcher is injectable
+     * convention). Within the live `-free` set, [BASELINE_FREE_MODEL] is
+     * preferred when present (it is the empirically verified-working tier);
+     * otherwise the first `-free` id is returned. Live-fetcher is injectable
      * for unit testing.
      *
      * TC-AGENT-200-i: live ids prefer `-free` suffix.
@@ -151,6 +153,11 @@ object OpenCodeZenCatalog {
     ): String {
         val live = liveFetcher()
         if (!live.isNullOrEmpty()) {
+            // Prefer the empirically verified BASELINE id when the live tier
+            // serves it; other `-free` candidates from `/v1/models` may have
+            // their own per-model demo quotas (observed: deepseek-v4-flash-free
+            // returning FreeUsageLimitError while nemotron-3-super-free works).
+            if (live.contains(BASELINE_FREE_MODEL)) return BASELINE_FREE_MODEL
             val freeFromLive = live.firstOrNull { it.endsWith("-free") }
             if (freeFromLive != null) return freeFromLive
         }

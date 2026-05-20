@@ -108,8 +108,8 @@ while :; do
     echo "$LOG" | grep -E "$RESULT_BCAST_PAT" | tail -1
     HEAD=$(git rev-parse HEAD 2>/dev/null || echo unknown)
     MARKER_DIR="scripts/e2e"
-    : > "$MARKER_DIR/.green-zen-autoboot"
-    echo -n "$HEAD" > "$MARKER_DIR/.green-zen-autoboot"
+    : > "$MARKER_DIR/.green-opencode-zen-autoboot"
+    echo -n "$HEAD" > "$MARKER_DIR/.green-opencode-zen-autoboot"
     exit 0
   fi
   sleep 2
