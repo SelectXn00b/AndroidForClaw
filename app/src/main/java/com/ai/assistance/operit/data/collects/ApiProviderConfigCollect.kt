@@ -230,6 +230,12 @@ object ApiProviderConfigs {
             )
         ),
         ProviderApiConfig(
+            providerType = ApiProviderType.OPENCODE_ZEN,
+            defaultModelName = "qwen/qwen3-coder",
+            defaultApiEndpoint = "https://opencode.ai/zen/v1/chat/completions",
+            requiresApiKey = false
+        ),
+        ProviderApiConfig(
             providerType = ApiProviderType.OTHER,
             defaultModelName = "",
             defaultApiEndpoint = ""

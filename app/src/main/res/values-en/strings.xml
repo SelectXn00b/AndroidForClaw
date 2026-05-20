@@ -3683,6 +3683,8 @@
     <string name="endpoint_completion_hint">Hint: If you enter a base URL, the system will automatically complete the path. To disable, add # at the end of the URL.</string>
     <string name="api_key_placeholder_default">Using default key, you can input directly</string>
     <string name="api_key_placeholder_custom">Enter API key</string>
+    <string name="use_opencode_zen_public_key">Use OpenCode Zen free models (public key)</string>
+    <string name="use_opencode_zen_public_key_applied">Applied OpenCode Zen public key</string>
     <string name="model_name_placeholder">e.g.: gpt-4, claude-3-opus-20240229...</string>
     <string name="get_models_list">Get Models List</string>
     <string name="getting_models_list">Getting models list...</string>

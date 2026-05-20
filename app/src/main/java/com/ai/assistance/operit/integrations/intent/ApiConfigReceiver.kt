@@ -20,11 +20,11 @@ import kotlinx.coroutines.launch
  *     -n com.xiaomo.androidforclaw/com.ai.assistance.operit.integrations.intent.ApiConfigReceiver \
  *     -a com.ai.assistance.operit.SET_API_KEY \
  *     --es key 'sk-or-v1-xxxxxxxx' \
- *     --es provider OPENROUTER
+ *     --es provider OPENCODE_ZEN
  *
  * 可选 extras:
  *   --es key       API key（必填）
- *   --es provider  ApiProviderType 枚举名，默认 OPENROUTER；不识别时也默认 OPENROUTER
+ *   --es provider  ApiProviderType 枚举名，默认 OPENCODE_ZEN；不识别时也默认 OPENCODE_ZEN
  *   --es endpoint  自定义 endpoint，缺省时按 provider 默认
  *   --es model     自定义 modelName，缺省时按 provider 默认
  *   --es config_id 要更新的配置 ID，默认 "default"
@@ -60,9 +60,9 @@ class ApiConfigReceiver : BroadcastReceiver() {
         val provider = runCatching { ApiProviderType.valueOf(providerArg.uppercase()) }
             .getOrElse {
                 if (providerArg.isNotEmpty()) {
-                    AppLogger.w(TAG, "Unknown provider '$providerArg', falling back to OPENROUTER")
+                    AppLogger.w(TAG, "Unknown provider '$providerArg', falling back to OPENCODE_ZEN")
                 }
-                ApiProviderType.OPENROUTER
+                ApiProviderType.OPENCODE_ZEN
             }
 
         val endpoint = intent.getStringExtra(EXTRA_ENDPOINT)?.takeIf { it.isNotBlank() }

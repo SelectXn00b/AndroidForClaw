@@ -49,8 +49,8 @@ class ModelConfigManager(private val context: Context) {
         const val DEFAULT_CONFIG_ID = "default"
         const val DEFAULT_CONFIG_NAME = "model_config_default_name"
 
-        // Default API provider type
-        private val DEFAULT_API_PROVIDER_TYPE = ApiProviderType.OPENROUTER
+        // Default API provider type — OpenCode Zen public-key (R-AGENT-002)
+        private val DEFAULT_API_PROVIDER_TYPE = ApiProviderType.OPENCODE_ZEN
     }
 
     // Json解析器，支持宽松模式
@@ -89,12 +89,16 @@ class ModelConfigManager(private val context: Context) {
 
     // 从原有ApiPreferences创建默认配置
     private fun createFreshDefaultConfig(): ModelConfigData {
+        // OpenCode Zen public-key path (R-AGENT-002): consult bundled snapshot
+        // + live catalog to pick the latest free+tool-capable model id at first
+        // launch. Falls back to BASELINE_MODEL when catalog is unavailable.
+        val resolvedModel = OpenCodeZenDefaults.selectDefaultFreeModel(context)
         return ModelConfigData(
                 id = DEFAULT_CONFIG_ID,
                 name = context.getString(R.string.model_config_default_name),
                 apiKey = ApiPreferences.DEFAULT_API_KEY,
                 apiEndpoint = ApiPreferences.DEFAULT_API_ENDPOINT,
-                modelName = ApiPreferences.DEFAULT_MODEL_NAME,
+                modelName = resolvedModel,
                 apiProviderType = DEFAULT_API_PROVIDER_TYPE,
                 hasCustomParameters = false,
                 maxTokensEnabled = false,

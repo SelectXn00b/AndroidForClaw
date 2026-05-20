@@ -7,6 +7,9 @@ import com.ai.assistance.operit.data.collects.ApiProviderConfigs
 import com.ai.assistance.operit.util.AppLogger
 import com.ai.assistance.operit.data.model.ApiProviderType
 import com.ai.assistance.operit.data.model.ModelOption
+import com.xiaomo.hermes.hermes.agent.MODELS_DEV_SNAPSHOT_ASSET
+import com.xiaomo.hermes.hermes.agent.OpenCodeZenCatalog
+import com.xiaomo.hermes.hermes.agent.fetchModelsDevWithSnapshot
 import java.io.File
 import java.io.IOException
 import java.net.SocketTimeoutException
@@ -175,6 +178,30 @@ object ModelListFetcher {
             apiProviderType: ApiProviderType = ApiProviderType.OPENAI
     ): Result<List<ModelOption>> {
         AppLogger.d(TAG, "开始获取模型列表: 端点=$apiEndpoint, 提供商=${apiProviderType.name}")
+
+        // OpenCode Zen 走本地 catalog（snapshot + models.dev），不打 /v1/models（R-AGENT-002）
+        if (apiProviderType == ApiProviderType.OPENCODE_ZEN) {
+            return withContext(Dispatchers.IO) {
+                runCatching {
+                    val snap = runCatching {
+                        context.assets.open(MODELS_DEV_SNAPSHOT_ASSET)
+                                .bufferedReader().use { it.readText() }
+                    }.getOrNull()
+                    val catalog = fetchModelsDevWithSnapshot(snapshotProvider = { snap })
+                    val free = OpenCodeZenCatalog.listFreeModels(catalog)
+                    if (free.isEmpty()) {
+                        listOf(ModelOption(
+                                id = OpenCodeZenCatalog.BASELINE_FREE_MODEL,
+                                name = "${OpenCodeZenCatalog.BASELINE_FREE_MODEL} (free)"
+                        ))
+                    } else {
+                        free.map { info ->
+                            ModelOption(id = info.id, name = "${info.id} (free)")
+                        }
+                    }
+                }
+            }
+        }
 
         return withContext(Dispatchers.IO) {
             val maxRetries = 2

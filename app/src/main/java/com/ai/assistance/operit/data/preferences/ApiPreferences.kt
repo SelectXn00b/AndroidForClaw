@@ -203,10 +203,12 @@ class ApiPreferences private constructor(private val context: Context) {
         const val DEFAULT_TOOL_PROMPT_VISIBILITY_JSON = "{}"
         const val DEFAULT_FEATURE_TOGGLES_JSON = "{}"
 
-        // API 配置默认值 (OpenRouter + built-in key, 密钥加密嵌入见 BuiltInKeyProvider)
-        const val DEFAULT_API_ENDPOINT = BuiltInKeyProvider.OPENROUTER_BASE_URL
-        const val DEFAULT_MODEL_NAME = BuiltInKeyProvider.OPENROUTER_DEFAULT_MODEL
-        val DEFAULT_API_KEY: String = BuiltInKeyProvider.getKey() ?: ""
+        // API 配置默认值 (OpenCode Zen public-key 兜底，R-AGENT-002)
+        // DEFAULT_MODEL_NAME 是静态 const，运行时由 ModelConfigManager.createFreshDefaultConfig
+        // 用 OpenCodeZenDefaults.selectDefaultFreeModel(context) 的实时 catalog 选值覆盖
+        const val DEFAULT_API_ENDPOINT = OpenCodeZenDefaults.ENDPOINT
+        const val DEFAULT_MODEL_NAME = OpenCodeZenDefaults.BASELINE_MODEL
+        const val DEFAULT_API_KEY: String = OpenCodeZenDefaults.API_KEY
     }
 
     @Serializable

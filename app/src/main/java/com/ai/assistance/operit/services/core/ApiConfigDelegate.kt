@@ -303,13 +303,29 @@ class ApiConfigDelegate(
     }
 
     /**
-     * 使用默认配置继续
+     * 使用默认配置继续 — OpenCode Zen public-key 兜底（R-AGENT-002）
+     *
+     * 把 default 模型配置写成：apiKey="public" + endpoint=opencode.ai/zen/v1 +
+     * modelName=catalog 选出的最新 free+tool_call 模型。无需用户填 key。
+     *
      * @return 总是返回true，因为无需特定配置
      */
     fun useDefaultConfig(): Boolean {
         // 异步创建服务，避免阻塞
         coroutineScope.launch(Dispatchers.IO) {
-            AppLogger.d(TAG, "使用默认配置初始化服务")
+            AppLogger.d(TAG, "applying OpenCode Zen public-key default config")
+            val mgr = ModelConfigManager(context.applicationContext)
+            mgr.initializeIfNeeded()
+            mgr.updateModelConfig(
+                    configId = ModelConfigManager.DEFAULT_CONFIG_ID,
+                    apiKey = com.ai.assistance.operit.data.preferences.OpenCodeZenDefaults.API_KEY,
+                    apiEndpoint = com.ai.assistance.operit.data.preferences.OpenCodeZenDefaults.ENDPOINT,
+                    modelName = com.ai.assistance.operit.data.preferences.OpenCodeZenDefaults
+                            .selectDefaultFreeModel(context.applicationContext),
+                    apiProviderType = ApiProviderType.OPENCODE_ZEN
+            )
+            ApiPreferences.getInstance(context.applicationContext)
+                    .saveUserHasConfiguredApi(true)
             val enhancedAiService = EnhancedAIService.getInstance(context)
             withContext(Dispatchers.Main) {
                 // 通知ViewModel配置已更改

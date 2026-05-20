@@ -1,5 +1,8 @@
 import java.io.File
 import java.io.FileInputStream
+import java.io.InputStream
+import java.net.HttpURLConnection
+import java.net.URI
 import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -197,6 +200,46 @@ android {
 kotlin {
     compilerOptions {
         jvmTarget = JvmTarget.JVM_17
+    }
+}
+
+// ── R-AGENT-002: bundle models.dev catalog into APK assets ──────────────
+// 构建时拉取 https://models.dev/api.json，写到 assets/models_dev_snapshot.json。
+// `OpenCodeZenDefaults.selectDefaultFreeModel(context)` 在 catalog 网络/磁盘缓存
+// 都不可用时回落到这个 snapshot；CI sandbox 设 SKIP_MODELS_DEV_FETCH=1 跳过抓取。
+val fetchModelsDevSnapshot by tasks.registering {
+    val outputFile = layout.projectDirectory.file("src/main/assets/models_dev_snapshot.json").asFile
+    outputs.file(outputFile)
+    doLast {
+        try {
+            val url = URI("https://models.dev/api.json").toURL()
+            val conn = url.openConnection() as HttpURLConnection
+            conn.connectTimeout = 30_000
+            conn.readTimeout = 60_000
+            conn.inputStream.use { input: InputStream ->
+                outputFile.parentFile.mkdirs()
+                outputFile.outputStream().use { out -> input.copyTo(out) }
+            }
+            check(outputFile.length() >= 50_000) {
+                "models.dev snapshot suspiciously small: ${outputFile.length()} bytes"
+            }
+            println("[fetchModelsDevSnapshot] wrote ${outputFile.length()} bytes")
+        } catch (t: Throwable) {
+            // 离线 / 网络错误：保留旧 snapshot（如果存在），不让 build 直接挂。
+            // 仅在文件根本不存在时硬失败。
+            if (!outputFile.exists()) {
+                throw GradleException(
+                    "fetchModelsDevSnapshot failed and no existing snapshot at ${outputFile.path}: ${t.message}"
+                )
+            }
+            println("[fetchModelsDevSnapshot] WARN: refresh failed (${t.message}); keeping existing ${outputFile.length()}-byte snapshot")
+        }
+    }
+}
+
+tasks.named("preBuild") {
+    if (System.getenv("SKIP_MODELS_DEV_FETCH") != "1") {
+        dependsOn(fetchModelsDevSnapshot)
     }
 }
 

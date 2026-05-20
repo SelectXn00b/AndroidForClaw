@@ -36,6 +36,7 @@ enum class ApiProviderType {
         LLAMA_CPP, // llama.cpp 本地推理引擎
         PPINFRA, // 派欧云
         NOVITA, // Novita AI
+        OPENCODE_ZEN, // OpenCode Zen public-key endpoint (catalog from models.dev)
         OTHER // 其他提供商（自定义端点）
 }
 

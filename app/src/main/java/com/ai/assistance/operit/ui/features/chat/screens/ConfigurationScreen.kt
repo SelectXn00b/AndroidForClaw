@@ -24,7 +24,6 @@ import com.ai.assistance.operit.R
 import com.ai.assistance.operit.data.collects.ApiProviderConfigs
 import com.ai.assistance.operit.data.model.ApiProviderType
 import com.ai.assistance.operit.data.preferences.ApiPreferences
-import com.ai.assistance.operit.data.preferences.BuiltInKeyProvider
 import com.ai.assistance.operit.ui.features.chat.components.config.TokenInfoDialog
 import kotlinx.coroutines.CoroutineScope
 
@@ -231,29 +230,26 @@ fun ConfigurationScreen(
                                 }
                         }
 
-                        // 内置 key 按钮 - 一键应用内置 OpenRouter Key
-                        val builtInKey = remember { BuiltInKeyProvider.getKey().orEmpty() }
-                        if (builtInKey.isNotEmpty()) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Button(
-                                        onClick = { onUseDefault() },
-                                        modifier = Modifier.fillMaxWidth().height(40.dp),
-                                        shape = RoundedCornerShape(6.dp),
-                                        colors =
-                                                ButtonDefaults.buttonColors(
-                                                        containerColor =
-                                                                MaterialTheme.colorScheme.secondary
-                                                )
-                                ) {
-                                        Text(
-                                                stringResource(
-                                                        id = R.string.use_builtin_openrouter_key
-                                                ),
-                                                fontWeight = FontWeight.Medium,
-                                                fontSize = 14.sp,
-                                                color = MaterialTheme.colorScheme.onSecondary
+                        // OpenCode Zen public-key 按钮 - 一键切到免费模型 (R-AGENT-002)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                                onClick = { onUseDefault() },
+                                modifier = Modifier.fillMaxWidth().height(40.dp),
+                                shape = RoundedCornerShape(6.dp),
+                                colors =
+                                        ButtonDefaults.buttonColors(
+                                                containerColor =
+                                                        MaterialTheme.colorScheme.secondary
                                         )
-                                }
+                        ) {
+                                Text(
+                                        stringResource(
+                                                id = R.string.use_opencode_zen_public_key
+                                        ),
+                                        fontWeight = FontWeight.Medium,
+                                        fontSize = 14.sp,
+                                        color = MaterialTheme.colorScheme.onSecondary
+                                )
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
