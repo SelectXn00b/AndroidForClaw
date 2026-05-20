@@ -88,7 +88,7 @@ class ModelConfigManager(private val context: Context) {
     }
 
     // 从原有ApiPreferences创建默认配置
-    private fun createFreshDefaultConfig(): ModelConfigData {
+    private suspend fun createFreshDefaultConfig(): ModelConfigData {
         // OpenCode Zen public-key path (R-AGENT-002): consult bundled snapshot
         // + live catalog to pick the latest free+tool-capable model id at first
         // launch. Falls back to BASELINE_MODEL when catalog is unavailable.

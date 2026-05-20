@@ -231,7 +231,7 @@ object ApiProviderConfigs {
         ),
         ProviderApiConfig(
             providerType = ApiProviderType.OPENCODE_ZEN,
-            defaultModelName = "qwen/qwen3-coder",
+            defaultModelName = "nemotron-3-super-free",
             defaultApiEndpoint = "https://opencode.ai/zen/v1/chat/completions",
             requiresApiKey = false
         ),

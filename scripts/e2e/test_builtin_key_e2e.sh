@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# End-to-end 验证：新用户 → 选择预置 OpenRouter Key 路径
+# End-to-end 验证：新用户 → OpenCode Zen public-key 兜底路径（R-AGENT-002, TC-AGENT-200-c）
 #
-# 模拟"全新安装 + 点击 使用内置 OpenRouter Key 按钮"的场景：
-#   1. run-as rm 清掉 api_settings DataStore（保留 Keystore + gateway 凭证）
+# 模拟"全新安装 + 点击 使用 OpenCode Zen 免费模型 按钮"的场景：
+#   1. run-as rm 清掉 api_settings + model_configs DataStore（保留 Keystore + gateway 凭证）
 #   2. 安装 APK
-#   3. 解密 BuiltInKeyProvider 里的内置 key，广播写入 default 配置
-#      (provider=OPENROUTER, model=openrouter/free — 与 ConfigurationScreen 里
-#       点 onUseDefault 的运行时状态等价)
+#   3. 广播 SET_API_KEY，写入 default 配置（provider=OPENCODE_ZEN, key="public",
+#      endpoint=opencode.ai/zen/v1/chat/completions, model=nemotron-3-super-free）
+#      —— 与 ConfigurationScreen 里点 "使用 OpenCode Zen 免费模型" 按钮等价
 #   4. 启动 app
-#   5. 发 external chat
-#   6. logcat 等 "回合完成"
+#   5. 发 external chat（带 TOKEN，要求 agent 一行回显 TOKEN）
+#   6. 从 logcat 解析 aiResponsePreview，断言含 TOKEN
 #
 # 退出码：0=PASS，非 0=FAIL
+#
+# 文件名保留 test_builtin_key_e2e.sh 维持脚本调用入口稳定（marker .green-builtin-key
+# 与 Stop hook 协作）；脚本语义已改为 OpenCode Zen public-key 路径。
 
 set -euo pipefail
 
@@ -30,32 +33,21 @@ log() { printf '\033[1;36m[e2e-builtin]\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m[FAIL]\033[0m %s\n' "$*" >&2; exit 1; }
 pass() { printf '\033[1;32m[PASS]\033[0m %s\n' "$*"; }
 
-### 0. 解密内置 key
-KEY_SRC="app/src/main/java/com/ai/assistance/operit/data/preferences/BuiltInKeyProvider.kt"
-[[ -f "$KEY_SRC" ]] || fail "$KEY_SRC not found"
-
-ENC=$(grep 'ENCRYPTED_KEY = "' "$KEY_SRC" | head -1 | sed -E 's/.*"(.*)".*/\1/')
-MODEL=$(grep 'OPENROUTER_DEFAULT_MODEL = "' "$KEY_SRC" | head -1 | sed -E 's/.*"(.*)".*/\1/')
-ENDPOINT=$(grep 'OPENROUTER_BASE_URL = "' "$KEY_SRC" | head -1 | sed -E 's/.*"(.*)".*/\1/')
-[[ -n "$ENC" && -n "$MODEL" && -n "$ENDPOINT" ]] || fail "failed to parse BuiltInKeyProvider constants"
-
-KEY=$(ENC="$ENC" python3 - <<'PY'
-import base64, os, sys
-try:
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-except ImportError:
-    sys.stderr.write("cryptography lib missing — pip3 install cryptography\n"); sys.exit(2)
-K = bytes([
-    0x41, 0x6E, 0x64, 0x72, 0x6F, 0x69, 0x64, 0x46,
-    0x6F, 0x72, 0x43, 0x6C, 0x61, 0x77, 0x4B, 0x65,
-    0x79, 0x50, 0x72, 0x6F, 0x76, 0x69, 0x64, 0x65,
-    0x72, 0x53, 0x65, 0x63, 0x72, 0x65, 0x74, 0x21])
-data = base64.b64decode(os.environ["ENC"])
-print(AESGCM(K).decrypt(data[:12], data[12:], None).decode())
-PY
-) || fail "failed to decrypt built-in key"
-[[ -n "$KEY" ]] || fail "decrypted key is empty"
-log "decrypted built-in key keyLen=${#KEY} model=$MODEL"
+### 0. OpenCode Zen public-key constants
+# 与 hermes-android/.../OpenCodeZenCatalog.kt 锁住的 4 个常量同步：
+#   PROVIDER_ID = "opencode-zen"          (registry name only)
+#   PUBLIC_API_KEY = "public"             (literal — not a secret)
+#   DEFAULT_ENDPOINT = "https://opencode.ai/zen/v1/chat/completions"
+#   BASELINE_FREE_MODEL = "nemotron-3-super-free"
+#     (verified against live https://opencode.ai/zen/v1/models with
+#      Authorization: Bearer public — earlier candidates `qwen/qwen3-coder`
+#      and `grok-code` are present in models.dev's `opencode` provider but
+#      the live endpoint returns 401 ModelError for them.)
+KEY="public"
+PROVIDER="OPENCODE_ZEN"
+ENDPOINT="https://opencode.ai/zen/v1/chat/completions"
+MODEL="nemotron-3-super-free"
+log "OpenCode Zen public-key path: provider=$PROVIDER endpoint=$ENDPOINT model=$MODEL"
 
 ### 1. 设备
 DEVICE="${ADB_DEVICE:-}"
@@ -89,13 +81,13 @@ $ADB logcat -c
 $ADB shell am start -n "$MAIN_ACTIVITY" >/dev/null
 sleep "$WAIT_AFTER_LAUNCH_S"
 
-### 4. 广播内置 key 配置（等价于新用户点"使用内置 OpenRouter Key"按钮）
-log "broadcasting built-in key config"
+### 4. 广播 OpenCode Zen public-key 配置（等价于新用户点"使用 OpenCode Zen 免费模型"按钮）
+log "broadcasting OpenCode Zen public-key config"
 $ADB shell am broadcast \
   -n "$API_RECEIVER" \
   -a com.ai.assistance.operit.SET_API_KEY \
   --es key "$KEY" \
-  --es provider OPENROUTER \
+  --es provider "$PROVIDER" \
   --es endpoint "$ENDPOINT" \
   --es model "$MODEL" >/dev/null
 

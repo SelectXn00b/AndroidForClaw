@@ -24,11 +24,11 @@ class ApiProviderConfigsOpenCodeZenTest {
         )
     }
 
-    /** OPENCODE_ZEN default model is the BASELINE free model (qwen/qwen3-coder). */
+    /** OPENCODE_ZEN default model is the BASELINE free model (nemotron-3-super-free). */
     @Test
     fun `defaultModelName isBaselineFreeModel`() {
         assertEquals(
-            "qwen/qwen3-coder",
+            "nemotron-3-super-free",
             ApiProviderConfigs.getDefaultModelName(ApiProviderType.OPENCODE_ZEN)
         )
     }

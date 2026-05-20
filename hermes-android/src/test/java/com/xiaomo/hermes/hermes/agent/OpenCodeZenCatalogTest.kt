@@ -200,6 +200,91 @@ class OpenCodeZenCatalogTest {
             "https://opencode.ai/zen/v1/chat/completions",
             OpenCodeZenCatalog.DEFAULT_ENDPOINT
         )
-        assertEquals("qwen/qwen3-coder", OpenCodeZenCatalog.BASELINE_FREE_MODEL)
+        assertEquals("nemotron-3-super-free", OpenCodeZenCatalog.BASELINE_FREE_MODEL)
+    }
+
+    /**
+     * TC-AGENT-200-i: live-fetch path.
+     *
+     * When the live `/v1/models` fetcher returns a non-empty list, prefer
+     * the first id ending with `-free` (OpenCode Zen's free-tier convention)
+     * over the static catalog selection.
+     */
+    @Test
+    fun `selectDefaultFreeModelLive prefersLiveFreeIdOverCatalog`() {
+        val catalog = mapOf(
+            "opencode" to mapOf(
+                "models" to mapOf(
+                    "from-catalog-not-live" to mapOf(
+                        "id" to "from-catalog-not-live",
+                        "name" to "should not be picked",
+                        "tool_call" to true,
+                        "release_date" to "2026-12-01",
+                        "cost" to mapOf("input" to 0.0)
+                    )
+                )
+            )
+        )
+        val live = listOf(
+            "claude-opus-4-7",                  // paid, skipped
+            "deepseek-v4-flash-free",           // first -free → must win
+            "qwen3.6-plus-free"
+        )
+        val picked = OpenCodeZenCatalog.selectDefaultFreeModelLive(catalog) { live }
+        assertEquals("deepseek-v4-flash-free", picked)
+    }
+
+    /**
+     * TC-AGENT-200-i: live-fetch returns null → falls back to catalog.
+     */
+    @Test
+    fun `selectDefaultFreeModelLive fallsBackToCatalogWhenLiveNull`() {
+        val catalog = mapOf(
+            "opencode" to mapOf(
+                "models" to mapOf(
+                    "fallback-from-catalog" to mapOf(
+                        "id" to "fallback-from-catalog",
+                        "name" to "fallback",
+                        "tool_call" to true,
+                        "release_date" to "2026-04-21",
+                        "cost" to mapOf("input" to 0.0)
+                    )
+                )
+            )
+        )
+        val picked = OpenCodeZenCatalog.selectDefaultFreeModelLive(catalog) { null }
+        assertEquals("fallback-from-catalog", picked)
+    }
+
+    /**
+     * TC-AGENT-200-i: live empty + catalog empty → BASELINE.
+     */
+    @Test
+    fun `selectDefaultFreeModelLive fallsBackToBaselineWhenAllEmpty`() {
+        val picked = OpenCodeZenCatalog.selectDefaultFreeModelLive(emptyMap()) { null }
+        assertEquals(OpenCodeZenCatalog.BASELINE_FREE_MODEL, picked)
+    }
+
+    /**
+     * TC-AGENT-200-i: live list has no `-free` suffix → falls back to catalog.
+     */
+    @Test
+    fun `selectDefaultFreeModelLive ignoresLiveListWithoutFreeIds`() {
+        val catalog = mapOf(
+            "opencode" to mapOf(
+                "models" to mapOf(
+                    "catalog-pick" to mapOf(
+                        "id" to "catalog-pick",
+                        "name" to "from catalog",
+                        "tool_call" to true,
+                        "release_date" to "2026-03-11",
+                        "cost" to mapOf("input" to 0.0)
+                    )
+                )
+            )
+        )
+        val live = listOf("paid-only-1", "paid-only-2")
+        val picked = OpenCodeZenCatalog.selectDefaultFreeModelLive(catalog) { live }
+        assertEquals("catalog-pick", picked)
     }
 }
