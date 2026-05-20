@@ -130,9 +130,34 @@ HermesApp 必须提供与 Python Hermes 等价的 agent turn-loop 内核。Pytho
 **来源**: `reference/hermes-agent/run_agent.py` + `agent/prompt_builder.py` + `agent/display.py` + `agent/transports/`
 **行为**: 驱动多轮 tool-calling；每轮由 `PromptBuilder` 组装 system/user/tool 消息 → 通过 provider 特定 transport（Anthropic / Bedrock / Codex Responses / Gemini native / Gemini CloudCode / Copilot ACP 等）发送 → 解析 tool_calls → dispatch tool → 收 tool_result → 进下一轮；达到 max_turns / 收到 stop 信号 / 最终回复无 tool_call 时终止；所有一轮内产生的事件（ContentDelta / ToolCallStart / ToolCallEnd / TurnComplete 等）以 `AgentEvent` 流给调用方。
 
-### R-AGENT-002: 错误处理——分类、重试、模型路由、failover 合一
-**来源**: `reference/hermes-agent/agent/error_classifier.py` + `retry_utils.py` + `rate_limit_tracker.py` + `nous_rate_guard.py` + `model_metadata.py` + `models_dev.py`
-**行为**: API 错误按 HTTP 状态 + provider error_code + 文本归入统一类别（retry / rotate / fallback / compress / non-retriable），驱动指数退避 / Retry-After / 立即失败等重试策略；`rate_limit_tracker` 跟踪每 provider 限流窗口、`nous_rate_guard` 防超配；primary 返回 fallback 类错误时按 `model_metadata` + `models.dev` 的模型能力/成本表自动切换到下一个 provider；所有分类、退避参数、切换逻辑与 Python 上游 1:1。
+### R-AGENT-002: 错误处理 + 模型 catalog + OpenCode Zen 公开 key 兜底
+**来源**:
+- 错误分类/重试/路由: `reference/hermes-agent/agent/error_classifier.py` + `retry_utils.py` + `rate_limit_tracker.py` + `nous_rate_guard.py` + `model_metadata.py`
+- 模型 catalog（启动顺序 / TTL / cache / snapshot）: `reference/hermes-agent/agent/models_dev.py:1-626`
+- OpenCode Zen public-key 兜底: **无 Python 上游**（Python Hermes 不内置共享 key；行为借鉴 sst/opencode TS 上游 `packages/opencode/src/provider/provider.ts:160-182` 的 `apiKey="public"` + `cost.input==0` 过滤；落地仅 Android 侧）
+
+**行为**:
+1. **错误分类**：API 错误按 HTTP 状态 + provider error_code + 文本归入统一类别（retry / rotate / fallback / compress / non-retriable），驱动指数退避 / Retry-After / 立即失败。
+2. **限流**：`rate_limit_tracker` 每 provider 限流窗口；`nous_rate_guard` 防超配；与 Python 上游 1:1。
+3. **fallback 路由**：primary 返回 fallback 类错误时按 `model_metadata` + `models.dev` 模型能力/成本表自动切换 provider。
+4. **models.dev catalog 启动顺序**（对齐 `agent/models_dev.py:207-248`）：
+   - 内存 cache（TTL=3600s，对齐 `:35` `_MODELS_DEV_CACHE_TTL`）
+   - 内嵌 snapshot：Android 从 `assets/models_dev_snapshot.json` 加载（Python 用 pkg-resources，Android 等价物为 `AssetManager`，**Android-only**）
+   - 磁盘 cache：Python `~/.hermes/models_dev_cache.json`，Android `applicationContext.cacheDir/models_dev_cache.json`
+   - 网络拉取 `https://models.dev/api.json`（15s timeout）
+   - 后台 60min refresh（Android 由 `ApplicationScope` coroutine 触发）
+5. **OpenCode Zen 兜底（无 Python 上游）**：
+   - models.dev provider id `opencode`（Hermes 已在 `agent/models_dev.py:157` PROVIDER_TO_MODELS_DEV 收录）
+   - 用户未配置任何 provider key 时，注入字面量 `apiKey="public"` 走 `https://opencode.ai/zen/v1/chat/completions`
+   - 该路径**只**放行 `cost.input == 0` 模型（与 opencode TS `provider.ts:170` 同语义）
+   - free model 选择：`tool_call==true && cost.input==0` 且不命中 `NOISE_PATTERN` → 按 `release_date` 倒序 → 取第一个；catalog 全空时退回 `BASELINE_FREE_MODEL = "qwen/qwen3-coder"`
+6. **首次启动默认 provider**：`OPENCODE_ZEN`（取代旧 `OPENROUTER + BuiltInKeyProvider`）；不再嵌入加密 key。
+7. **彻底废弃旧路径**：`BuiltInKeyProvider.kt` 整文件移除；`ApiPreferences.DEFAULT_API_*` 改 OpenCode Zen 公开值；无 fallback、无 feature flag——按 §0 "彻底切换"。
+
+**验收**（agent-level）：
+- 新装/清 DataStore 后冷启动，**无任何用户配置**即可发起 chat 并收到 `aiResponsePreview` 含 TOKEN（TC-AGENT-200-c 重写、TC-AGENT-200-h 全自动启动路径）
+- catalog 三层 fallback：网络断 → disk cache；disk 缺 → snapshot；snapshot 缺 → BASELINE_FREE_MODEL
+- §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增）
 
 ### R-AGENT-003: Agent 辅助工具——标题、FileSafety、上下文压缩、memory 合一
 **来源**: `reference/hermes-agent/agent/title_generator.py` + `file_safety.py` + `context_compressor.py` + `memory_manager.py` + `memory_provider.py` + `manual_compression_feedback.py` + `context_references.py` + `redact.py` + `prompt_caching.py`

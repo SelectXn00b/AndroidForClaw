@@ -290,11 +290,18 @@ CORE 域的两条顶层约束（R-CORE-001 1:1 对齐 / R-CORE-002 冲突以 Her
 
 R-AGENT-001 描述 agent turn-loop 内核，验收以 **E2E 为主**（§3 三脚本要求 `aiResponsePreview` 含脚本种下的 TOKEN，是 agent-level 正确性的充分信号），辅以 `HermesAgentLoopBeforeNextTurnTest` 对 hook 行为的单元覆盖。
 
+**TC-AGENT-200-c 改写**: 旧 c 验 BuiltInKeyProvider 解密 + OpenRouter；新 c 改 OpenCode Zen public-key（无解密）。ID 保留维持追溯链；R 引用从 R-AGENT-001 迁到 R-AGENT-002。
+
 | TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
 |---|---|---|---|---|---|
 | TC-AGENT-200-a | R-AGENT-001 | 纯聊天（无工具），广播 EXTERNAL_CHAT + TOKEN 要求 | `aiResponsePreview` 含 TOKEN；无 4xx/NonRetriable | e2e | `scripts/e2e/test_api_config_e2e.sh` ✅ |
 | TC-AGENT-200-b | R-AGENT-001 | 强制 sleep 工具的 chat | `HermesBridge/Tool dispatch IN+OUT` + `aiResponsePreview` 含 TOKEN（证明 agent 读了 tool_result） | e2e | `scripts/e2e/test_tool_call_e2e.sh` ✅ |
-| TC-AGENT-200-c | R-AGENT-001 | 新用户路径（清 api_settings DataStore）+ 内置 OpenRouter key | `aiResponsePreview` 含 TOKEN | e2e | `scripts/e2e/test_builtin_key_e2e.sh` ✅ |
+| TC-AGENT-200-c | R-AGENT-002 | 新用户路径（清 api_settings + model_configs DataStore）+ OpenCode Zen public-key 兜底 | `aiResponsePreview` 含 TOKEN；catalog 选出的 free model 写入 default 配置；apiKey 字面量 == "public" | e2e | `scripts/e2e/test_builtin_key_e2e.sh` 🔴 (重写中) |
+| TC-AGENT-200-d | R-AGENT-002 | hermes-android `fetchModelsDevWithSnapshot` 在 mem 空 + 注入 snapshot 字符串时 | 返回非空 Map，含 `opencode` provider | unit | `ModelsDevSnapshotTest#fetchSnapshot_loadsBundledAsset_whenNetworkAndDiskMissing` 🔴 |
+| TC-AGENT-200-e | R-AGENT-002 | `OpenCodeZenCatalog.listFreeModels(catalog)` 输入混合 cost / tool_call / NOISE_PATTERN 模型 | 仅返回 cost.input==0 且 tool_call==true 且非 noise；按 release_date desc 排序 | unit | `OpenCodeZenCatalogTest#listFreeModels_filtersByCostZero_andSortsByReleaseDateDesc` 🔴 |
+| TC-AGENT-200-f | R-AGENT-002 | `OpenCodeZenCatalog.selectDefaultFreeModel(catalog)` catalog 含多个 free model | 返回 release_date 最新者；string 非空 | unit | `OpenCodeZenCatalogTest#selectDefaultFreeModel_picksLatestToolCapableFreeModel` 🔴 |
+| TC-AGENT-200-g | R-AGENT-002 | `selectDefaultFreeModel` 在 catalog 完全为空时 | 返回 BASELINE_FREE_MODEL（"qwen/qwen3-coder"），不抛异常 | unit | `OpenCodeZenCatalogTest#selectDefaultFreeModel_fallsBackToBaselineWhenCatalogEmpty` 🔴 |
+| TC-AGENT-200-h | R-AGENT-002 | 全自动新用户首启：清 DataStore，**不**发 SET_API_KEY，直接 EXTERNAL_CHAT + TOKEN | `ModelConfigManager.initializeIfNeeded` 自动 seed `apiProviderType=OPENCODE_ZEN, apiKey="public"`；agent 完成回合且 aiResponsePreview 含 TOKEN | e2e | `scripts/e2e/test_opencode_zen_autoboot_e2e.sh` 🔴 |
 | TC-AGENT-201-a | R-AGENT-001 | `beforeNextTurn` 返回 false on turn 0 | 首次调用前中止，无 chatCompletion 发起 | unit | `HermesAgentLoopBeforeNextTurnTest#beforeNextTurn_returnsFalseOnTurn0_abortsBeforeFirstCall` ✅ |
 | TC-AGENT-201-b | R-AGENT-001 | `beforeNextTurn` 返回 false after turn 0 | 第 N 次调用前中止 | unit | `HermesAgentLoopBeforeNextTurnTest#beforeNextTurn_returnsFalseAfterTurn0_abortsBeforeNthCall` ✅ |
 | TC-AGENT-201-c | R-AGENT-001 | `beforeNextTurn` 抛异常 | 被吞，视为 continue | unit | `HermesAgentLoopBeforeNextTurnTest#beforeNextTurn_throwing_isCaughtAndTreatedAsContinue` ✅ |
