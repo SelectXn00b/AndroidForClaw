@@ -130,7 +130,7 @@ class ModelsDev {
             "perplexity" to "perplexity",
             "cohere" to "cohere")
 
-        private val NOISE_PATTERN = Regex(
+        internal val NOISE_PATTERN = Regex(
             """-tts\b|embedding|live-|-(preview|exp)-\d{2,4}[-_]|-image\b|-image-preview\b|-customtools\b""",
             RegexOption.IGNORE_CASE
         )
@@ -412,6 +412,43 @@ fun _saveDiskCache(data: Map<String, Any?>) {
 /** Fetch models.dev registry. In-memory cache (1hr) + disk fallback. */
 fun fetchModelsDev(forceRefresh: Boolean = false): Map<String, Any> {
     return _sharedModelsDev.fetch(forceRefresh)
+}
+
+// ── Android-only: bundled snapshot loader ────────────────────────────────
+// 无 Python 上游：Python 用 pkg-resources，Android 等价物 AssetManager。
+// deep_align: ignore — Android-platform IO，不属于 1:1 翻译范围。
+
+const val MODELS_DEV_SNAPSHOT_ASSET: String = "models_dev_snapshot.json"
+
+/**
+ * Three-tier catalog fetch with bundled snapshot fallback (Android-only).
+ *
+ * Order:
+ *   1. In-memory + disk cache via fetchModelsDev(false)
+ *   2. If empty, parse snapshotProvider() (e.g. assets JSON)
+ *   3. If still empty, force network refresh via fetchModelsDev(true)
+ *
+ * snapshotProvider returns null/blank when no bundled asset is available,
+ * which allows pure-JVM unit tests to inject snapshot strings without Context.
+ */
+@Suppress("UNCHECKED_CAST")
+fun fetchModelsDevWithSnapshot(
+    forceRefresh: Boolean = false,
+    snapshotProvider: () -> String? = { null }
+): Map<String, Any> {
+    val mem = fetchModelsDev(forceRefresh)
+    if (mem.isNotEmpty()) return mem
+    val snap = snapshotProvider()
+    if (!snap.isNullOrBlank()) {
+        try {
+            val type = com.google.gson.reflect.TypeToken
+                .getParameterized(Map::class.java, String::class.java, Any::class.java).type
+            val parsed: Map<String, Any>? = com.google.gson.Gson().fromJson(snap, type)
+            if (!parsed.isNullOrEmpty()) return parsed
+        } catch (_: Exception) {
+        }
+    }
+    return fetchModelsDev(true)
 }
 
 /** Look up context_length for a provider+model in models.dev. */
