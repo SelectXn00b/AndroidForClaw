@@ -56,7 +56,7 @@
 | PARSER | R-PARSER-001 .. 090 | 🟢 10 parser 家族（Longcat / Qwen / Qwen3-Coder / Llama / GLM-4.5 / GLM-4.7 / DeepSeek-V3 / DeepSeek-V3.1 / Kimi-K2 / Mistral + Hermes 通用基类） |
 | AGENT | R-AGENT-001 .. 008 | 🟡 4 条（turn-loop / 错误处理合并 / 辅助合并 / 凭证池轮转） |
 | ACP | R-ACP-001 .. 004 | 🟡 4 条（server 协议 / tool-kind 映射 / 事件生命周期 / client 连 Copilot） |
-| TOOL | R-TOOL-001 .. 003 | 🟡 3 条（内置工具集 / 审批 / 预算） |
+| TOOL | R-TOOL-001 .. 003, 016 | 🟡 4 条（内置工具集 / 审批 / 预算 / launch_app BAL 兜底） |
 | GATEWAY | R-GW-001 .. 006 | 🟡 6 个子系统级能力（base+runner+config / Feishu / Weixin / QQ / 其他平台 / 前台服务） |
 | STATE | R-STATE-001 .. 003 | 🟡 3 个子系统级能力 |
 | SKILL | R-SKILL-001 .. 003 | 🟡 3 条（发现+hub+loader / 启用+guard / 同步） |
@@ -229,6 +229,18 @@ HermesApp 提供 Hermes agent 可调用的内建工具集。Python 源位于 `re
 ### R-TOOL-003: 工具预算约束
 **来源**: `reference/hermes-agent/tools/budget_config.py` + `managed_tool_gateway.py`
 **行为**: 按工具类别跟踪单轮 / 会话累计调用次数、字节、token；超预算拒绝继续调用并返回预算用尽的结构化错误；`managed_tool_gateway` 负责远程管理型工具的配额 / 限流；配额阈值与 Python 上游一致。
+
+### R-TOOL-016: launch_app 工具——经 monkey 突破 Android BAL 启动其他 APP
+**来源**: 无 Python 上游（Android 平台特供工具）。原因：Android 10+ 引入的 background activity launch (BAL) 限制使 `start_app` 的 `am start` / `Context.startActivity` 路径在 agent 后台运行时被静默拒绝（命令成功但 activity 不切前台），需要走 shell `monkey` 路径绕开。
+**行为**:
+- 暴露 `launch_app(package_name: String)` 工具，注册进 R-TOOL-001 registry。
+- 实现走 `AndroidShellExecutor.executeShellCommand("monkey -p <pkg> -c android.intent.category.LAUNCHER 1")`；由 `ShellExecutorFactory` 按用户当前权限层（STANDARD / DEBUGGER(Shizuku) / ROOT / ADMIN / ACCESSIBILITY）路由——DEBUGGER 及以上层运行在 `shell` uid 上，BAL 放行；STANDARD 层在自身 uid 上跑 monkey，BAL 仍可能挡，但作为 best-effort 保留。
+- 与 `start_app` **并存**（不替换）。两者职责对照：
+  - `start_app`：走 `am start -n pkg/Activity` 或 PackageManager intent，干净无副作用，但 Android 14+ 后台调用易被 BAL 拒。
+  - `launch_app`：走 `monkey -c LAUNCHER`，能突破 BAL，但**已知副作用**——monkey 会触发系统的"屏幕方向锁"等设置变更（见历史决策注释 `DebuggerSystemOperationTools.kt:310` 说明为何 `start_app` 当年从 monkey 改回 am start）。Agent 应优先用 `start_app`，仅在 `start_app` 命令成功但前台未切换时回退到 `launch_app`。
+- 返回 `AppOperationData(operationType="launch", packageName=<pkg>, success=<bool>, details=<stdout/stderr 摘要>)`。
+- 参数缺失 / 包不存在 → `ToolResult(success=false, error="...")`，不抛异常。
+- 工具描述（system prompt 里 AI 可见的）必须明确告诉模型「`launch_app` 是 `start_app` 的 BAL 兜底，并存使用」。
 
 ---
 

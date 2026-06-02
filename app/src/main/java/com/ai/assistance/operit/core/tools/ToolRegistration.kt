@@ -1946,6 +1946,18 @@ fun registerAllTools(handler: AIToolHandler, context: Context) {
             }
     )
 
+    // R-TOOL-016: launch_app —— 经 monkey 突破 Android BAL 启动应用（start_app 的兜底）
+    handler.registerTool(
+            name = "launch_app",
+            descriptionGenerator = { tool ->
+                val packageName = tool.parameters.find { it.name == "package_name" }?.value ?: ""
+                s(R.string.toolreg_launch_app_desc, packageName)
+            },
+            executor = { tool ->
+                runBlocking(Dispatchers.IO) { systemOperationTools.launchApp(tool) }
+            }
+    )
+
     // 停止应用
     handler.registerTool(
             name = "stop_app",

@@ -5459,6 +5459,7 @@
     <string name="toolreg_uninstall_app_desc">卸载应用: %1$s</string>
     <string name="toolreg_list_installed_apps_desc">列出已安装应用</string>
     <string name="toolreg_start_app_desc">启动应用: %1$s</string>
+    <string name="toolreg_launch_app_desc">通过 monkey 启动应用 (BAL 兜底): %1$s</string>
     <string name="toolreg_stop_app_desc">停止应用: %1$s</string>
     <string name="toolreg_get_notifications_desc_with_ongoing">获取设备通知 (最多 %1$s 条)，包括常驻通知</string>
     <string name="toolreg_get_notifications_desc">获取设备通知 (最多 %1$s 条)</string>

@@ -726,6 +726,19 @@ R-AGENT-001 描述 agent turn-loop 内核，验收以 **E2E 为主**（§3 三�
 | TC-TOOL-335-a | R-TOOL-001 | `EnvPassthrough("  ")` | 跳过 | unit | `EnvPassthroughTest#blank name skipped` ✅ |
 | TC-TOOL-336-a | R-TOOL-001 | `CredentialFiles.loadAll` | no-op 空 map | unit | `CredentialFilesTest#android no-op` ✅ |
 
+### LaunchApp.kt — R-TOOL-016 (Android 平台特供：monkey 突破 BAL)
+
+测试类: `app/src/test/java/com/ai/assistance/operit/core/tools/system/LaunchAppToolTest.kt`。源码契约扫描风格（参照 `AgentStatusOverlayWiringTest`），避免依赖 `AndroidShellExecutor` 真正 fork 子进程——只验证 wiring 与 monkey 命令字符串正确。
+
+| ID | R-ID | 输入 | 期望 | 类型 | 落地 |
+|---|---|---|---|---|---|
+| TC-TOOL-400-a | R-TOOL-016 | `StandardSystemOperationTools.launchApp` 源码 | 调用 `AndroidShellExecutor.executeShellCommand(...)` 且命令包含 `monkey -p` 与 `android.intent.category.LAUNCHER` | unit (源码扫描) | `LaunchAppToolTest#standard tool uses monkey LAUNCHER` |
+| TC-TOOL-400-b | R-TOOL-016 | `DebuggerSystemOperationTools.launchApp` 源码 | 同 a；DEBUGGER 层走 Shizuku binder（由 `ShellExecutorFactory` 自动路由，无需此类显式调用） | unit (源码扫描) | `LaunchAppToolTest#debugger tool uses monkey LAUNCHER` |
+| TC-TOOL-400-c | R-TOOL-016 | `ToolRegistration.kt` 源码 | 注册了 `name = "launch_app"` 工具且 executor 委派 `systemOperationTools.launchApp` | unit (源码扫描) | `LaunchAppToolTest#registration wires launch_app to launchApp` |
+| TC-TOOL-400-d | R-TOOL-016 | `SystemToolPromptsInternal.kt` 源码 | EN+CN 双 prompt 各包含一条 `name = "launch_app"` 的 `ToolPrompt`；描述里出现 BAL / monkey / 兜底关键词 | unit (源码扫描) | `LaunchAppToolTest#prompt declares launch_app with BAL hint` |
+| TC-TOOL-400-e | R-TOOL-016 | `SystemOperationTools` 接口 | 接口必须声明 `suspend fun launchApp(tool: AITool): ToolResult`，否则各实现没有共同契约 | unit (源码扫描) | `LaunchAppToolTest#interface declares launchApp` |
+| TC-TOOL-400-f | R-TOOL-016 | 反向防呆 | `launch_app` 与 `start_app` **并存**——`start_app` 注册仍保留（不被覆盖）；且 prompt 里 `launch_app` 描述不包含错误的 "replaces start_app" / "instead of start_app" 字样（必须是兜底关系） | unit (源码扫描) | `LaunchAppToolTest#start_app still registered alongside launch_app` |
+
 ---
 
 ## 域 GATEWAY

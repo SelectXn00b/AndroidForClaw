@@ -4735,6 +4735,7 @@ Agora é possível usar o modo AutoGLM na interface de diálogo.</string>
     <string name="toolreg_uninstall_app_desc">Desinstalar aplicativo: %1$s</string>
     <string name="toolreg_list_installed_apps_desc">Listar aplicativos instalados</string>
     <string name="toolreg_start_app_desc">Iniciar aplicativo: %1$s</string>
+    <string name="toolreg_launch_app_desc">Iniciar aplicativo via monkey (fallback BAL): %1$s</string>
     <string name="toolreg_stop_app_desc">Parar aplicativo: %1$s</string>
     <string name="toolreg_get_notifications_desc_with_ongoing">Receba notificações do dispositivo (até %1$s), incluindo notificações persistentes</string>
     <string name="toolreg_get_notifications_desc">Receba notificações do dispositivo (até %1$s)</string>

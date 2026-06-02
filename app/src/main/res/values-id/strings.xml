@@ -5045,6 +5045,7 @@ Sekarang Anda dapat menggunakan mode AutoGLM di antarmuka percakapan.</string>
     <string name="toolreg_uninstall_app_desc">Copot aplikasi: %1$s</string>
     <string name="toolreg_list_installed_apps_desc">Daftar aplikasi yang terinstal</string>
     <string name="toolreg_start_app_desc">Mulai aplikasi: %1$s</string>
+    <string name="toolreg_launch_app_desc">Luncurkan aplikasi via monkey (fallback BAL): %1$s</string>
     <string name="toolreg_stop_app_desc">Hentikan aplikasi: %1$s</string>
     <string name="toolreg_get_notifications_desc_with_ongoing">Dapatkan notifikasi perangkat (maksimal %1$s), termasuk notifikasi berkelanjutan</string>
     <string name="toolreg_get_notifications_desc">Dapatkan notifikasi perangkat (maksimal %1$s)</string>

@@ -2489,6 +2489,19 @@ object SystemToolPromptsInternal {
                                 )
                         ),
                         ToolPrompt(
+                            name = "launch_app",
+                            description = "Launch an app via 'monkey -c LAUNCHER' to bypass Android background activity launch (BAL) restrictions. Use as a fallback when start_app returns success but the app does not actually come to foreground (common on Android 10+ when called from background). Side-effect: monkey may briefly touch system settings (e.g. screen rotation lock). Prefer start_app first; fall back to launch_app only if needed.",
+                            parametersStructured =
+                                listOf(
+                                    ToolParameterSchema(
+                                        name = "package_name",
+                                        type = "string",
+                                        description = "app package name",
+                                        required = true
+                                    )
+                                )
+                        ),
+                        ToolPrompt(
                             name = "stop_app",
                             description = "Stop an app background process.",
                             parametersStructured =
@@ -5131,6 +5144,19 @@ object SystemToolPromptsInternal {
                                         type = "string",
                                         description = "可选，Activity 类名",
                                         required = false
+                                    )
+                                )
+                        ),
+                        ToolPrompt(
+                            name = "launch_app",
+                            description = "通过 'monkey -c LAUNCHER' 启动应用，专门用于绕过 Android 后台 activity 启动 (BAL) 限制。当 start_app 返回成功但应用并未真正切到前台（Android 10+ 后台调用时常见）时作为兜底使用。副作用：monkey 可能短暂触碰系统设置（例如屏幕方向锁）。优先使用 start_app，仅在必要时回退到 launch_app。",
+                            parametersStructured =
+                                listOf(
+                                    ToolParameterSchema(
+                                        name = "package_name",
+                                        type = "string",
+                                        description = "应用包名",
+                                        required = true
                                     )
                                 )
                         ),

@@ -5312,6 +5312,7 @@
     <string name="toolreg_uninstall_app_desc">Uninstall app: %1$s</string>
     <string name="toolreg_list_installed_apps_desc">List installed apps</string>
     <string name="toolreg_start_app_desc">Start app: %1$s</string>
+    <string name="toolreg_launch_app_desc">Launch app via monkey (BAL fallback): %1$s</string>
     <string name="toolreg_stop_app_desc">Stop app: %1$s</string>
     <string name="toolreg_get_notifications_desc_with_ongoing">Get notifications (max %1$s), including ongoing</string>
     <string name="toolreg_get_notifications_desc">Get notifications (max %1$s)</string>

@@ -5084,6 +5084,7 @@ Kini anda boleh menggunakan mod AutoGLM di antara muka perbualan.</string>
     <string name="toolreg_uninstall_app_desc">Nyahpasang aplikasi: %1$s</string>
     <string name="toolreg_list_installed_apps_desc">Senaraikan aplikasi yang dipasang</string>
     <string name="toolreg_start_app_desc">Mulakan aplikasi: %1$s</string>
+    <string name="toolreg_launch_app_desc">Lancarkan aplikasi melalui monkey (sandaran BAL): %1$s</string>
     <string name="toolreg_stop_app_desc">Hentikan aplikasi: %1$s</string>
     <string name="toolreg_get_notifications_desc_with_ongoing">Dapatkan pemberitahuan peranti (sehingga %1$s), termasuk pemberitahuan berterusan</string>
     <string name="toolreg_get_notifications_desc">Dapatkan pemberitahuan peranti (sehingga %1$s)</string>

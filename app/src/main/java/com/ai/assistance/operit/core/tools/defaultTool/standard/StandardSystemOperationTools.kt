@@ -592,6 +592,58 @@ open class StandardSystemOperationTools(private val context: Context) {
         }
     }
 
+    /**
+     * R-TOOL-016: `launch_app` —— 经 shell `monkey` 启动应用，专用于突破 Android 10+ 的
+     * background activity launch (BAL) 限制。
+     *
+     * 与 [startApp] 并存（不替换）。两者职责对照：
+     * - [startApp]：走 `Context.startActivity(Intent)` 或 `am start -n pkg/Activity`，
+     *   干净无副作用，但 agent 后台运行时易被 BAL 静默拒绝（命令 exitCode=0 但 activity
+     *   不切前台）。
+     * - [launchApp]：走 `monkey -p <pkg> -c android.intent.category.LAUNCHER 1`。在
+     *   DEBUGGER(Shizuku) / ROOT 层下命令运行在 `shell` uid，BAL 放行；STANDARD 层下
+     *   仍在自身 uid 跑 monkey，BAL 仍可能挡，作为 best-effort 保留。
+     *
+     * 历史决策注释（见 [com.ai.assistance.operit.core.tools.defaultTool.debugger.DebuggerSystemOperationTools.startApp]
+     * 行内注释）说明 `startApp` 曾从 monkey 改回 am start，原因是 monkey 会触发系统的
+     * "屏幕方向锁" 等设置变更。本工具有意接受该副作用以换取 BAL 兜底能力，agent 应优先
+     * 用 `start_app`，仅在其 `success=true` 但前台未切换时回退到 `launch_app`。
+     */
+    open suspend fun launchApp(tool: AITool): ToolResult {
+        val packageName = tool.parameters.find { it.name == "package_name" }?.value ?: ""
+        if (packageName.isBlank()) {
+            return ToolResult(
+                toolName = tool.name,
+                success = false,
+                result = StringResultData(""),
+                error = "Must provide package_name parameter"
+            )
+        }
+        val cmd = "monkey -p $packageName -c android.intent.category.LAUNCHER 1"
+        val result = AndroidShellExecutor.executeShellCommand(cmd)
+        return if (result.success) {
+            ToolResult(
+                toolName = tool.name,
+                success = true,
+                result = AppOperationData(
+                    operationType = "launch",
+                    packageName = packageName,
+                    success = true,
+                    details = "via monkey LAUNCHER (BAL bypass)"
+                ),
+                error = ""
+            )
+        } else {
+            val reason = result.stderr.ifBlank { result.stdout }.ifBlank { "exitCode=${result.exitCode}" }
+            ToolResult(
+                toolName = tool.name,
+                success = false,
+                result = StringResultData(""),
+                error = "Failed to launch app via monkey: $reason"
+            )
+        }
+    }
+
     /** 停止应用程序 */
     open suspend fun stopApp(tool: AITool): ToolResult {
         val packageName = tool.parameters.find { it.name == "package_name" }?.value ?: ""
