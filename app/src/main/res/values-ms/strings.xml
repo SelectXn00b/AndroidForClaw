@@ -4959,6 +4959,7 @@ Kini anda boleh menggunakan mod AutoGLM di antara muka perbualan.</string>
     <string name="memory_updated_at">Masa Kemaskini</string>
     <string name="memory_edit">Edit</string>
     <string name="memory_delete">Padam</string>
+    <string name="memory_persistent_instruction_toggle">Jadikan arahan kekal (disuntik ke setiap system prompt)</string>
     <string name="memory_close">Tutup</string>
     <string name="memory_link_details">Butiran Sambungan</string>
     <string name="memory_from">Dari</string>

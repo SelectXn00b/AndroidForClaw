@@ -492,7 +492,10 @@ fun MemoryScreen() {
                         viewModel.startEditing(uiState.selectedMemory)
                         viewModel.clearSelection() // 关闭当前对话框
                     },
-                    onDelete = { viewModel.deleteMemory(uiState.selectedMemory!!.id) }
+                    onDelete = { viewModel.deleteMemory(uiState.selectedMemory!!.id) },
+                    onTogglePersistent = { enabled ->
+                        viewModel.togglePersistentInstruction(uiState.selectedMemory!!.id, enabled)
+                    }
                 )
             }
 

@@ -92,6 +92,9 @@ class MemoryViewModel(
 
     companion object {
         private const val TAG = "MemoryViewModel"
+
+        /** R-AGENT-009 / R-UI-002 共用 tag 名（与 ConversationService / MemoryLibrary 保持一致）。 */
+        const val PERSISTENT_INSTRUCTION_TAG = "#persistent_instruction"
     }
 
     private val _uiState = MutableStateFlow(MemoryUiState())
@@ -684,6 +687,52 @@ class MemoryViewModel(
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(isLoading = false, error = context.getString(R.string.memory_error_delete_memory, e.message ?: "Unknown error"))
+                }
+            }
+        }
+    }
+
+    /**
+     * R-UI-002 — 手动 toggle 记忆的 `#persistent_instruction` tag。
+     *
+     * 用户在 `MemoryInfoDialog` 点 "设为持久化指令" 开关时调用：
+     *  - `enabled = true`  → `addTagToMemory(memory, "#persistent_instruction")`
+     *  - `enabled = false` → `removeTagFromMemory(memory, "#persistent_instruction")`
+     *
+     * 只动 tag 关系，不改 title / content / importance / credibility / 其它 tag；
+     * 完成后刷新 graph 并把更新后的 memory 写回 `uiState.selectedMemory`，让节点颜色
+     * （R-AGENT-009 金色 `pickNodeColorByAttributes`）即刻更新；不触发 MemoryLibrary
+     * 的自动合并/重写流程。
+     */
+    fun togglePersistentInstruction(memoryId: Long, enabled: Boolean) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            try {
+                val memory = repository.findMemoryById(memoryId)
+                if (memory == null) {
+                    _uiState.update { it.copy(isLoading = false) }
+                    return@launch
+                }
+                if (enabled) {
+                    repository.addTagToMemory(memory, PERSISTENT_INSTRUCTION_TAG)
+                } else {
+                    repository.removeTagFromMemory(memory, PERSISTENT_INSTRUCTION_TAG)
+                }
+                val refreshed = repository.findMemoryById(memoryId)
+                val updatedGraph = refreshGraph()
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        selectedMemory = refreshed ?: it.selectedMemory,
+                        graph = updatedGraph
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = context.getString(R.string.memory_error_update_memory, e.message ?: "Unknown error")
+                    )
                 }
             }
         }

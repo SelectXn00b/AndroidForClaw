@@ -4771,6 +4771,7 @@ Agora é possível usar o modo AutoGLM na interface de diálogo.</string>
     <string name="memory_updated_at">Hora de atualização</string>
     <string name="memory_edit">editar</string>
     <string name="memory_delete">excluir</string>
+    <string name="memory_persistent_instruction_toggle">Tratar como instrução persistente (injetada em todo system prompt)</string>
     <string name="memory_close">encerramento</string>
     <string name="memory_link_details">Detalhes de conexão</string>
     <string name="memory_from">de</string>

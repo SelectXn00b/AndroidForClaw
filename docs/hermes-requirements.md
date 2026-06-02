@@ -170,6 +170,26 @@ HermesApp 必须提供与 Python Hermes 等价的 agent turn-loop 内核。Pytho
 **来源**: `reference/hermes-agent/agent/credential_pool.py` + `credential_sources.py` + `account_usage.py` + `usage_pricing.py`
 **行为**: 同一 provider 支持多 key 凭证池；按健康度 / 配额 / 成本轮转；key 出现鉴权 / 限流错误时按 R-AGENT-002 分类从池中标记并切换到下一条；凭证来源（env / 文件 / keychain / EncryptedSharedPreferences）由 `credential_sources` 统一解析；`account_usage` 聚合每凭证 token / 金额消耗，`usage_pricing` 提供模型 → 成本表；轮转策略与 Python 上游 1:1。
 
+### R-AGENT-009: 持久指令注入（Eager System Prompt Injection）
+**来源**: 无 Python 上游（Android 侧用户体验需求；Python 上游的 memory_manager 是 lazy-RAG 模式，不主动注入）
+**行为**: 用户在对话中明确表达的持久偏好（输出格式、语气、默认动作等）必须在 **后续每一轮 LLM 请求** 中自动呈现在 system prompt 末尾，不依赖模型主动调 `query_memory`、不依赖 chat history 不被截断、不被自动总结流程覆盖。
+- **存储复用**：复用现有 Memory 体系（ObjectBox `Memory` 实体），不引入第二套存储；以特殊 tag `#persistent_instruction` 标识"持久指令"节点。
+- **写入路径**：
+  1. agent 在对话中识别用户明确意图（"以后…/记住…/下次回复…/回复时…"等长期意图触发词）时，主动调 `create_memory` 写入并附加 tag `#persistent_instruction`；
+  2. 用户也可直接在 APP 记忆库 UI 手编节点并打 tag（路径 P0 不专门做 UI，沿用现有 MemoryScreen）。
+- **读取注入**：`ConversationService.prepareConversationHistory` 拼装 `finalSystemPrompt` 时，从 `MemoryRepository` 拉所有带 `#persistent_instruction` tag 的节点 → 按 `updatedAt desc` 排序 → 拼接为 `[Persistent user instructions]\n- <content1>\n- <content2>\n...` 块，追加到 system prompt 末尾（位于 `User preference description` 之后）；无任何持久指令节点时不注入任何文本。
+- **抗侵蚀保护**：`MemoryLibrary.saveMemory` 的自动合并 / 重写流程跳过带 `#persistent_instruction` tag 的节点（不参与 `mergedEntities` / `updatedEntities` / 自动 folder 重分类），保证用户写入的原文一字不改。
+- **作用域**：P0 全局（所有飞书群 + APP UI 共享当前激活 Profile 的持久指令池），与现有 Memory 的 per-Profile 全局模型一致；P1 如有需求再加 per-chatId 维度。
+- **路径覆盖**：UI 聊天 / Floating chat / Gateway（飞书等）三个路径共用同一份注入逻辑，因为三者都走 `ConversationService.prepareConversationHistory`。
+- **验收**：
+  - 无 `#persistent_instruction` 节点 → system prompt 不含 `[Persistent user instructions]` 段（行为完全等价于改动前）
+  - 有 1 条 → system prompt 末尾出现该段，含原文 content
+  - 有 N 条 → 按 `updatedAt desc` 顺序拼接为 N 个 bullet
+  - 用户用 `update_memory` 改 content → 下一轮 LLM 请求注入更新后的 content
+  - 用户删除 Memory 节点或去掉 tag → 下一轮 LLM 请求不再注入该条
+  - 自动总结跑完一轮 → 带 tag 的节点 content 一字不动（不被合并/重写）
+  - §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增）
+
 ---
 
 ## 域 ACP — Agent Client Protocol
@@ -321,3 +341,21 @@ CONFIG 原先的三条 R-CONFIG-001..003（Preferences / ConfigBuilder / Control
 ### R-UI-001: Hermes Settings hub 承载 gateway 与 agent 的全部用户可见配置
 **来源**: 无 Python 上游；Android UI
 **行为**: 应用 Settings hub 新增 "Hermes / 墨思" 入口，子屏集中覆盖——gateway 平台凭证录入 / 清除、DM / 群 / 批量 / 去重 / 重连等策略、agent 参数（max_turns / persona / memory 策略 / 工具 allow-deny）、服务开关 + 电量白名单 + 开机自启 + 实时状态、QR 绑定（Feishu probe_bot / qr_register、Weixin qr_login）。敏感字段经加密存储；保存后运行时组件读取该配置而非硬编码。
+
+### R-UI-002: 记忆详情页手动 toggle 持久化指令
+**来源**: 无 Python 上游；Android UI 体验需求（用户兜底 R-AGENT-009 写入路径）
+**背景**: R-AGENT-009 规定带 `#persistent_instruction` tag 的 memory 节点每轮注入到 system prompt 末尾。原写入路径完全依赖 agent 在对话里识别意图后主动调 `create_memory` 附加该 tag，实战中 agent 会把日期 / 元描述 / 系统行为描述等"非规则"内容塞进 content，又或者干净规则被打错 tag，导致用户既无法新增也无法清理。用户需要一条不依赖 agent 的兜底通路。
+**行为**:
+- `MemoryInfoDialog`（记忆详情对话框）的 Tags 区域下方增加一个 `Switch`，标签例如 "设为持久化指令"
+- Switch 初始状态 = `memory.tags.any { it.name == "#persistent_instruction" }`
+- 开 → 调 `MemoryRepository.addTagToMemory(memory, "#persistent_instruction")`；关 → 调 `MemoryRepository.removeTagFromMemory(memory, "#persistent_instruction")`
+- 操作通过 `MemoryViewModel.togglePersistentInstruction(memoryId, enabled)` 走，与现有 `updateMemory` / `deleteMemory` 同一异步模式（`viewModelScope.launch` + `_uiState.update`）；toggle 后刷新 graph 让节点颜色（R-AGENT-009 金色）即刻更新
+- 仅操作 tag 关系，不动 memory 本身的 title / content / importance / credibility / 其它 tag
+- 文档节点（`isDocumentNode = true`）同样允许 toggle（文档可以是规则参考）
+- 该 toggle 不应触发 `MemoryLibrary` 的自动合并 / 重写流程
+**验收**:
+- toggle on 后：`memory.tags.map { it.name }` 包含 `#persistent_instruction`；下一轮 `ConversationService.buildPersistentInstructionsText()` 返回的 bullet 列表包含该 memory 的 content
+- toggle off 后：tag 被移除；下一轮注入不再包含该条；MemoryTag 实体本身保留（其它 memory 可能仍引用）
+- 重复 toggle on / off N 次后仅一份 tag 关系（无重复挂载）
+- toggle 不改 memory.title / content / updatedAt 之外的元数据；按 §1.2 `addTagToMemory` / `removeTagFromMemory` 已 `memoryBox.put(memory)` 写回，关闭对话框再打开看到的状态与最新值一致（无 ObjectBox `ToMany` 缓存陷阱）
+- §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增）

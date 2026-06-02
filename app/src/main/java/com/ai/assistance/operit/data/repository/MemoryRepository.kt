@@ -882,6 +882,25 @@ class MemoryRepository(private val context: Context, profileId: String) {
     }
 
     /**
+     * Finds all memories carrying the given tag (exact, case-sensitive).
+     *
+     * Used by R-AGENT-009 持久指令注入: `ConversationService` queries
+     * `findMemoriesByTag("#persistent_instruction")` every turn and appends the
+     * contents to the final system prompt, so user-set persistent rules survive
+     * across long conversations and across the UI / Floating / Gateway paths.
+     *
+     * @param tagName The tag name (e.g., "#persistent_instruction").
+     * @return Memories carrying that tag; empty list if the tag does not exist.
+     */
+    suspend fun findMemoriesByTag(tagName: String): List<Memory> = withContext(Dispatchers.IO) {
+        val tag = tagBox.query(
+            MemoryTag_.name.equal(tagName, QueryBuilder.StringOrder.CASE_SENSITIVE)
+        ).build().findFirst() ?: return@withContext emptyList()
+        tag.memories.reset()
+        tag.memories.toList()
+    }
+
+    /**
      * Deletes a memory and all its links. This is a critical operation and should be handled with
      * care.
      * @param memoryId The ID of the memory to delete.
@@ -1018,6 +1037,35 @@ class MemoryRepository(private val context: Context, profileId: String) {
             memoryBox.put(memory)
         }
         tag
+    }
+
+    /**
+     * Removes a tag from a memory. Symmetric to [addTagToMemory].
+     *
+     * R-UI-002 持久化指令手动 toggle: 用户在 `MemoryInfoDialog` 关闭 "设为持久化指令"
+     * 开关时调用此方法去掉 `#persistent_instruction` tag，下一轮 ConversationService
+     * 注入即不再包含该 memory。
+     *
+     * No-op when the tag does not exist globally or the memory does not carry it.
+     * The [MemoryTag] entity itself is preserved (其它 memory 可能仍引用同一 tag)；
+     * 此函数只操作 Memory ↔ Tag 的关系，不删 tag。
+     *
+     * @param memory The memory to untag.
+     * @param tagName The name of the tag to remove.
+     * @return True if a tag relation was removed; false if no-op.
+     */
+    suspend fun removeTagFromMemory(memory: Memory, tagName: String): Boolean = withContext(Dispatchers.IO) {
+        val tag =
+                tagBox.query()
+                        .equal(MemoryTag_.name, tagName, QueryBuilder.StringOrder.CASE_SENSITIVE)
+                        .build()
+                        .findFirst()
+                        ?: return@withContext false
+
+        val existing = memory.tags.firstOrNull { it.id == tag.id } ?: return@withContext false
+        memory.tags.remove(existing)
+        memoryBox.put(memory)
+        true
     }
 
     // --- Linking Operations ---
@@ -2496,16 +2544,7 @@ class MemoryRepository(private val context: Context, profileId: String) {
                     Node(
                             id = memory.uuid,
                             label = memory.title,
-                            color =
-                                    if (memory.isDocumentNode) {
-                                        Color(0xFF9575CD) // Purple for documents
-                                    } else {
-                                    when (memory.tags.firstOrNull()?.name) {
-                                        "Person" -> Color(0xFF81C784) // Green
-                                        "Concept" -> Color(0xFF64B5F6) // Blue
-                                        else -> Color.LightGray
-                                        }
-                                    }
+                            color = pickNodeColor(memory)
                     )
                 }
 
@@ -2807,4 +2846,39 @@ class MemoryRepository(private val context: Context, profileId: String) {
         memoryBox.put(memory)
     }
 
+}
+
+/**
+ * 给图谱节点挑颜色。抽成顶层 internal 函数以便单测（TC-AGENT-243-a/b）。
+ *
+ * 优先级（高到低）：
+ *  1. `#persistent_instruction` tag → 金色 `Color(0xFFFFB300)`，覆盖一切（包括文档紫和 Person/Concept）
+ *  2. `isDocumentNode == true` → 紫色 `Color(0xFF9575CD)`
+ *  3. 首个 tag 为 `Person` → 绿色 `Color(0xFF81C784)`
+ *  4. 首个 tag 为 `Concept` → 蓝色 `Color(0xFF64B5F6)`
+ *  5. 其他 → `Color.LightGray`
+ *
+ * #1 的优先级最高是为了让用户在图谱里一眼能看出哪些记忆是"持久指令"——它对 agent 行为的影响远大于其他属性。
+ */
+internal fun pickNodeColor(memory: Memory): Color {
+    val tagNames = memory.tags.map { it.name }
+    return pickNodeColorByAttributes(tagNames, memory.isDocumentNode)
+}
+
+/**
+ * 纯逻辑版本，不依赖 ObjectBox 的 ToMany。所有 UI 颜色判断的契约都在这里，
+ * 单测用这个入口（直接传 tag name 列表 + isDocumentNode）。
+ */
+internal fun pickNodeColorByAttributes(tagNames: List<String>, isDocumentNode: Boolean): Color {
+    if (tagNames.contains("#persistent_instruction")) {
+        return Color(0xFFFFB300) // Gold / amber for persistent instructions
+    }
+    if (isDocumentNode) {
+        return Color(0xFF9575CD) // Purple for documents
+    }
+    return when (tagNames.firstOrNull()) {
+        "Person" -> Color(0xFF81C784) // Green
+        "Concept" -> Color(0xFF64B5F6) // Blue
+        else -> Color.LightGray
+    }
 }

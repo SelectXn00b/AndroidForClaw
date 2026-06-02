@@ -4920,6 +4920,7 @@ Sekarang Anda dapat menggunakan mode AutoGLM di antarmuka percakapan.</string>
     <string name="memory_updated_at">Waktu Diperbarui</string>
     <string name="memory_edit">Edit</string>
     <string name="memory_delete">Hapus</string>
+    <string name="memory_persistent_instruction_toggle">Jadikan instruksi persisten (disuntik ke setiap system prompt)</string>
     <string name="memory_close">Tutup</string>
     <string name="memory_link_details">Detail Koneksi</string>
     <string name="memory_from">Dari</string>

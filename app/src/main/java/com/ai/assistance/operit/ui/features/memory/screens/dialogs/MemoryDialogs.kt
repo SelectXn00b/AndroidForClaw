@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.rememberScrollState
@@ -15,6 +16,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -37,10 +39,13 @@ fun MemoryInfoDialog(
         memory: Memory,
         onDismiss: () -> Unit,
         onEdit: () -> Unit,
-        onDelete: () -> Unit
+        onDelete: () -> Unit,
+        onTogglePersistent: (Boolean) -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
     val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()) }
+    val tagNames = memory.tags.map { it.name }
+    val isPersistent = tagNames.contains("#persistent_instruction")
 
     AlertDialog(
             onDismissRequest = onDismiss,
@@ -55,6 +60,39 @@ fun MemoryInfoDialog(
                     Text(stringResource(R.string.memory_content) + ":", style = MaterialTheme.typography.titleSmall)
                     Text(memory.content)
                     HorizontalDivider()
+                    if (tagNames.isNotEmpty()) {
+                        Text(
+                                "Tags: ${tagNames.joinToString(", ")}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isPersistent) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                }
+                        )
+                        if (isPersistent) {
+                            Text(
+                                    "⭐ Persistent instruction — injected into every system prompt",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    // R-UI-002 — 手动 toggle 持久化指令开关
+                    Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                                stringResource(R.string.memory_persistent_instruction_toggle),
+                                style = MaterialTheme.typography.bodyMedium
+                        )
+                        Switch(
+                                checked = isPersistent,
+                                onCheckedChange = onTogglePersistent
+                        )
+                    }
                     Text("${stringResource(R.string.memory_folder)}: ${memory.folderPath?.ifEmpty { stringResource(R.string.memory_uncategorized) }}", style = MaterialTheme.typography.bodySmall)
                     Text("${stringResource(R.string.memory_uuid)}: ${memory.uuid}", style = MaterialTheme.typography.bodySmall)
                     Text("${stringResource(R.string.memory_source)}: ${memory.source}", style = MaterialTheme.typography.bodySmall)

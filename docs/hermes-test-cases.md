@@ -27,6 +27,7 @@
 | AGENT (FileSafety) | 10 | 0 | `FileSafetyTest.kt` |
 | AGENT (TurnLoop) | 3 (E2E) + 6 (unit) | 0 | `scripts/e2e/*.sh` + `HermesAgentLoopBeforeNextTurnTest.kt` |
 | AGENT (CredentialPool) | 0 | 7 | `CredentialPoolTest` (待建) |
+| AGENT (PersistentInstruction) | 0 | 8 | `PersistentInstructionInjectionTest`, `MemoryLibraryPersistentInstructionGuardTest` (待建) |
 | ACP | 49 | 4 (Copilot client) | `AcpToolsTest.kt`, `AcpAuthTest.kt` + `CopilotAcpClientTest`（待建）|
 | MCP | 13 | 1 | `McpToolTest.kt`, `McpOAuthTest.kt`, `ManagedToolGatewayTest.kt` |
 | 其他域 | 详见各域表 | 详见各域表 | — |
@@ -325,6 +326,30 @@ R-AGENT-001 描述 agent turn-loop 内核，验收以 **E2E 为主**（§3 三�
 | TC-AGENT-222-a | R-AGENT-008 | env / 文件 / keychain / EncryptedPrefs 混合 | 按 (provider, source) 路由到对应 `RemovalStep` | unit | `CredentialSourcesTest#env source routes to env removal step` 🟢 |
 | TC-AGENT-223-a | R-AGENT-008 | 统计每 key token / 金额 | `renderAccountUsageLines` 输出 title/provider/windows/details | unit | `AccountUsageTest#renderAccountUsageLines includes title provider and windows` 🟢 |
 | TC-AGENT-224-a | R-AGENT-008 | 模型 → 成本查找 | 命中 `UsagePricing` 表 | unit | `UsagePricingTest#getPricingEntry resolves anthropic claude-opus-4` 🟢 |
+
+---
+
+## 域 AGENT — Persistent Instruction Injection (R-AGENT-009)
+
+测试类（待落地）: `app/src/test/java/com/ai/assistance/operit/api/chat/enhance/PersistentInstructionInjectionTest.kt` + `app/src/test/java/com/ai/assistance/operit/data/repository/MemoryLibraryPersistentInstructionGuardTest.kt`
+
+覆盖"持久指令"的写入/读取/注入/删除/抗侵蚀全链路。所有 TC 默认在 active Profile 的 Memory 库里直接造数据，不走 LLM 调用（避免外部依赖）。
+
+| TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-240-a | R-AGENT-009 | Memory 库无任何带 `#persistent_instruction` tag 的节点 | `ConversationService.prepareConversationHistory` 输出的 system prompt 不含 `[Persistent user instructions]` 段 | unit | `PersistentInstructionInjectionTest#noInstruction_promptUnchanged` 🔴 |
+| TC-AGENT-240-b | R-AGENT-009 | Memory 库有 1 条带 tag 的节点，content="回复用 Markdown 列表" | system prompt 末尾包含 `[Persistent user instructions]\n- 回复用 Markdown 列表` | unit | `PersistentInstructionInjectionTest#singleInstruction_appendedToSystemPrompt` 🔴 |
+| TC-AGENT-240-c | R-AGENT-009 | Memory 库有 3 条带 tag 的节点，updatedAt 不同 | system prompt 段内按 `updatedAt desc` 拼成 3 个 bullet | unit | `PersistentInstructionInjectionTest#multipleInstructions_orderedByUpdatedAtDesc` 🔴 |
+| TC-AGENT-240-d | R-AGENT-009 | 一条带 tag 的节点 → 通过 `updateMemory` 改 content → 再次拼 prompt | 拼接的内容为更新后的 content（不是旧的） | unit | `PersistentInstructionInjectionTest#updateMemory_reflectedNextTurn` 🔴 |
+| TC-AGENT-240-e | R-AGENT-009 | 一条带 tag 的节点 → `removeTag(memory, "#persistent_instruction")` → 再次拼 prompt | system prompt 不再包含该 content | unit | `PersistentInstructionInjectionTest#removeTag_excludedFromNextTurn` 🔴 |
+| TC-AGENT-241-a | R-AGENT-009 | 带 tag 的节点参与 `MemoryLibrary.saveMemory` 的自动合并流程（同 title 出现新节点） | 带 tag 的节点 content 不被合并 / 重写 | unit | `MemoryLibraryPersistentInstructionGuardTest#mergeSkipsTaggedNode` 🔴 |
+| TC-AGENT-241-b | R-AGENT-009 | 带 tag 的节点参与自动 folder 重分类（`autoCategorizeMemoriesAsync`） | 节点 folderPath 不变 | unit | `MemoryLibraryPersistentInstructionGuardTest#autoCategorizeSkipsTaggedNode` 🔴 |
+| TC-AGENT-242-a | R-AGENT-009 | gateway 路径调 `prepareConversationHistory(chatId="gw:feishu:xxx")` | 拼出的 system prompt 与 UI 路径同 Profile 时一致（共用全局指令池） | unit | `PersistentInstructionInjectionTest#gatewayPath_sharesGlobalInstructions` 🔴 |
+| TC-AGENT-243-a | R-AGENT-009 | `MemoryRepository.pickNodeColor(memory)` —— memory 带 `#persistent_instruction` tag（含/不含其他 tag、与 `Person`/`Concept` 并存、含 `isDocumentNode=true` 也优先金色） | 返回金色 `Color(0xFFFFB300)`，覆盖文档紫和 Person/Concept 颜色 | unit | `MemoryNodeColorTest#persistentInstructionTakesPrecedence` 🟢 |
+| TC-AGENT-243-b | R-AGENT-009 | `MemoryRepository.pickNodeColor(memory)` —— 不带 tag / 仅 `Person` / 仅 `Concept` / 仅 `isDocumentNode` | 颜色与改动前一致（绿/蓝/紫/灰），保证既有节点视觉不回归 | unit | `MemoryNodeColorTest#existingColorsPreserved` 🟢 |
+| TC-AGENT-244-a | R-AGENT-009 | `MemoryInfoDialog` 渲染一条带 `#persistent_instruction` + `Person` 两个 tag 的记忆 | 详情对话框文本里能找到 `#persistent_instruction` 和 `Person` 字样 | manual/visual | 手测：装包后点带 tag 节点 → 详情对话框 → tags 行可见 🟡 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
 
 ---
 
@@ -1113,6 +1138,20 @@ SAFETY 大多通过引用其它域的 TC 覆盖；此处列集成层 smoke。
 | TC-UI-054-a | R-UI-001 | 按 "清除凭证" | `clearSecrets(Feishu/Weixin)` 同步清空；状态 "已清除凭证" | ui | `HermesGatewayQrBindScreenTest#clear credentials invokes clear` 🟢 (Feishu + Weixin) |
 | TC-UI-055-a | R-UI-001 | Weixin 常驻描述文案（re-scoped：静态 fallback 文案）| "微信 (Weixin) iLink 扫码登录" 标题 + "qr_login 协议" 描述常驻 | ui | `HermesGatewayQrBindScreenTest#weixin fallback message` 🟢 |
 
+### R-UI-002: 记忆详情页手动 toggle 持久化指令
+
+| ID | R-ID | 输入 | 期望 | 类型 | 实现 |
+|---|---|---|---|---|---|
+| TC-UI-060-a | R-UI-002 | memory 不带任何 tag → `addTagToMemory(memory, "#persistent_instruction")` | `memory.tags.map { it.name }` 含 `#persistent_instruction`；`findMemoriesByTag(...)` 返回该 memory | instrumentation | 🟡 ObjectBox 真实 BoxStore 依赖，留 androidTest |
+| TC-UI-060-b | R-UI-002 | memory 已带 `#persistent_instruction` → 再次 `addTagToMemory` | tag 关系数仍为 1（无重复挂载） | instrumentation | 🟡 ObjectBox 真实 BoxStore 依赖，留 androidTest |
+| TC-UI-061-a | R-UI-002 | memory 带 `#persistent_instruction` + 其它 tag → `removeTagFromMemory(memory, "#persistent_instruction")` | tag 列表只剩其它 tag；`findMemoriesByTag("#persistent_instruction")` 不含该 memory | instrumentation | 🟡 ObjectBox 真实 BoxStore 依赖，留 androidTest |
+| TC-UI-061-b | R-UI-002 | memory 不带 `#persistent_instruction` → `removeTagFromMemory` | no-op，无异常，tag 列表不变；MemoryTag 实体保留 | instrumentation | 🟡 ObjectBox 真实 BoxStore 依赖，留 androidTest |
+| TC-UI-062-a | R-UI-002 | `ViewModel.togglePersistentInstruction(memoryId, true)`；mock `repository.findMemoryById` 返回不带该 tag 的 memory | `repository.addTagToMemory(memory, "#persistent_instruction")` 被调用一次；`repository.removeTagFromMemory` 零调用；`uiState.isLoading` 复位 | unit | `MemoryViewModelPersistentToggleTest#toggle on adds tag` 🟡 已写未跑（:app baseline 编译挂：HermesGatewayAutoStarterTest 引用不存在的生产类） |
+| TC-UI-062-b | R-UI-002 | `ViewModel.togglePersistentInstruction(memoryId, false)`；mock 返回带该 tag 的 memory | `repository.removeTagFromMemory(memory, "#persistent_instruction")` 被调用一次；`repository.addTagToMemory` 零调用；`uiState.isLoading` 复位 | unit | `MemoryViewModelPersistentToggleTest#toggle off removes tag` 🟡 已写未跑（同上） |
+| TC-UI-063-a | R-UI-002 | toggle 仅改 tag — 不调任何其它 mutate 方法（saveMemory / updateMemory / linkMemories 等） | 仅 `addTagToMemory` / `removeTagFromMemory` / `findMemoryById` / `searchMemories` 被调；其它写入方法零调用 | unit | `MemoryViewModelPersistentToggleTest#toggle does not call other mutators` 🟡 已写未跑（同上） |
+| TC-UI-063-b | R-UI-002 | `togglePersistentInstruction` 在 `findMemoryById` 返回 null 时 | 安全 no-op；不抛异常；`uiState.isLoading` 复位为 false；不调 add/remove tag | unit | `MemoryViewModelPersistentToggleTest#toggle noop when memory missing` 🟡 已写未跑（同上） |
+
+
 ---
 
 ## 统计
@@ -1135,8 +1174,8 @@ SAFETY 大多通过引用其它域的 TC 覆盖；此处列集成层 smoke。
 | CRON | 1 | 8 | 5 | 3 |
 | SAFETY | 2 | 10 | 9 | 1 |
 | CONFIG | (删除) | 23 | 0 | 23 |
-| UI | 1 | 30 | 0 | 30 |
-| **合计** | **42** | **592** | **342** | **250** |
+| UI | 2 | 38 | 0 | 38 |
+| **合计** | **43** | **600** | **342** | **258** |
 
 > CONFIG 域 23 条 TC 在 requirements.md 三轮 prune 后归并到 R-GW-001 / R-GW-006 / R-UI-001，保留 TC 行以便 Phase 3 落地（测试类本身不受域归并影响）。
 
