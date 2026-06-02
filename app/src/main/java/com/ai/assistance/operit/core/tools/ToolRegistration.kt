@@ -131,6 +131,9 @@ fun registerAllTools(handler: AIToolHandler, context: Context) {
         action: suspend (AITool) -> ToolResult
     ): ToolResult {
         val floatingService = FloatingChatService.getInstance()
+        // R-UI-003: gateway 路径下的状态悬浮球，UI 工具执行时也要让开避免挡住 agent 操作
+        val agentStatusOverlay = com.ai.assistance.operit.services.AgentStatusOverlayService.getInstance()
+        val wasAgentOverlayShowing = agentStatusOverlay?.isOverlayShowing == true
         return try {
             floatingService?.setFloatingWindowVisible(false)
             if (showStatusIndicator) {
@@ -138,11 +141,13 @@ fun registerAllTools(handler: AIToolHandler, context: Context) {
             } else {
                 floatingService?.setStatusIndicatorVisible(false)
             }
+            if (wasAgentOverlayShowing) agentStatusOverlay?.setOverlayVisible(false)
             delay(delayMs)
             action(tool)
         } finally {
             floatingService?.setFloatingWindowVisible(true)
             floatingService?.setStatusIndicatorVisible(false)
+            if (wasAgentOverlayShowing) agentStatusOverlay?.setOverlayVisible(true)
         }
     }
 

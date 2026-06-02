@@ -64,7 +64,7 @@
 | CRON | R-CRON-001 | 🟡 1 个子系统级能力 |
 | SAFETY | R-SAFETY-001 .. 002 | 🟡 2 个子系统级能力（审批 / 清洗+脱敏） |
 | CONFIG | — | ⚫ 整域删除（2026-04-26 二次剪裁），能力归 R-UI-001 / R-GW-001 |
-| UI | R-UI-001 | 🟡 1 条家族级（Hermes Settings hub） |
+| UI | R-UI-001 .. 003 | 🟡 3 条（Hermes Settings hub / 持久化指令 toggle / Gateway 运行时悬浮球） |
 
 > **注**: R 条目只写"能力是什么"。断言、枚举映射、字段值、边界数字等测试用例层内容在 `docs/hermes-test-cases.md`。R→TC 的反向索引由 test-cases.md 的"验 R"列保证。
 >
@@ -358,4 +358,25 @@ CONFIG 原先的三条 R-CONFIG-001..003（Preferences / ConfigBuilder / Control
 - toggle off 后：tag 被移除；下一轮注入不再包含该条；MemoryTag 实体本身保留（其它 memory 可能仍引用）
 - 重复 toggle on / off N 次后仅一份 tag 关系（无重复挂载）
 - toggle 不改 memory.title / content / updatedAt 之外的元数据；按 §1.2 `addTagToMemory` / `removeTagFromMemory` 已 `memoryBox.put(memory)` 写回，关闭对话框再打开看到的状态与最新值一致（无 ObjectBox `ToMany` 缓存陷阱）
+- §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增）
+
+### R-UI-003: Gateway agent 运行时悬浮球
+**来源**: 无 Python 上游；Android UI 体验需求（用户报 "飞书对话时，会出现悬浮球，感知用户 agent 在工作中"）
+**背景**: 仅 gateway 链路（飞书 / 微信外部聊天经 `HermesGatewayController` 触发 agent）需要一个全局悬浮球作为"agent 正在工作"的视觉信号——UI 内 chat 已经有 `FloatingChatService` 的 status indicator 覆盖该需求。gateway 场景下用户不在 app 内，必须有 system-overlay 才能感知。
+**行为**:
+- 新增 `AgentStatusOverlayService`（前台 Service，channel `hermes_agent_status_overlay`，重要性 MIN，notification id 71_643），生命周期由 `GatewayForegroundService` 联动：gateway `onCreate` 启动 / `onDestroy` 停止
+- 订阅 `GatewayChatEventBus`：`ProcessingStarted` → 加入 activeChats 并 show；`ProcessingCompleted` → remove；若 activeChats 空 → hide；`ProcessingFailed` → 红色闪烁 `ERROR_FLASH_MS = 2500ms` 后 hide
+- 订阅 `AgentEventBus`（新增全局 sharedFlow，`EnhancedAIService.runAgentLoopViaHermes` 与 `HermesAdapter.sendMessage` 在创建 `HermesAgentLoop` 时把每个 `AgentEvent` 转发到此 bus）：取 `turn` 数 / `lastToolName` 作为细粒度状态
+- 订阅 `AgentTokenBus`（同上，从 `OperitChatCompletionServer` 的 `onTokensUpdated` / `onTurnComplete` 回调累加）：展示累计 input / output token
+- 订阅 `ChatRuntimeHolder.GATEWAY.inputProcessingStateByChatId` 作为 fallback 状态文字源
+- 圆球 56dp + 紫色径向渐变 + 闪电图标 + 1.5s 旋转动画；点击展开 240-320dp 卡片面板展示 platform / chatId 短哈希 / 状态 / 已运行秒 / turn / token / activeChatCount
+- 拖拽位置持久化到 `SharedPreferences("agent_status_overlay")`
+- 无 SYSTEM_ALERT_WINDOW 权限：onCreate 先 `startForeground` 再 `stopSelf`（避免 5s 超时崩溃），仅打日志
+- UI 工具临时隐藏：`ToolRegistration.executeUiToolWithVisibility` 在 UI 工具执行前 `setOverlayVisible(false)`、执行完 `setOverlayVisible(true)`，避免悬浮球挡住 agent 要点击的 UI
+**验收**:
+- `AndroidManifest.xml` 注册 `.services.AgentStatusOverlayService`（exported=false, foregroundServiceType=dataSync）
+- `GatewayForegroundService` 在 `onCreate` 调 `AgentStatusOverlayService.start(this)`、`onDestroy` 调 `AgentStatusOverlayService.stop(this)`
+- `EnhancedAIService.runAgentLoopViaHermes`：sink 内 `AgentEventBus.emit(taskIdValue, event)`；token 回调内 `AgentTokenBus.emit(taskIdValue, input, output, turnComplete=true/false)`
+- `HermesAdapter.sendMessage`：sink 内 `AgentEventBus.emit(chatId, event)`
+- 用户主动点 X：Service `stopSelf`；下次新 chat 触发 `ProcessingStarted` 时由 `GatewayForegroundService` 重新拉起
 - §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增）

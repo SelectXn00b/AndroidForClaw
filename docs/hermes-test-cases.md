@@ -1155,6 +1155,27 @@ SAFETY 大多通过引用其它域的 TC 覆盖；此处列集成层 smoke。
 | TC-UI-063-a | R-UI-002 | toggle 仅改 tag — 不调任何其它 mutate 方法（saveMemory / updateMemory / linkMemories 等） | 仅 `addTagToMemory` / `removeTagFromMemory` / `findMemoryById` / `searchMemories` 被调；其它写入方法零调用 | unit | `MemoryViewModelPersistentToggleTest#toggle does not call other mutators` 🟡 已写未跑（同上） |
 | TC-UI-063-b | R-UI-002 | `togglePersistentInstruction` 在 `findMemoryById` 返回 null 时 | 安全 no-op；不抛异常；`uiState.isLoading` 复位为 false；不调 add/remove tag | unit | `MemoryViewModelPersistentToggleTest#toggle noop when memory missing` 🟡 已写未跑（同上） |
 
+### R-UI-003: Gateway agent 运行时悬浮球
+
+| ID | R-ID | 输入 | 期望 | 类型 | 实现 |
+|---|---|---|---|---|---|
+| TC-UI-070-a | R-UI-003 | 启动 service 后 emit `GatewayChatEventBus.Event.ProcessingStarted(chatId="gw:feishu:c1")` | `activeChats` 含 `"gw:feishu:c1"`；`isOverlayShowing == true` | unit | `AgentStatusOverlayServiceTest#started event shows overlay` 🟡 待写 |
+| TC-UI-070-b | R-UI-003 | Started 后 emit `ProcessingCompleted(chatId="gw:feishu:c1")` | `activeChats` 为空；`isOverlayShowing == false` | unit | `AgentStatusOverlayServiceTest#completed event hides overlay` 🟡 待写 |
+| TC-UI-070-c | R-UI-003 | 同时 Started 两个 chatId → Completed 其中一个 | activeChats size=1；`isOverlayShowing == true`（剩一个仍要显示） | unit | `AgentStatusOverlayServiceTest#completed one of two keeps overlay` 🟡 待写 |
+| TC-UI-070-d | R-UI-003 | Started 后 emit `ProcessingFailed` 并 advance 时间 < `ERROR_FLASH_MS` | overlay 仍可见且 `errorFlash` UI 状态为 true | unit | `AgentStatusOverlayServiceTest#failed triggers error flash` 🟡 待写 |
+| TC-UI-070-e | R-UI-003 | Failed → advance 时间 > `ERROR_FLASH_MS` | overlay 隐藏；errorFlash 归 false | unit | `AgentStatusOverlayServiceTest#error flash auto hides after timeout` 🟡 待写 |
+| TC-UI-071-a | R-UI-003 | overlay 显示中 → `setOverlayVisible(false)` | `isOverlayShowing == false`；activeChats 不变 | unit | `AgentStatusOverlayServiceTest#setOverlayVisible false hides without clearing` 🟡 待写 |
+| TC-UI-071-b | R-UI-003 | 上面之后 → `setOverlayVisible(true)` | `isOverlayShowing == true`（因还有活跃 chat） | unit | `AgentStatusOverlayServiceTest#setOverlayVisible true reshows when active` 🟡 待写 |
+| TC-UI-071-c | R-UI-003 | activeChats 空 → `setOverlayVisible(true)` | `isOverlayShowing == false`（无活跃 chat 不复显） | unit | `AgentStatusOverlayServiceTest#setOverlayVisible true noop when idle` 🟡 待写 |
+| TC-UI-072-a | R-UI-003 | `AgentEventBus.emit(chatId, AgentEvent.ToolCallStart(turn=2, name="search"))` | activeChats[chatId].turn == 2 且 lastToolName == "search" | unit | `AgentStatusOverlayServiceTest#tool call start updates turn and tool` 🟡 待写 |
+| TC-UI-072-b | R-UI-003 | 紧接 `ToolCallEnd(name="search")` | lastToolName 被清空（null） | unit | `AgentStatusOverlayServiceTest#tool call end clears tool name` 🟡 待写 |
+| TC-UI-073-a | R-UI-003 | `AndroidManifest.xml` 包含 `<service android:name=".services.AgentStatusOverlayService" ... foregroundServiceType="dataSync" />` | manifest 文本断言通过 | unit | `AgentStatusOverlayWiringTest#manifest registers service` 🟡 待写 |
+| TC-UI-073-b | R-UI-003 | `GatewayForegroundService.kt` 源码中包含 `AgentStatusOverlayService.start(this)` 与 `AgentStatusOverlayService.stop(this)` | 两处源码断言通过 | unit | `AgentStatusOverlayWiringTest#gateway service starts and stops overlay` 🟡 待写 |
+| TC-UI-073-c | R-UI-003 | `EnhancedAIService.kt` 源码包含 `AgentEventBus.emit(` 与 `AgentTokenBus.emit(` | 源码断言通过 | unit | `AgentStatusOverlayWiringTest#enhanced ai service emits to bus` 🟡 待写 |
+| TC-UI-073-d | R-UI-003 | `HermesAdapter.kt` 源码包含 `AgentEventBus.emit(chatId,` | 源码断言通过 | unit | `AgentStatusOverlayWiringTest#hermes adapter emits to bus` 🟡 待写 |
+| TC-UI-073-e | R-UI-003 | `ToolRegistration.kt` 源码包含 `agentStatusOverlay?.setOverlayVisible(false)` 与 `setOverlayVisible(true)` | 源码断言通过 | unit | `AgentStatusOverlayWiringTest#tool registration toggles overlay during ui tools` 🟡 待写 |
+
+
 
 ---
 

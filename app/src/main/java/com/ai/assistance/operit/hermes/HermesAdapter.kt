@@ -8,6 +8,7 @@ import com.ai.assistance.operit.core.chat.hooks.PromptTurn
 import com.ai.assistance.operit.core.chat.hooks.toOpenAiRole
 import com.ai.assistance.operit.core.config.SystemPromptConfig
 import com.ai.assistance.operit.core.config.SystemToolPrompts
+import com.ai.assistance.operit.hermes.gateway.AgentEventBus
 import com.ai.assistance.operit.core.tools.AIToolHandler
 import com.ai.assistance.operit.core.tools.StringResultData
 import com.ai.assistance.operit.core.tools.packTool.PackageManager
@@ -158,7 +159,11 @@ class HermesAdapter private constructor(private val context: Context) {
 
         return stream {
             val collector: StreamCollector<String> = this
-            val sink: AgentEventSink = { event -> collector.emitAgentEvent(event) }
+            val sink: AgentEventSink = { event ->
+                // R-UI-003: 先把事件转发到全局 bus 给悬浮球等外部订阅，再走本地 XML 流
+                AgentEventBus.emit(chatId, event)
+                collector.emitAgentEvent(event)
+            }
 
             val prefs = HermesGatewayPreferences.getInstance(context.applicationContext)
             val configuredMaxTurns = prefs.agentMaxTurnsFlow.first()

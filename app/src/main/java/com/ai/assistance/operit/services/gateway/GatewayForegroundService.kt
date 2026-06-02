@@ -13,6 +13,7 @@ import androidx.core.app.NotificationCompat
 import com.ai.assistance.operit.R
 import com.ai.assistance.operit.core.application.ForegroundServiceCompat
 import com.ai.assistance.operit.hermes.gateway.HermesGatewayController
+import com.ai.assistance.operit.services.AgentStatusOverlayService
 import com.ai.assistance.operit.util.AppLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +48,12 @@ class GatewayForegroundService : Service() {
         startForegroundWithStatus(status = getString(R.string.hermes_gateway_service_notification_text_starting))
         acquireWakeLock()
         observeStatus()
+        // R-UI-003: 联动启动 agent 状态悬浮球 service（无悬浮窗权限时其自身会立即 stopSelf，不崩）。
+        try {
+            AgentStatusOverlayService.start(this)
+        } catch (e: Throwable) {
+            AppLogger.w(TAG, "failed to start AgentStatusOverlayService: ${e.message}")
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -68,6 +75,11 @@ class GatewayForegroundService : Service() {
         statusJob?.cancel()
         try {
             runBlocking { controller.stop() }
+        } catch (_: Throwable) {
+        }
+        // R-UI-003: 停掉联动的悬浮球 service
+        try {
+            AgentStatusOverlayService.stop(this)
         } catch (_: Throwable) {
         }
         releaseWakeLock()

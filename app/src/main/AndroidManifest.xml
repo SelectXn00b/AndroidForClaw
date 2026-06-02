@@ -482,6 +482,13 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- Agent status overlay: 显示 gateway agent 运行状态的悬浮球 (R-UI-003) -->
+        <service
+            android:name=".services.AgentStatusOverlayService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <receiver
             android:name=".services.gateway.GatewayBootReceiver"
             android:enabled="true"

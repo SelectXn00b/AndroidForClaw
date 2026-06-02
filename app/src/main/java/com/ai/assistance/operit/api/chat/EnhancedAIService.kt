@@ -22,6 +22,8 @@ import com.ai.assistance.operit.core.chat.hooks.toOpenAiRole
 import com.ai.assistance.operit.core.chat.hooks.toPromptTurns
 import com.ai.assistance.operit.core.chat.hooks.toRoleContentPairs
 import com.ai.assistance.operit.core.application.ActivityLifecycleManager
+import com.ai.assistance.operit.hermes.gateway.AgentEventBus
+import com.ai.assistance.operit.hermes.gateway.AgentTokenBus
 import com.ai.assistance.operit.core.tools.AIToolHandler
 import com.ai.assistance.operit.core.tools.StringResultData
 import com.ai.assistance.operit.core.tools.packTool.PackageManager
@@ -1022,6 +1024,10 @@ class EnhancedAIService private constructor(private val context: Context) {
         startAssistantResponseRound(execContext)
         var loggedFirstChunk = false
 
+        // R-UI-003: 稳定的 chatId 作为 HermesAgentLoop.taskId 和 AgentEventBus/AgentTokenBus
+        // 的标签，让悬浮球 / 其它订阅方能关联到具体 gateway chat。
+        val taskIdValue = chatId ?: "chat_${execContext.executionId}"
+
         val server = OperitChatCompletionServer(
             context = this@EnhancedAIService.context,
             service = serviceForFunction,
@@ -1031,6 +1037,8 @@ class EnhancedAIService private constructor(private val context: Context) {
             streamFromProvider = streamFromProvider,
             onTokensUpdated = { input, _, output ->
                 _perRequestTokenCounts.value = Pair(input, output)
+                // R-UI-003: 转发 token 给悬浮球（在 turnComplete 之前的进行中值，仅触发刷新；不累加）
+                AgentTokenBus.emit(taskIdValue, input, output, turnComplete = false)
             },
             onTurnComplete = { input, cachedInput, output ->
                 accumulatedInputTokenCount += input
@@ -1046,6 +1054,8 @@ class EnhancedAIService private constructor(private val context: Context) {
                     TAG,
                     "Token updated for $functionType. Input=$input, Output=$output, CachedInput=$cachedInput. Accumulated=$accumulatedInputTokenCount,$accumulatedOutputTokenCount,$accumulatedCachedInputTokenCount"
                 )
+                // R-UI-003: 转发到悬浮球的 token 累计点（仅 onTurnComplete 这一刻入账，避免重复）
+                AgentTokenBus.emit(taskIdValue, input, output, turnComplete = true)
             },
             onNonFatalError = onNonFatalError
         )
@@ -1083,6 +1093,8 @@ class EnhancedAIService private constructor(private val context: Context) {
         var pendingWaitForUserNeed = false
 
         val sink: AgentEventSink = { event ->
+            // R-UI-003: 先把 AgentEvent 转发到全局 bus，让悬浮球等外部订阅方都能拿到
+            AgentEventBus.emit(taskIdValue, event)
             when (event) {
                 is AgentEvent.Thinking -> {
                     emitChunk("<think>${escapeHermesXml(event.text)}</think>")
@@ -1247,7 +1259,7 @@ class EnhancedAIService private constructor(private val context: Context) {
             validToolNames = extractToolNames(openAiToolSchemas),
             toolDispatcher = dispatcher,
             maxTurns = configuredMaxTurns,
-            taskId = chatId ?: "chat_${execContext.executionId}",
+            taskId = taskIdValue,
             eventSink = sink,
             beforeNextTurn = beforeNextTurnLambda
         )
@@ -1285,7 +1297,7 @@ class EnhancedAIService private constructor(private val context: Context) {
                 validToolNames = extractToolNames(openAiToolSchemas),
                 toolDispatcher = dispatcher,
                 maxTurns = configuredMaxTurns,
-                taskId = chatId ?: "chat_${execContext.executionId}",
+                taskId = taskIdValue,
                 eventSink = sink,
                 beforeNextTurn = beforeNextTurnLambda
             )
