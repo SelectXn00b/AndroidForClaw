@@ -618,7 +618,7 @@ class MemoryViewModel(
             _uiState.update { it.copy(isLoading = true) }
             try {
                 val currentFolder = _uiState.value.selectedFolderPath
-                repository.createMemory(title, content, contentType, folderPath = currentFolder)
+                repository.createMemory(title, content, contentType, folderPath = currentFolder, force = true)
                 val updatedGraph = refreshGraph()
                 loadFolderPaths()
                 _uiState.update {
@@ -925,7 +925,8 @@ class MemoryViewModel(
                     title = ".folder_placeholder",
                     content = context.getString(R.string.memory_folder_placeholder),
                     contentType = "text",
-                    folderPath = folderPath
+                    folderPath = folderPath,
+                    force = true
                 )
                 // 重新加载文件夹列表
                 loadFolderPaths()

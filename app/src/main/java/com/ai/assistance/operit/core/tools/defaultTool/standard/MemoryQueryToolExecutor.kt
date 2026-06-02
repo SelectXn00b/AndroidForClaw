@@ -466,7 +466,7 @@ class MemoryQueryToolExecutor(private val context: Context) : ToolExecutor {
     private suspend fun executeCreateMemory(tool: AITool): ToolResult {
         val title = tool.parameters.find { it.name == "title" }?.value ?: ""
         val content = tool.parameters.find { it.name == "content" }?.value ?: ""
-        
+
         if (title.isBlank() || content.isBlank()) {
             return ToolResult(
                 toolName = tool.name,
@@ -488,16 +488,20 @@ class MemoryQueryToolExecutor(private val context: Context) : ToolExecutor {
                 ?.map { it.trim() }
                 ?.filter { it.isNotEmpty() }
                 ?.distinct()
-             
+            // R-AGENT-003: force=true 让 agent 显式跳过去重（看完返回的候选后确认是独立信息时使用）
+            val force = (tool.parameters.find { it.name == "force" }?.value ?: "false")
+                .equals("true", ignoreCase = true)
+
             val memory = memoryRepository.createMemory(
                 title = title,
                 content = content,
                 contentType = contentType,
                 source = source,
                 folderPath = folderPath,
-                tags = tags
+                tags = tags,
+                force = force
             )
-            
+
             if (memory != null) {
                 val message = "Successfully created memory: '$title' (UUID: ${memory.uuid})"
                 AppLogger.d(TAG, message)
@@ -514,6 +518,25 @@ class MemoryQueryToolExecutor(private val context: Context) : ToolExecutor {
                     error = "Failed to create memory"
                 )
             }
+        } catch (e: com.ai.assistance.operit.data.repository.DuplicateMemoryException) {
+            // R-AGENT-003 写入侧去重：把候选信息附在错误里，让 agent 决定 update 还是带 force 重试
+            val candidatesDescription = e.similarMemories.joinToString("\n") { mem ->
+                "- title='${mem.title}' uuid=${mem.uuid} content_preview='${mem.content.take(120)}'"
+            }
+            val errorMsg = buildString {
+                append("Possible duplicate memory detected (reason=${e.reason}). Existing similar memories:\n")
+                append(candidatesDescription)
+                append("\n\nOptions: ")
+                append("1) call update_memory on one of the above instead; ")
+                append("2) retry create_memory with force=true if you confirm this is independent information.")
+            }
+            AppLogger.d(TAG, "create_memory blocked by dedup: ${e.reason}")
+            ToolResult(
+                toolName = tool.name,
+                success = false,
+                result = StringResultData(""),
+                error = errorMsg
+            )
         } catch (e: Exception) {
             AppLogger.e(TAG, "Failed to create memory", e)
             ToolResult(

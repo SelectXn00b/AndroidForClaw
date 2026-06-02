@@ -357,6 +357,34 @@ R-AGENT-001 描述 agent turn-loop 内核，验收以 **E2E 为主**（§3 三�
 
 ---
 
+## 域 AGENT — Memory Dedup (R-AGENT-003 bugfix)
+
+测试类: `app/src/test/java/com/ai/assistance/operit/data/repository/MemoryDedupTest.kt`
+
+**Bugfix 背景**：R-AGENT-003 要求 memory 行为与 Python 上游 `memory_provider.py` 1:1，上游 `MemoryStore.add` 有 `if content in entries: return` 的去重逻辑。Kotlin 侧 `MemoryRepository.createMemory()`（`MemoryRepository.kt:2245-2280`）漏了这一步，且 retrieve 侧的 `// deduplicateBySemantics(sortedMemories)`（`MemoryRepository.kt:1637`）一直被注释。导致 agent 反复写入语义相似的节点。
+
+修复策略：
+- **写入侧**：写入前先用 `searchMemories(content)` 找疑似重复 → 命中即返错附候选 → 给 agent `force=true` 后门
+- **读出侧**：在 `runSearchMemoriesWithDebug` 末尾启用 `deduplicateBySemantics`，相似条目折叠返回（数据库不动，解决存量噪声污染新写入判定的问题）
+- **不**做：自动合并 / 一次性迁移清理 / Settings 手动清理 UI（后者单独 commit）
+
+所有 TC 用 pure-logic 提取（参考 TC-AGENT-243 的 `pickNodeColorByAttributes` 模式）：核心去重判定剥到独立 `MemoryDedup.kt` 顶层函数，不依赖 ObjectBox / Robolectric / Android Context；再用源码扫描固化 wiring 契约（参考 LaunchAppToolTest / AgentStatusOverlayWiringTest 模式）。
+
+| TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-260-a | R-AGENT-003 | `decideDedupOnCreate(newContent="用户喜欢吃辣", candidates=[Memory(content="用户口味偏辣")])`（embedding=null，走 jaccard 回退） | `DedupDecision.blocked=true`，`similarMemories` 含该候选 | unit-pure | `MemoryDedupTest#TC-AGENT-260-a jaccard fallback blocks high-overlap content` 🔴 |
+| TC-AGENT-260-b | R-AGENT-003 | `decideDedupOnCreate(newEmbedding=[1,0,0], candidates=[Memory(embedding=[0.99,0.01,0])])` | `blocked=true`（余弦 > 0.85 阈值） | unit-pure | `MemoryDedupTest#TC-AGENT-260-b cosine similarity above threshold blocks` 🔴 |
+| TC-AGENT-260-c | R-AGENT-003 | `decideDedupOnCreate(newContent="今天去爬山", candidates=[Memory(content="用户口味偏辣")])` | `blocked=false`（jaccard 远低于阈值且 embedding 兜底也不命中） | unit-pure | `MemoryDedupTest#TC-AGENT-260-c unrelated content allows creation` 🔴 |
+| TC-AGENT-260-d | R-AGENT-003 | `decideDedupOnCreate(newContent="完全一字不差", candidates=[Memory(content="完全一字不差")])` | `blocked=true`，`reason` 标 `exact_duplicate`（对齐 Python `if content in entries: return`） | unit-pure | `MemoryDedupTest#TC-AGENT-260-d exact content match marked exact_duplicate` 🔴 |
+| TC-AGENT-260-e | R-AGENT-003 | `deduplicateBySemantics([m1(content="A"), m2(content="A"), m3(content="B")])` | 返回长度 2 的列表（保留首个 A + B；重复 A 被折叠） | unit-pure | `MemoryDedupTest#TC-AGENT-260-e read-side dedup folds duplicates preserving order` 🔴 |
+| TC-AGENT-260-f | R-AGENT-003 | 源码扫描：`MemoryRepository.kt` | `createMemory` 签名含 `force: Boolean = false` 参数；函数体调用 `decideDedupOnCreate`；`runSearchMemoriesWithDebug` 在过去注释处调用 `deduplicateBySemantics(sortedMemories)` 而非保留 `//` 注释 | unit-scan | `MemoryDedupTest#TC-AGENT-260-f source contract wires dedup in repo` 🔴 |
+| TC-AGENT-260-g | R-AGENT-003 | 源码扫描：`MemoryQueryToolExecutor.kt` | `executeCreateMemory` 解析 `force` 参数；将其传给 `createMemory(...)` | unit-scan | `MemoryDedupTest#TC-AGENT-260-g executor parses force param` 🔴 |
+| TC-AGENT-260-h | R-AGENT-003 | 源码扫描：`SystemToolPromptsInternal.kt` | `create_memory` 的 EN + CN ToolPrompt 各声明 `force` 参数并在描述中说明 dedup 行为 | unit-scan | `MemoryDedupTest#TC-AGENT-260-h prompts declare force param with dedup hint` 🔴 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 ACP
 
 测试类: `hermes-android/src/test/java/com/xiaomo/hermes/hermes/acp/AcpToolsTest.kt` + `AcpAuthTest.kt`

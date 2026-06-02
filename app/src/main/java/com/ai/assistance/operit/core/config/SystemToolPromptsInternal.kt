@@ -471,14 +471,15 @@ object SystemToolPromptsInternal {
                     listOf(
                         ToolPrompt(
                             name = "create_memory",
-                            description = "Creates a new memory node in the library. Use this when you want to save important information for future reference.",
+                            description = "Creates a new memory node in the library. Use this when you want to save important information for future reference. May fail with a duplicate-detection error listing similar existing memories; in that case prefer update_memory on one of the candidates, or retry with force=true if you confirm this is independent information.",
                             parametersStructured = listOf(
                                 ToolParameterSchema(name = "title", type = "string", description = "required, string", required = true),
                                 ToolParameterSchema(name = "content", type = "string", description = "required, string", required = true),
                                 ToolParameterSchema(name = "content_type", type = "string", description = "optional", required = false, default = "\"text/plain\""),
                                 ToolParameterSchema(name = "source", type = "string", description = "optional", required = false, default = "\"ai_created\""),
                                 ToolParameterSchema(name = "folder_path", type = "string", description = "optional", required = false, default = "\"\""),
-                                ToolParameterSchema(name = "tags", type = "string", description = "optional, comma-separated string", required = false)
+                                ToolParameterSchema(name = "tags", type = "string", description = "optional, comma-separated string", required = false),
+                                ToolParameterSchema(name = "force", type = "boolean", description = "optional, set true to bypass duplicate detection if you confirm this is independent information", required = false, default = "false")
                             )
                         ),
                         ToolPrompt(
@@ -3130,14 +3131,15 @@ object SystemToolPromptsInternal {
                     listOf(
                         ToolPrompt(
                             name = "create_memory",
-                            description = "在记忆库中创建新的记忆节点。当你想保存重要信息供将来参考时使用。",
+                            description = "在记忆库中创建新的记忆节点。当你想保存重要信息供将来参考时使用。可能返回重复检测（duplicate detection）错误并列出相似的已有记忆——此时优先用 update_memory 在候选上修改；若你确认是独立信息可带 force=true 重试。",
                             parametersStructured = listOf(
                                 ToolParameterSchema(name = "title", type = "string", description = "必需, 字符串", required = true),
                                 ToolParameterSchema(name = "content", type = "string", description = "必需, 字符串", required = true),
                                 ToolParameterSchema(name = "content_type", type = "string", description = "可选", required = false, default = "\"text/plain\""),
                                 ToolParameterSchema(name = "source", type = "string", description = "可选", required = false, default = "\"ai_created\""),
                                 ToolParameterSchema(name = "folder_path", type = "string", description = "可选", required = false, default = "\"\""),
-                                ToolParameterSchema(name = "tags", type = "string", description = "可选, 逗号分隔的字符串", required = false)
+                                ToolParameterSchema(name = "tags", type = "string", description = "可选, 逗号分隔的字符串", required = false),
+                                ToolParameterSchema(name = "force", type = "boolean", description = "可选, true 时跳过重复检测；仅在你已查看候选并确认是独立信息时使用", required = false, default = "false")
                             )
                         ),
                         ToolPrompt(

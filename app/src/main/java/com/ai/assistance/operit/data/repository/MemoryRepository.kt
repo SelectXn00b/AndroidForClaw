@@ -1633,10 +1633,13 @@ class MemoryRepository(private val context: Context, profileId: String) {
         // Fetch the sorted entities from the database
         val sortedMemories = memoryBox.get(sortedMemoryIds).filterNotNull()
 
-        // 7. Semantic Deduplication
-        // deduplicateBySemantics(sortedMemories)
+        // 7. Semantic Deduplication —— R-AGENT-003 memory bugfix。
+        // 解决"存量重复污染 retrieve 上下文 → 又污染写入侧 dedup 判定"的循环；
+        // 不动数据库，只在返回前把语义重复的条目折叠。详见 [MemoryDedup.kt] +
+        // `MemoryDedupTest#TC-AGENT-260-e`。
+        val deduped = deduplicateBySemantics(sortedMemories)
         SearchComputationResult(
-            memories = sortedMemories,
+            memories = deduped,
             debug = debugInfo
         )
     }
@@ -2241,6 +2244,16 @@ class MemoryRepository(private val context: Context, profileId: String) {
 
     /**
      * 创建新记忆并自动生成embedding，保存到数据库并同步索引。
+     *
+     * R-AGENT-003 memory bugfix：写入前先用 [searchMemories] 找疑似重复，
+     * 命中即抛 [DuplicateMemoryException]（agent 可以选择 `update_memory` 或带
+     * `force=true` 重试）。UI 路径（`MemoryViewModel.createMemory` / `createFolder`）
+     * 应显式传 `force = true`，避免被去重逻辑挡住用户操作。
+     *
+     * 详见 [MemoryDedup.decideDedupOnCreate] + `MemoryDedupTest#TC-AGENT-260-a..d`。
+     *
+     * @param force 跳过去重直接创建。Agent 看完候选确认是独立信息时传 true。
+     * @throws DuplicateMemoryException 当 `force=false` 且发现疑似重复时
      */
     suspend fun createMemory(
         title: String,
@@ -2248,12 +2261,39 @@ class MemoryRepository(private val context: Context, profileId: String) {
         contentType: String = "text/plain",
         source: String = "user_input",
         folderPath: String = "",
-        tags: List<String>? = null
+        tags: List<String>? = null,
+        force: Boolean = false
     ): Memory? = withContext(Dispatchers.IO) {
         val normalizedTags = tags
             ?.map { it.trim() }
             ?.filter { it.isNotEmpty() }
             ?.distinct()
+
+        // R-AGENT-003: 写入侧去重。force=true 时跳过（agent 后门 / UI 显式操作）。
+        if (!force && content.isNotBlank()) {
+            val candidates = try {
+                searchMemories(query = content, relevanceThreshold = 0.3)
+                    .take(5) // 限制候选数，避免大库下 dedup 判定 O(N) 爆炸
+            } catch (e: Exception) {
+                com.ai.assistance.operit.util.AppLogger.w(
+                    "MemoryRepo", "dedup pre-search failed, allowing create: ${e.message}"
+                )
+                emptyList()
+            }
+            if (candidates.isNotEmpty()) {
+                val cloudConfig = searchSettingsPreferences.loadCloudEmbedding()
+                val newEmbeddingVec = generateEmbedding(content, cloudConfig)?.vector
+                val decision = decideDedupOnCreate(
+                    newTitle = title,
+                    newContent = content,
+                    newEmbedding = newEmbeddingVec,
+                    candidates = candidates,
+                )
+                if (decision.blocked) {
+                    throw DuplicateMemoryException(decision.reason, decision.similarMemories)
+                }
+            }
+        }
 
         val memory = Memory(
             title = title,
