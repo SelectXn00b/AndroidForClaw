@@ -310,6 +310,10 @@ R-AGENT-001 描述 agent turn-loop 内核，验收以 **E2E 为主**（§3 三�
 | TC-AGENT-201-d | R-AGENT-001 | `beforeNextTurn` 返 true | 正常继续 | unit | `HermesAgentLoopBeforeNextTurnTest#beforeNextTurn_returningTrue_proceedsNormally` ✅ |
 | TC-AGENT-201-e | R-AGENT-001 | 无 hook 时 | loop 照常推进 | unit | `HermesAgentLoopBeforeNextTurnTest#noBeforeNextTurn_loopProceedsWithoutHook` ✅ |
 | TC-AGENT-202-a | R-AGENT-001 | 自然 stop（无 tool_call 的 final reply） | 终止回合、发送 TurnComplete | unit | 由 `AgentLoopDataTest` + E2E 回合完成日志双重覆盖 ✅ |
+| TC-AGENT-245-a | R-AGENT-001 | `PromptTurn(kind=SUMMARY, content="...")` 经 `EnhancedAIService.toOpenAiMessages` 序列化 | 输出消息 `role == "user"`，不是 `"system"`（避免与 chat system prompt 形成两连 system 被 MIMO 400 拒） | unit | `SummaryRoleRoundTripTest#TC-245-a *` 🟢 |
+| TC-AGENT-245-b | R-AGENT-001 | `PromptTurn(kind=SUMMARY, ...)` 经 `HermesAdapter` gateway 分支（`chatHistory` 循环，line ~150）序列化 | 输出消息 `role == "user"` | unit | `SummaryRoleRoundTripTest#TC-245-b HermesAdapter does not hard-code SUMMARY to system` 🟢 |
+| TC-AGENT-245-c | R-AGENT-001 | `PromptTurn(kind=SUMMARY, ...)` 经 `HermesAdapter.buildOpenAiMessages`（非 gateway 分支，line ~276）序列化 | 输出消息 `role == "user"` | unit | `SummaryRoleRoundTripTest#TC-245-c EnhancedAIService does not hard-code SUMMARY to system` 🟢 |
+| TC-AGENT-245-d | R-AGENT-001 | 完整 round-trip：构造 `[SYSTEM, USER, ASSISTANT, SUMMARY, USER]` → 走 `toOpenAiMessages` → 再走 `toPromptTurnsForHistory`（反序列化） | 不出现两连 `role=system`；SUMMARY turn 序列化后落到 USER role（identity 在 wire 边界故意收敛到 USER，对齐 OpenAIProvider 既有行为） | unit | `SummaryRoleRoundTripTest#TC-245-d *` 🟢 |
 
 ---
 

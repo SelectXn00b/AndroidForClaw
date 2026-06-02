@@ -5,7 +5,7 @@ import android.util.Log
 import com.ai.assistance.operit.api.chat.enhance.ConversationMarkupManager
 import com.ai.assistance.operit.api.chat.enhance.MultiServiceManager
 import com.ai.assistance.operit.core.chat.hooks.PromptTurn
-import com.ai.assistance.operit.core.chat.hooks.PromptTurnKind
+import com.ai.assistance.operit.core.chat.hooks.toOpenAiRole
 import com.ai.assistance.operit.core.config.SystemPromptConfig
 import com.ai.assistance.operit.core.config.SystemToolPrompts
 import com.ai.assistance.operit.core.tools.AIToolHandler
@@ -141,14 +141,7 @@ class HermesAdapter private constructor(private val context: Context) {
             // Include prior conversation turns from gateway history so the
             // model has multi-turn context (memory across messages).
             for (turn in chatHistory) {
-                val role = when (turn.kind) {
-                    PromptTurnKind.SYSTEM -> "system"
-                    PromptTurnKind.USER -> "user"
-                    PromptTurnKind.ASSISTANT -> "assistant"
-                    PromptTurnKind.TOOL_CALL -> "assistant"
-                    PromptTurnKind.TOOL_RESULT -> "tool"
-                    PromptTurnKind.SUMMARY -> "system"
-                }
+                val role = turn.kind.toOpenAiRole()
                 msgs.add(mapOf("role" to role, "content" to turn.content))
             }
 
@@ -267,14 +260,7 @@ class HermesAdapter private constructor(private val context: Context) {
     ): List<Map<String, Any?>> {
         val out = ArrayList<Map<String, Any?>>(history.size + 1)
         for (turn in history) {
-            val role = when (turn.kind) {
-                PromptTurnKind.SYSTEM -> "system"
-                PromptTurnKind.USER -> "user"
-                PromptTurnKind.ASSISTANT -> "assistant"
-                PromptTurnKind.TOOL_CALL -> "assistant"
-                PromptTurnKind.TOOL_RESULT -> "tool"
-                PromptTurnKind.SUMMARY -> "system"
-            }
+            val role = turn.kind.toOpenAiRole()
             out.add(mapOf("role" to role, "content" to turn.content))
         }
         if (currentUserMessage.isNotEmpty() && out.lastOrNull()?.get("role") != "user") {

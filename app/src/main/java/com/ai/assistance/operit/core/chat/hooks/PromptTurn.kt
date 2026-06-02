@@ -126,3 +126,27 @@ fun List<PromptTurn>.toRoleContentPairs(): List<Pair<String, String>> {
         turn.role to turn.content
     }
 }
+
+/**
+ * OpenAI / MIMO chat-completion wire role for a [PromptTurnKind].
+ *
+ * NOTE the asymmetry vs [PromptTurn.role]: the wire format only accepts
+ * `system | user | assistant | tool`, so [PromptTurnKind.TOOL_CALL] collapses
+ * to "assistant" and **[PromptTurnKind.SUMMARY] collapses to "user"**
+ * (not "system" — putting it on "system" sends two consecutive `role=system`
+ * messages back to MIMO which rejects with 400 "Errors in message queue
+ * response"). Aligns with `OpenAIProvider.kt` which already treats SUMMARY as
+ * a `user_boundary`.
+ *
+ * Single source of truth: `EnhancedAIService.toOpenAiMessages` and the two
+ * branches in `HermesAdapter` (gateway + non-gateway) all call this. See
+ * TC-AGENT-245-a/b/c/d.
+ */
+fun PromptTurnKind.toOpenAiRole(): String = when (this) {
+    PromptTurnKind.SYSTEM -> "system"
+    PromptTurnKind.USER -> "user"
+    PromptTurnKind.ASSISTANT -> "assistant"
+    PromptTurnKind.TOOL_CALL -> "assistant"
+    PromptTurnKind.TOOL_RESULT -> "tool"
+    PromptTurnKind.SUMMARY -> "user"
+}

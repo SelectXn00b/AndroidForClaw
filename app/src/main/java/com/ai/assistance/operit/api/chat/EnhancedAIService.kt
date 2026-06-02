@@ -18,6 +18,7 @@ import com.ai.assistance.operit.core.chat.hooks.PromptHookRegistry
 import com.ai.assistance.operit.core.chat.hooks.PromptTurn
 import com.ai.assistance.operit.core.chat.hooks.PromptTurnKind
 import com.ai.assistance.operit.core.chat.hooks.appendUserTurnIfMissing
+import com.ai.assistance.operit.core.chat.hooks.toOpenAiRole
 import com.ai.assistance.operit.core.chat.hooks.toPromptTurns
 import com.ai.assistance.operit.core.chat.hooks.toRoleContentPairs
 import com.ai.assistance.operit.core.application.ActivityLifecycleManager
@@ -1320,14 +1321,7 @@ class EnhancedAIService private constructor(private val context: Context) {
     /** Convert Operit PromptTurn history into OpenAI chat-completion messages. */
     private fun List<PromptTurn>.toOpenAiMessages(): List<Map<String, Any?>> =
         map { turn ->
-            val role = when (turn.kind) {
-                PromptTurnKind.SYSTEM -> "system"
-                PromptTurnKind.USER -> "user"
-                PromptTurnKind.ASSISTANT -> "assistant"
-                PromptTurnKind.TOOL_CALL -> "assistant"
-                PromptTurnKind.TOOL_RESULT -> "tool"
-                PromptTurnKind.SUMMARY -> "system"
-            }
+            val role = turn.kind.toOpenAiRole()
             // For assistant/tool_call history: extract inline <think>...</think> as
             // reasoning_content (required by MiMo thinking-mode roundtrip), keep the
             // remaining text as visible content. PromptTurn.reasoningContent (if
