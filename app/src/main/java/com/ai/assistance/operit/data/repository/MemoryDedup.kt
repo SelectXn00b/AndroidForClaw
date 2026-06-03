@@ -163,8 +163,58 @@ fun deduplicateBySemantics(
     return kept
 }
 
-/** 两个 memory 是否构成"语义重复"。供 [deduplicateBySemantics] 内部使用。 */
-private fun areMemoriesSimilar(
+/**
+ * 全库扫描：用并查集把语义相似的 memory 归到同一组，返回所有 size>=2 的组。
+ *
+ * 给 UI 层 ([com.ai.assistance.operit.ui.features.memory.screens.dialogs.DedupCleanupDialog])
+ * 列出供用户勾选删除。算法 O(N²) 两两比较 + union-find；N 通常在几百到几千量级，可接受。
+ *
+ * 设计取舍：
+ * - **传递性**：A~B + B~C 即使 A 与 C 表面看不像，也并入同一组（用户视角"这堆都是讲一回事"）
+ * - **组内顺序保持输入顺序**：调用方可借此约定"保留首个 / 删后续"（UI 默认勾选第 2+）
+ * - **只返回 size>=2 的组**：size=1 不算重复，没意义
+ *
+ * 阈值默认走读出侧（严，宁可漏合不可错合）。
+ */
+fun findDuplicateGroups(
+    memories: List<Memory>,
+    cosineThreshold: Float = READ_SIDE_COSINE_THRESHOLD,
+    jaccardThreshold: Float = READ_SIDE_JACCARD_THRESHOLD,
+): List<List<Memory>> {
+    val n = memories.size
+    if (n < 2) return emptyList()
+    val parent = IntArray(n) { it }
+    fun find(x: Int): Int {
+        var root = x
+        while (parent[root] != root) root = parent[root]
+        var cur = x
+        while (parent[cur] != root) {
+            val next = parent[cur]
+            parent[cur] = root
+            cur = next
+        }
+        return root
+    }
+    fun union(a: Int, b: Int) {
+        val ra = find(a); val rb = find(b)
+        if (ra != rb) parent[ra] = rb
+    }
+    for (i in 0 until n) {
+        for (j in i + 1 until n) {
+            if (areMemoriesSimilar(memories[i], memories[j], cosineThreshold, jaccardThreshold)) {
+                union(i, j)
+            }
+        }
+    }
+    val byRoot = LinkedHashMap<Int, MutableList<Memory>>()  // LinkedHashMap 保留首次出现顺序
+    for (i in 0 until n) {
+        byRoot.getOrPut(find(i)) { mutableListOf() }.add(memories[i])
+    }
+    return byRoot.values.filter { it.size >= 2 }
+}
+
+/** 两个 memory 是否构成"语义重复"。供 [deduplicateBySemantics] / [findDuplicateGroups] 内部使用。 */
+internal fun areMemoriesSimilar(
     a: Memory,
     b: Memory,
     cosineThreshold: Float,

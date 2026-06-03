@@ -4937,6 +4937,19 @@ Sekarang Anda dapat menggunakan mode AutoGLM di antarmuka percakapan.</string>
     <string name="memory_test_tool_hint">Masukkan kueri untuk mensimulasikan AI mengambil dan melampirkan memori terkait dari basis pengetahuan:</string>
     <string name="memory_test_results">Hasil</string>
     <string name="memory_search_settings_title">Pengaturan Pencarian Memori</string>
+    <!-- R-AGENT-003 follow-up: manual duplicate cleanup UI -->
+    <string name="memory_dedup_cleanup_cd">Bersihkan duplikat</string>
+    <string name="memory_dedup_scanning">Memindai duplikat…</string>
+    <string name="memory_dedup_scanning_hint">Membandingkan semua memori, mohon tunggu</string>
+    <string name="memory_dedup_no_duplicates">Tidak ada duplikat</string>
+    <string name="memory_dedup_no_duplicates_hint">Tidak ada entri duplikat semantik dalam pustaka memori saat ini</string>
+    <string name="memory_dedup_found_groups">Ditemukan %1$d grup duplikat</string>
+    <string name="memory_dedup_done_with_count">Pembersihan selesai (dihapus %1$d)</string>
+    <string name="memory_dedup_last_round_deleted">Dihapus %1$d pada putaran sebelumnya</string>
+    <string name="memory_dedup_keep_first_hint">Item pertama setiap grup dipertahankan; yang lain dipilih otomatis. Hanya hapus, tidak menggabungkan.</string>
+    <string name="memory_dedup_group_header">Grup #%1$d (%2$d mirip)</string>
+    <string name="memory_dedup_keep_label">[Simpan] %1$s</string>
+    <string name="memory_dedup_delete_n">Hapus %1$d terpilih</string>
     <string name="memory_search_calc_mode">Mode Perhitungan</string>
     <string name="memory_search_weight_section">Bobot</string>
     <string name="memory_search_mode_balanced">Mode Seimbang</string>

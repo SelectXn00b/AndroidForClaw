@@ -5496,6 +5496,19 @@
     <string name="memory_test_tool_hint">Enter a query to simulate AI retrieving relevant memories from the knowledge base:</string>
     <string name="memory_test_results">Results</string>
     <string name="memory_search_settings_title">Memory Search Settings</string>
+    <!-- R-AGENT-003 follow-up: manual duplicate cleanup UI -->
+    <string name="memory_dedup_cleanup_cd">Clean up duplicates</string>
+    <string name="memory_dedup_scanning">Scanning for duplicates…</string>
+    <string name="memory_dedup_scanning_hint">Comparing all memories, please wait</string>
+    <string name="memory_dedup_no_duplicates">No duplicates found</string>
+    <string name="memory_dedup_no_duplicates_hint">No semantic duplicates in the current memory library</string>
+    <string name="memory_dedup_found_groups">Found %1$d duplicate groups</string>
+    <string name="memory_dedup_done_with_count">Cleanup done (deleted %1$d)</string>
+    <string name="memory_dedup_last_round_deleted">Deleted %1$d in last round</string>
+    <string name="memory_dedup_keep_first_hint">First item in each group is preserved; others pre-selected. Delete only, no merging.</string>
+    <string name="memory_dedup_group_header">Group #%1$d (%2$d similar)</string>
+    <string name="memory_dedup_keep_label">[Keep] %1$s</string>
+    <string name="memory_dedup_delete_n">Delete %1$d selected</string>
     <string name="memory_search_calc_mode">Scoring Mode</string>
     <string name="memory_search_weight_section">Weights</string>
     <string name="memory_search_mode_balanced">Balanced</string>

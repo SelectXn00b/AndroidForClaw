@@ -4976,6 +4976,19 @@ Kini anda boleh menggunakan mod AutoGLM di antara muka perbualan.</string>
     <string name="memory_test_tool_hint">Masukkan kandungan pertanyaan, simulasi AI mengimbas dari pangkalan pengetahuan dan melampirkan memori berkaitan:</string>
     <string name="memory_test_results">Keputusan</string>
     <string name="memory_search_settings_title">Tetapan Carian Memori</string>
+    <!-- R-AGENT-003 follow-up: manual duplicate cleanup UI -->
+    <string name="memory_dedup_cleanup_cd">Bersihkan pendua</string>
+    <string name="memory_dedup_scanning">Mengimbas pendua…</string>
+    <string name="memory_dedup_scanning_hint">Membandingkan semua memori, sila tunggu</string>
+    <string name="memory_dedup_no_duplicates">Tiada pendua dijumpai</string>
+    <string name="memory_dedup_no_duplicates_hint">Tiada entri pendua semantik dalam pustaka memori semasa</string>
+    <string name="memory_dedup_found_groups">Jumpa %1$d kumpulan pendua</string>
+    <string name="memory_dedup_done_with_count">Pembersihan selesai (%1$d dipadam)</string>
+    <string name="memory_dedup_last_round_deleted">%1$d dipadam dalam pusingan sebelumnya</string>
+    <string name="memory_dedup_keep_first_hint">Item pertama setiap kumpulan dikekalkan; yang lain dipilih secara automatik. Hanya padam, tiada penggabungan.</string>
+    <string name="memory_dedup_group_header">Kumpulan #%1$d (%2$d serupa)</string>
+    <string name="memory_dedup_keep_label">[Simpan] %1$s</string>
+    <string name="memory_dedup_delete_n">Padam %1$d dipilih</string>
     <string name="memory_search_calc_mode">Kaedah Pengiraan</string>
     <string name="memory_search_weight_section">Pemberat</string>
     <string name="memory_search_mode_balanced">Mod Seimbang</string>

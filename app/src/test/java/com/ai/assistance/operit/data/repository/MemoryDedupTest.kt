@@ -26,7 +26,7 @@ import java.io.File
  *  - 关心的回归是"决策是否做 + wiring 是否在"，这两者已被本测试覆盖
  *  - 真正的端到端验证由 agent E2E（scripts/e2e 下的 sh 脚本）兜底
  *
- * 对应 TC-AGENT-260-a..h（见 docs/hermes-test-cases.md）。
+ * 对应 TC-AGENT-260-a..h + TC-AGENT-261-a..f（见 docs/hermes-test-cases.md）。
  */
 class MemoryDedupTest {
 
@@ -265,6 +265,117 @@ class MemoryDedupTest {
         )
     }
 
+    // ===== TC-AGENT-261: 手动重复清理 UI =====
+
+    /** TC-AGENT-261-a: 空 / 单元素输入必返回 empty。 */
+    @Test
+    fun `TC-AGENT-261-a findDuplicateGroups degenerate inputs`() {
+        assertTrue(findDuplicateGroups(emptyList()).isEmpty())
+        val solo = Memory().apply { id = 1; content = "only one" }
+        assertTrue("单元素无重复组", findDuplicateGroups(listOf(solo)).isEmpty())
+    }
+
+    /** TC-AGENT-261-b: 精确重复 → 1 组；不相似的不入组。 */
+    @Test
+    fun `TC-AGENT-261-b findDuplicateGroups groups exact duplicates`() {
+        val m1 = Memory().apply { id = 1; content = "alpha statement" }
+        val m2 = Memory().apply { id = 2; content = "alpha statement" }
+        val m3 = Memory().apply { id = 3; content = "beta totally unrelated entry" }
+        val groups = findDuplicateGroups(listOf(m1, m2, m3))
+        assertEquals("应为 1 组", 1, groups.size)
+        val grp = groups[0]
+        assertEquals("组内 2 条", 2, grp.size)
+        assertEquals("首条保持 m1（输入顺序）", 1L, grp[0].id)
+        assertEquals("第二条 m2", 2L, grp[1].id)
+        assertFalse("m3 不应在任何组里", groups.flatten().any { it.id == 3L })
+    }
+
+    /** TC-AGENT-261-c: 传递性 —— A~B（cosine） + B~C（content equality）→ 一组 {A,B,C}。 */
+    @Test
+    fun `TC-AGENT-261-c findDuplicateGroups transitively merges via union-find`() {
+        // m1 与 m2：cosine 高（embedding 几乎共线，content 完全不同 → 不会走 exact_duplicate）
+        val emb1 = FloatArray(4) { i -> if (i == 0) 1f else 0f }
+        val emb2 = FloatArray(4) { i -> if (i == 0) 0.9999f else 0f }
+        val m1 = Memory().apply { id = 1; content = "完全独立的 alpha 句"; embedding = Embedding(emb1) }
+        val sharedContent = "毫无 alpha 关系的 beta 段落"
+        val m2 = Memory().apply { id = 2; content = sharedContent; embedding = Embedding(emb2) }
+        // m2 与 m3：content 一字不差（areMemoriesSimilar 第一行短路 true）。m3 无 embedding 不影响。
+        val m3 = Memory().apply { id = 3; content = sharedContent }
+        val groups = findDuplicateGroups(listOf(m1, m2, m3))
+        assertEquals("union-find 传递性：应为 1 组", 1, groups.size)
+        assertEquals("组内 3 条全收", 3, groups[0].size)
+        val ids = groups[0].map { it.id }.toSet()
+        assertTrue("m1 经 cosine 与 m2 相连；m2 经 content 等同与 m3 相连；并查集合一组", ids.containsAll(setOf(1L, 2L, 3L)))
+    }
+
+    /** TC-AGENT-261-d: 仓库层暴露 scanDuplicateGroups + deleteMemories 且 deleteMemories 走既有 deleteMemory。 */
+    @Test
+    fun `TC-AGENT-261-d repository wires scan and batch delete`() {
+        val source = File(memoryRepositoryPath()).readText()
+        assertTrue(
+            "MemoryRepository 必须暴露 suspend fun scanDuplicateGroups()",
+            Regex("""suspend\s+fun\s+scanDuplicateGroups\s*\(""").containsMatchIn(source)
+        )
+        assertTrue(
+            "MemoryRepository 必须暴露 suspend fun deleteMemories(ids: List<Long>): Int",
+            Regex("""suspend\s+fun\s+deleteMemories\s*\(\s*ids\s*:\s*List<Long>\s*\)\s*:\s*Int""")
+                .containsMatchIn(source)
+        )
+        assertTrue(
+            "deleteMemories 必须复用既有 deleteMemory（保留级联清理链路）",
+            Regex("""deleteMemories[\s\S]{0,400}?deleteMemory\(""").containsMatchIn(source)
+        )
+        assertTrue(
+            "scanDuplicateGroups 必须调用 findDuplicateGroups",
+            source.contains("findDuplicateGroups(")
+        )
+    }
+
+    /** TC-AGENT-261-e: UI 必须有清理入口（扫帚 icon CleaningServices）。 */
+    @Test
+    fun `TC-AGENT-261-e app bar wires cleanup icon`() {
+        val source = File(memoryScreenPath()).readText()
+        assertTrue(
+            "MemorySearchBar 必须新增 onCleanupClick 参数",
+            Regex("""onCleanupClick\s*:\s*\(\)\s*->\s*Unit""").containsMatchIn(source)
+        )
+        assertTrue(
+            "MemoryScreen 必须使用 CleaningServices icon",
+            source.contains("Icons.Default.CleaningServices")
+        )
+        assertTrue(
+            "MemoryScreen 必须接 viewModel.scanDuplicates()",
+            source.contains("viewModel.scanDuplicates()")
+        )
+    }
+
+    /** TC-AGENT-261-f: Dialog 存在 + ViewModel 状态机 3 方法 + dedupScan 字段。 */
+    @Test
+    fun `TC-AGENT-261-f dialog and viewmodel wire dedup cleanup`() {
+        val dialogSrc = File(memoryDialogsPath()).readText()
+        assertTrue(
+            "MemoryDialogs.kt 必须定义 DedupCleanupDialog",
+            Regex("""fun\s+DedupCleanupDialog\s*\(""").containsMatchIn(dialogSrc)
+        )
+        assertTrue(
+            "DedupCleanupDialog 必须复用 BatchDeleteConfirmDialog 做二次确认",
+            dialogSrc.contains("BatchDeleteConfirmDialog(")
+        )
+
+        val vmSrc = File(memoryViewModelPath()).readText()
+        assertTrue("ViewModel 必须有 dedupScan 字段", vmSrc.contains("dedupScan"))
+        assertTrue("ViewModel 必须定义 sealed DedupScanState", vmSrc.contains("sealed class DedupScanState"))
+        assertTrue("scanDuplicates 方法存在", Regex("""fun\s+scanDuplicates\s*\(""").containsMatchIn(vmSrc))
+        assertTrue(
+            "deleteSelectedDuplicates(ids) 方法存在",
+            Regex("""fun\s+deleteSelectedDuplicates\s*\(\s*ids\s*:\s*List<Long>""").containsMatchIn(vmSrc)
+        )
+        assertTrue(
+            "dismissDedupDialog 方法存在",
+            Regex("""fun\s+dismissDedupDialog\s*\(""").containsMatchIn(vmSrc)
+        )
+    }
+
     // ----- helpers -----
 
     private fun appSrcMainRoot(): File {
@@ -283,4 +394,13 @@ class MemoryDedupTest {
 
     private fun systemToolPromptsInternalPath(): String =
         File(appSrcMainRoot(), "core/config/SystemToolPromptsInternal.kt").path
+
+    private fun memoryScreenPath(): String =
+        File(appSrcMainRoot(), "ui/features/memory/screens/MemoryScreen.kt").path
+
+    private fun memoryDialogsPath(): String =
+        File(appSrcMainRoot(), "ui/features/memory/screens/dialogs/MemoryDialogs.kt").path
+
+    private fun memoryViewModelPath(): String =
+        File(appSrcMainRoot(), "ui/features/memory/viewmodel/MemoryViewModel.kt").path
 }

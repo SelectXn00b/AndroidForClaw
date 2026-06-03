@@ -934,6 +934,29 @@ class MemoryRepository(private val context: Context, profileId: String) {
         removed
     }
 
+    /**
+     * R-AGENT-003: 全库扫描语义重复组，供手动清理 UI 使用。
+     *
+     * 调 [findDuplicateGroups] 做 O(N²) 比较；N 通常几百到几千，可接受。
+     * 排除文档节点（chunk 关系复杂，单独流程，不在此 UI 里清理）。
+     */
+    suspend fun scanDuplicateGroups(): List<List<Memory>> = withContext(Dispatchers.IO) {
+        val all = memoryBox.all.filter { !it.isDocumentNode && it.content.isNotBlank() }
+        findDuplicateGroups(all)
+    }
+
+    /**
+     * R-AGENT-003: 批量删除指定 id 列表，逐个走 [deleteMemory]（保留级联 link / chunk / index 清理）。
+     * 返回成功删除数。失败 id 仅日志记录，不抛出（UI 层按"删了多少"反馈即可）。
+     */
+    suspend fun deleteMemories(ids: List<Long>): Int = withContext(Dispatchers.IO) {
+        var ok = 0
+        for (id in ids) {
+            if (deleteMemory(id)) ok++
+        }
+        ok
+    }
+
     // --- Link CRUD Operations ---
     private fun collectLinkIdsForDeletion(
         memoryIdsToDelete: Set<Long>,

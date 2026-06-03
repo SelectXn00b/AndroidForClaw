@@ -16,6 +16,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
@@ -55,7 +56,8 @@ fun MemoryAppBar(
     onQueryChange: (String) -> Unit,
     onSearch: () -> Unit,
     onClear: () -> Unit,
-    onSettingsClick: () -> Unit
+    onSettingsClick: () -> Unit,
+    onCleanupClick: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selectedProfileName = profileNameMap[selectedProfileId] ?: selectedProfileId
@@ -111,6 +113,14 @@ fun MemoryAppBar(
         // 搜索设置按钮
         IconButton(onClick = onSettingsClick) {
             Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.memory_search_settings_title))
+        }
+
+        // R-AGENT-003 后续：手动重复清理按钮
+        IconButton(onClick = onCleanupClick) {
+            Icon(
+                Icons.Default.CleaningServices,
+                contentDescription = stringResource(R.string.memory_dedup_cleanup_cd),
+            )
         }
 
         // 用户偏好选择器

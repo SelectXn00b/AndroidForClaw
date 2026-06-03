@@ -4789,6 +4789,19 @@ Agora é possível usar o modo AutoGLM na interface de diálogo.</string>
     <string name="memory_test_tool_hint">Insira o conteúdo da consulta e simule a recuperação de IA da base de conhecimento e anexe memórias relevantes:</string>
     <string name="memory_test_results">resultado</string>
     <string name="memory_search_settings_title">Configurações de pesquisa de memória</string>
+    <!-- R-AGENT-003 follow-up: manual duplicate cleanup UI -->
+    <string name="memory_dedup_cleanup_cd">Limpar duplicatas</string>
+    <string name="memory_dedup_scanning">Procurando duplicatas…</string>
+    <string name="memory_dedup_scanning_hint">Comparando todas as memórias, aguarde</string>
+    <string name="memory_dedup_no_duplicates">Nenhuma duplicata encontrada</string>
+    <string name="memory_dedup_no_duplicates_hint">Nenhuma entrada duplicada semântica na biblioteca atual</string>
+    <string name="memory_dedup_found_groups">%1$d grupos duplicados encontrados</string>
+    <string name="memory_dedup_done_with_count">Limpeza concluída (%1$d excluídos)</string>
+    <string name="memory_dedup_last_round_deleted">%1$d excluídos na rodada anterior</string>
+    <string name="memory_dedup_keep_first_hint">O primeiro item de cada grupo é preservado; os outros são pré-selecionados. Apenas excluir, sem mesclar.</string>
+    <string name="memory_dedup_group_header">Grupo #%1$d (%2$d similares)</string>
+    <string name="memory_dedup_keep_label">[Manter] %1$s</string>
+    <string name="memory_dedup_delete_n">Excluir %1$d selecionados</string>
     <string name="memory_search_calc_mode">Método de cálculo</string>
     <string name="memory_search_weight_section">peso</string>
     <string name="memory_search_mode_balanced">Modo balanceado</string>

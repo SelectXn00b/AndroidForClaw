@@ -77,8 +77,23 @@ data class MemoryUiState(
         val isSearchSimulationRunning: Boolean = false,
         val searchSimulationResult: MemorySearchDebugInfo? = null,
         val searchSimulationError: String? = null,
-        val message: String? = null
+        val message: String? = null,
+
+        // --- R-AGENT-003 后续：手动重复清理 UI ---
+        val dedupScan: DedupScanState = DedupScanState.Idle
 )
+
+/** R-AGENT-003 后续：手动重复清理弹窗的状态机。 */
+sealed class DedupScanState {
+    /** 默认；弹窗不显示。 */
+    object Idle : DedupScanState()
+    /** 扫描中；弹窗显示 spinner。 */
+    object Scanning : DedupScanState()
+    /** 扫描完成；列出重复组供用户勾选。`deletedCount` 为上一轮完成的删除数（>0 时弹窗顶部显示反馈）。 */
+    data class Result(val groups: List<List<Memory>>, val deletedCount: Int = 0) : DedupScanState()
+    /** 删除中；按钮 disable。 */
+    object Deleting : DedupScanState()
+}
 
 /**
  * ViewModel for the Memory/Memory Library screen. It handles the business logic for interacting
@@ -690,6 +705,66 @@ class MemoryViewModel(
                 }
             }
         }
+    }
+
+    /**
+     * R-AGENT-003 后续：扫描全库重复组，结果存入 `uiState.dedupScan` 让 UI 弹窗展示。
+     *
+     * 扫描是 O(N²)，几百到几千 memory 都还在毫秒级；放 Dispatchers.IO 防 UI 卡。
+     */
+    fun scanDuplicates() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(dedupScan = DedupScanState.Scanning) }
+            try {
+                val groups = repository.scanDuplicateGroups()
+                _uiState.update { it.copy(dedupScan = DedupScanState.Result(groups, deletedCount = 0)) }
+            } catch (e: Exception) {
+                AppLogger.e(TAG, "scanDuplicates failed: ${e.message}")
+                _uiState.update {
+                    it.copy(
+                        dedupScan = DedupScanState.Idle,
+                        error = context.getString(R.string.memory_error_delete_memory, e.message ?: "Unknown error"),
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * R-AGENT-003 后续：删除用户在弹窗里勾选的 memory id 列表。
+     * 删除后立刻重扫，让用户在同一会话里继续清理（直到列表空）。
+     */
+    fun deleteSelectedDuplicates(ids: List<Long>) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(dedupScan = DedupScanState.Deleting) }
+            try {
+                val deleted = repository.deleteMemories(ids)
+                val updatedGraph = refreshGraph()
+                loadFolderPaths()
+                // 重新扫描，把"删完是否还有重复"反馈给用户
+                val groups = repository.scanDuplicateGroups()
+                _uiState.update {
+                    it.copy(
+                        graph = updatedGraph,
+                        dedupScan = DedupScanState.Result(groups, deletedCount = deleted),
+                    )
+                }
+            } catch (e: Exception) {
+                AppLogger.e(TAG, "deleteSelectedDuplicates failed: ${e.message}")
+                _uiState.update {
+                    it.copy(
+                        dedupScan = DedupScanState.Idle,
+                        error = context.getString(R.string.memory_error_delete_memory, e.message ?: "Unknown error"),
+                    )
+                }
+            }
+        }
+    }
+
+    /** R-AGENT-003 后续：关闭手动重复清理弹窗。 */
+    fun dismissDedupDialog() {
+        _uiState.update { it.copy(dedupScan = DedupScanState.Idle) }
     }
 
     /**

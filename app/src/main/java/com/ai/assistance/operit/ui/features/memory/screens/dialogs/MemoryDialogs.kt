@@ -286,4 +286,150 @@ fun BatchDeleteConfirmDialog(
             }
         }
     )
-} 
+}
+
+/**
+ * R-AGENT-003 后续：手动重复清理弹窗。
+ *
+ * 列出 [groups] 重复组，每条 memory 一个 checkbox：
+ *  - 每组首条**强制保留**（checkbox disabled）
+ *  - 其余默认勾选
+ *  - 用户可改勾选
+ *  - 底部「删除选中 N 条」走二次确认（[BatchDeleteConfirmDialog] 风格）
+ *
+ * 不做"合并 content"——只删，避免破坏性误操作。
+ */
+@Composable
+fun DedupCleanupDialog(
+    isScanning: Boolean,
+    isDeleting: Boolean,
+    groups: List<List<Memory>>,
+    lastDeletedCount: Int,
+    onDismiss: () -> Unit,
+    onDelete: (List<Long>) -> Unit,
+) {
+    // 默认勾选：每组首条 false，其余 true
+    val checkedIds = remember(groups) {
+        val s = mutableStateOf<Set<Long>>(
+            groups.flatMap { g -> g.drop(1).map { it.id } }.toSet()
+        )
+        s
+    }
+    var showConfirm by remember { mutableStateOf(false) }
+    val selectedIds: List<Long> = checkedIds.value.toList()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = when {
+                    isScanning -> stringResource(R.string.memory_dedup_scanning)
+                    groups.isEmpty() && lastDeletedCount > 0 ->
+                        stringResource(R.string.memory_dedup_done_with_count, lastDeletedCount)
+                    groups.isEmpty() -> stringResource(R.string.memory_dedup_no_duplicates)
+                    else -> stringResource(R.string.memory_dedup_found_groups, groups.size)
+                }
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (lastDeletedCount > 0 && groups.isNotEmpty()) {
+                    Text(
+                        text = stringResource(R.string.memory_dedup_last_round_deleted, lastDeletedCount),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                if (isScanning) {
+                    Text(
+                        text = stringResource(R.string.memory_dedup_scanning_hint),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else if (groups.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.memory_dedup_no_duplicates_hint),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else {
+                    Text(
+                        text = stringResource(R.string.memory_dedup_keep_first_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    groups.forEachIndexed { gi, group ->
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.memory_dedup_group_header, gi + 1, group.size),
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            group.forEachIndexed { mi, mem ->
+                                val isFirst = mi == 0
+                                val checked = if (isFirst) false else mem.id in checkedIds.value
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    androidx.compose.material3.Checkbox(
+                                        checked = checked,
+                                        enabled = !isFirst && !isDeleting,
+                                        onCheckedChange = { now ->
+                                            val cur = checkedIds.value.toMutableSet()
+                                            if (now) cur.add(mem.id) else cur.remove(mem.id)
+                                            checkedIds.value = cur
+                                        },
+                                    )
+                                    Column(modifier = Modifier.fillMaxWidth()) {
+                                        val titleLabel = if (isFirst) {
+                                            stringResource(R.string.memory_dedup_keep_label, mem.title.ifBlank { "(no title)" })
+                                        } else {
+                                            mem.title.ifBlank { "(no title)" }
+                                        }
+                                        Text(text = titleLabel, style = MaterialTheme.typography.bodyMedium)
+                                        Text(
+                                            text = mem.content.take(80),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { if (selectedIds.isNotEmpty()) showConfirm = true },
+                enabled = !isScanning && !isDeleting && selectedIds.isNotEmpty(),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+            ) {
+                Text(stringResource(R.string.memory_dedup_delete_n, selectedIds.size))
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss, enabled = !isDeleting) {
+                Text(stringResource(R.string.cancel))
+            }
+        },
+    )
+
+    if (showConfirm) {
+        BatchDeleteConfirmDialog(
+            selectedCount = selectedIds.size,
+            onDismiss = { showConfirm = false },
+            onConfirm = {
+                showConfirm = false
+                onDelete(selectedIds)
+            },
+        )
+    }
+}

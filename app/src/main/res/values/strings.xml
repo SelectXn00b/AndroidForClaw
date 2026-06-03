@@ -5516,6 +5516,19 @@
     <string name="memory_test_tool_hint">输入查询内容，模拟AI从知识库中检索并附着相关记忆：</string>
     <string name="memory_test_results">结果</string>
     <string name="memory_search_settings_title">记忆搜索设置</string>
+    <!-- R-AGENT-003 后续：手动重复清理 UI -->
+    <string name="memory_dedup_cleanup_cd">清理重复记忆</string>
+    <string name="memory_dedup_scanning">正在扫描重复…</string>
+    <string name="memory_dedup_scanning_hint">正在比较全库记忆，请稍候</string>
+    <string name="memory_dedup_no_duplicates">未发现重复</string>
+    <string name="memory_dedup_no_duplicates_hint">当前记忆库不含语义重复条目</string>
+    <string name="memory_dedup_found_groups">发现 %1$d 组重复</string>
+    <string name="memory_dedup_done_with_count">已清理完成（删除 %1$d 条）</string>
+    <string name="memory_dedup_last_round_deleted">上一轮已删除 %1$d 条</string>
+    <string name="memory_dedup_keep_first_hint">每组首条强制保留，其余默认勾选可删；只删不合并</string>
+    <string name="memory_dedup_group_header">组 #%1$d（共 %2$d 条相似）</string>
+    <string name="memory_dedup_keep_label">[保留] %1$s</string>
+    <string name="memory_dedup_delete_n">删除选中 %1$d 条</string>
     <string name="memory_search_calc_mode">计算方式</string>
     <string name="memory_search_weight_section">权重</string>
     <string name="memory_search_mode_balanced">平衡模式</string>

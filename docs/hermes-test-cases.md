@@ -383,6 +383,26 @@ R-AGENT-001 描述 agent turn-loop 内核，验收以 **E2E 为主**（§3 三�
 
 状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
 
+### R-AGENT-003 后续: 存量重复手动清理 UI（TC-AGENT-261-a..f）
+
+**背景**：写入侧 + 读出侧 dedup 解决"未来不再产生重复"，但**存量**已被污染节点仍在数据库里——agent 看不到（已被读出侧折叠），但 Memory 图谱上肉眼可见。需要给用户一个"扫描 + 勾选 + 批量删除"的手动清理入口。
+
+设计取舍：
+- **不自动迁移**：旧库内容用户可能有偏好，自动合并风险大于收益；只让用户看见、自己决定删谁
+- **只删不合并**：UI 强约束首条不可去勾（保留首个出现的），其余默认勾选；agent 不再用旧节点 id，删除安全
+- **不进 settings，进 Memory 屏幕**：MemoryAppBar 加扫帚图标，与 Memory 操作上下文一致
+
+| TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-261-a | R-AGENT-003 | `findDuplicateGroups([])` 与 `findDuplicateGroups([m])` | 返回 emptyList（无重复组） | unit-pure | `MemoryDedupTest#TC-AGENT-261-a findDuplicateGroups degenerate inputs` 🔴 |
+| TC-AGENT-261-b | R-AGENT-003 | `findDuplicateGroups([m1(content="A"), m2(content="A"), m3(content="B")])` | 返回 1 个组：`[m1, m2]`；m3 不在任何组里 | unit-pure | `MemoryDedupTest#TC-AGENT-261-b findDuplicateGroups groups exact duplicates` 🔴 |
+| TC-AGENT-261-c | R-AGENT-003 | `findDuplicateGroups` 输入 m1~m2（cosine ≥ 0.92）+ m2~m3（content 完全一致）+ m1 与 m3 表面不像 | 返回 1 个组：`{m1, m2, m3}`（union-find 传递性） | unit-pure | `MemoryDedupTest#TC-AGENT-261-c findDuplicateGroups transitively merges via union-find` 🔴 |
+| TC-AGENT-261-d | R-AGENT-003 | 源码扫描：`MemoryRepository.kt` | 必须有 `suspend fun scanDuplicateGroups()` 与 `suspend fun deleteMemories(ids: List<Long>): Int`；`deleteMemories` 内部循环调用既有 `deleteMemory(id)`（复用级联删除链路） | unit-scan | `MemoryDedupTest#TC-AGENT-261-d repository wires scan and batch delete` 🔴 |
+| TC-AGENT-261-e | R-AGENT-003 | 源码扫描：`MemoryScreen.kt` | `MemorySearchBar` 新增 `onCleanupClick` 参数，使用 `CleaningServices` icon；接 `viewModel.scanDuplicates()` | unit-scan | `MemoryDedupTest#TC-AGENT-261-e app bar wires cleanup icon` 🔴 |
+| TC-AGENT-261-f | R-AGENT-003 | 源码扫描：`MemoryDialogs.kt` + `MemoryViewModel.kt` | `DedupCleanupDialog` 存在；ViewModel 有 `scanDuplicates()` / `deleteSelectedDuplicates(ids)` / `dismissDedupDialog()` 三个方法且 UiState 含 `dedupScan` 字段 | unit-scan | `MemoryDedupTest#TC-AGENT-261-f dialog and viewmodel wire dedup cleanup` 🔴 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
 ---
 
 ## 域 ACP

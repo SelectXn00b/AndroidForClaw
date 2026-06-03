@@ -79,6 +79,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.res.stringResource
@@ -88,12 +89,21 @@ import com.ai.assistance.operit.ui.features.memory.screens.dialogs.MemorySearchS
 import com.ai.assistance.operit.ui.features.memory.screens.dialogs.MemorySearchSimulationDialog
 import com.ai.assistance.operit.ui.main.components.LocalIsCurrentScreen
 
+/** R-AGENT-003 后续：DedupCleanupDialog 入参打包，方便 when 分支解构。 */
+private data class DedupDialogModel(
+    val isScanning: Boolean,
+    val isDeleting: Boolean,
+    val groups: List<List<com.ai.assistance.operit.data.model.Memory>>,
+    val deletedCount: Int,
+)
+
 @Composable
 fun MemorySearchBar(
     query: String,
     onQueryChange: (String) -> Unit,
     onSearch: () -> Unit,
     onSettingsClick: () -> Unit,
+    onCleanupClick: () -> Unit,
     onMenuClick: () -> Unit
 ) {
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -127,6 +137,13 @@ fun MemorySearchBar(
             Icon(
                 Icons.Default.Settings,
                 contentDescription = stringResource(R.string.memory_search_settings_title),
+                tint = MaterialTheme.colorScheme.secondary
+            )
+        }
+        IconButton(onClick = onCleanupClick) {
+            Icon(
+                Icons.Default.CleaningServices,
+                contentDescription = stringResource(R.string.memory_dedup_cleanup_cd),
                 tint = MaterialTheme.colorScheme.secondary
             )
         }
@@ -346,6 +363,7 @@ fun MemoryScreen() {
                         viewModel.searchMemories()
                     },
                     onSettingsClick = { viewModel.showSearchSettingsDialog(true) },
+                    onCleanupClick = { viewModel.scanDuplicates() },
                     onMenuClick = { showFolderNavigator = !showFolderNavigator }
                 )
 
@@ -416,6 +434,28 @@ fun MemoryScreen() {
                     },
                     onRebuild = { viewModel.rebuildVectorIndex() },
                     onSimulateSearch = { viewModel.openSearchSimulationDialog() }
+                )
+            }
+
+            // R-AGENT-003 后续：手动重复清理对话框
+            val dedupState = uiState.dedupScan
+            if (dedupState !is com.ai.assistance.operit.ui.features.memory.viewmodel.DedupScanState.Idle) {
+                val (isScanning, isDeleting, groups, deletedCount) = when (dedupState) {
+                    is com.ai.assistance.operit.ui.features.memory.viewmodel.DedupScanState.Scanning ->
+                        DedupDialogModel(true, false, emptyList(), 0)
+                    is com.ai.assistance.operit.ui.features.memory.viewmodel.DedupScanState.Deleting ->
+                        DedupDialogModel(false, true, emptyList(), 0)
+                    is com.ai.assistance.operit.ui.features.memory.viewmodel.DedupScanState.Result ->
+                        DedupDialogModel(false, false, dedupState.groups, dedupState.deletedCount)
+                    else -> DedupDialogModel(false, false, emptyList(), 0)
+                }
+                com.ai.assistance.operit.ui.features.memory.screens.dialogs.DedupCleanupDialog(
+                    isScanning = isScanning,
+                    isDeleting = isDeleting,
+                    groups = groups,
+                    lastDeletedCount = deletedCount,
+                    onDismiss = { viewModel.dismissDedupDialog() },
+                    onDelete = { ids -> viewModel.deleteSelectedDuplicates(ids) },
                 )
             }
 
