@@ -403,7 +403,7 @@ R-AGENT-001 描述 agent turn-loop 内核，验收以 **E2E 为主**（§3 三�
 
 状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
 
-### R-AGENT-002 bugfix: DeepseekProvider 不应给 DeepSeek 官方塞空 `reasoning_content`（TC-AGENT-262-a..d）
+### R-AGENT-002 bugfix: DeepseekProvider 不应给 DeepSeek 官方塞空 `reasoning_content`（TC-AGENT-262-a..e）
 
 **Bug 背景**: 用户报告"DeepSeek 官方 API 无响应；同一条 key 在其他 agent 应用能正常工作"。
 排查锁定 `DeepseekProvider.buildMessagesWithReasoning` 5 处 `put("reasoning_content", ...)` 无条件写入：
@@ -413,12 +413,22 @@ R-AGENT-001 描述 agent turn-loop 内核，验收以 **E2E 为主**（§3 三�
 
 **修复**: 5 处统一对齐 `OpenAIProvider` 模式：`reasoning?.takeIf { it.isNotEmpty() }?.let { put("reasoning_content", it) }`。
 
+**TC-AGENT-262-e 背景**（2026-06-03 第二次 bugfix）: 上一次修守卫后，DeepSeek 官方 tool_call 第二轮报 400
+`"The reasoning_content in the thinking mode must be passed back to the API."`。
+根因：`buildMessagesWithReasoning` 在 ASSISTANT / TOOL_CALL 分支只信 `originalContent` 里的 `<think>` 标签
+(`ChatUtils.extractThinkingContent`)，但上游 `OperitChatCompletionServer` /
+`EnhancedAIService.toPromptTurnsForHistory` 早已把 reasoning 拆到 `PromptTurn.reasoningContent` 带外字段并把
+`<think>` 从 content 里剥光 → 解构出来必然是空串 → 被 takeIf 守卫剥掉 → DeepSeek 报 400。
+**修复**: 4 处分支（useToolCall true/false × ASSISTANT/TOOL_CALL）必须优先读 `turn.reasoningContent` 带外字段，
+inline `<think>` 提取仅作 fallback（兼容老历史）。
+
 | TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
 |---|---|---|---|---|---|
-| TC-AGENT-262-a | R-AGENT-002 | `buildMessagesWithReasoning` 处理 ASSISTANT turn，content 不含 `<think>` 标签（reasoningContent 为空） | 输出 JSON 不含 `reasoning_content` 键（不是空串） | unit-pure | `DeepseekProviderTest#TC-AGENT-262-a assistant without thinking omits reasoning_content` 🔴 |
-| TC-AGENT-262-b | R-AGENT-002 | `buildMessagesWithReasoning` 处理 ASSISTANT turn，content 含 `<think>some reasoning</think>actual answer` | 输出 JSON 含 `reasoning_content: "some reasoning"`（非空才塞） | unit-pure | `DeepseekProviderTest#TC-AGENT-262-b assistant with thinking keeps reasoning_content` 🔴 |
-| TC-AGENT-262-c | R-AGENT-002 | `buildMessagesWithReasoning` 处理 TOOL_CALL turn（含 xml tool_call 但无 thinking） | 输出 JSON 不含 `reasoning_content` 键（既不塞空也不塞 null） | unit-pure | `DeepseekProviderTest#TC-AGENT-262-c tool_call without thinking omits reasoning_content` 🔴 |
-| TC-AGENT-262-d | R-AGENT-002 | 源码扫描：`DeepseekProvider.kt` | 禁止 `put("reasoning_content", "")` / `put("reasoning_content", ...orEmpty())` 这两种"塞空"模式复活（防呆 wiring） | unit-scan | `DeepseekProviderTest#TC-AGENT-262-d source contract forbids empty reasoning_content put` 🔴 |
+| TC-AGENT-262-a | R-AGENT-002 | `buildMessagesWithReasoning` 处理 ASSISTANT turn，content 不含 `<think>` 标签（reasoningContent 为空） | 输出 JSON 不含 `reasoning_content` 键（不是空串） | unit-pure | `DeepseekProviderTest#TC-AGENT-262-a assistant without thinking omits reasoning_content` 🟢 |
+| TC-AGENT-262-b | R-AGENT-002 | `buildMessagesWithReasoning` 处理 ASSISTANT turn，content 含 `<think>some reasoning</think>actual answer` | 输出 JSON 含 `reasoning_content: "some reasoning"`（非空才塞） | unit-pure | `DeepseekProviderTest#TC-AGENT-262-b assistant with thinking keeps reasoning_content` 🟢 |
+| TC-AGENT-262-c | R-AGENT-002 | `buildMessagesWithReasoning` 处理 TOOL_CALL turn（含 xml tool_call 但无 thinking） | 输出 JSON 不含 `reasoning_content` 键（既不塞空也不塞 null） | unit-pure | `DeepseekProviderTest#TC-AGENT-262-c tool_call without thinking omits reasoning_content` 🟢 |
+| TC-AGENT-262-d | R-AGENT-002 | 源码扫描：`DeepseekProvider.kt` | 禁止 `put("reasoning_content", "")` / `put("reasoning_content", ...orEmpty())` 这两种"塞空"模式复活（防呆 wiring） | unit-scan | `DeepseekProviderTest#TC-AGENT-262-d source contract forbids empty reasoning_content put` 🟢 |
+| TC-AGENT-262-e | R-AGENT-002 | 源码扫描：`DeepseekProvider.kt` | 4 处分支（ASSISTANT/TOOL_CALL × useToolCall true/false）必须优先读 `turn.reasoningContent` 带外字段（≥3 处引用），inline `extractThinkingContent` 仅作 fallback | unit-scan | `DeepseekProviderTest#TC-AGENT-262-e branches must read PromptTurn reasoningContent out-of-band` 🟢 |
 
 状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
 

@@ -275,7 +275,14 @@ class DeepseekProvider(
                         }
 
                         PromptTurnKind.ASSISTANT -> {
-                            val (content, reasoningContent) = ChatUtils.extractThinkingContent(originalContent)
+                            // R-AGENT-002 bugfix (TC-AGENT-262-e): 上游已把 reasoning 拆到 turn.reasoningContent 带外字段，
+                            // 优先读带外；inline <think> 提取仅作 fallback（兼容老历史 / 上游未拆的情况）
+                            val outOfBandReasoning = turn.reasoningContent
+                            val (content, reasoningContent) = if (!outOfBandReasoning.isNullOrEmpty()) {
+                                originalContent to outOfBandReasoning
+                            } else {
+                                ChatUtils.extractThinkingContent(originalContent)
+                            }
                             val (textContent, parsedToolCalls) = parseXmlToolCalls(content)
                             val toolCalls =
                                 if (parsedToolCalls != null) {
@@ -305,6 +312,8 @@ class DeepseekProvider(
                         }
 
                         PromptTurnKind.TOOL_CALL -> {
+                            // R-AGENT-002 bugfix (TC-AGENT-262-e): 优先读带外 reasoning（tool_call 分支历史也需要 reasoning_content 回传）
+                            val outOfBandReasoning = turn.reasoningContent.orEmpty()
                             val (textContent, parsedToolCalls) = parseXmlToolCalls(originalContent)
                             val toolCalls =
                                 if (parsedToolCalls != null) {
@@ -317,14 +326,17 @@ class DeepseekProvider(
                                 if (openToolCallIds.isNotEmpty()) {
                                     flushOpenToolCallsAsCancelled("typed_tool_call_before_result")
                                 }
-                                queueToolCalls(textContent, toolCalls)
+                                queueToolCalls(textContent, toolCalls, outOfBandReasoning)
                             } else {
                                 flushOpenToolCallsAsCancelled("typed_tool_call_without_payload")
                                 messagesArray.put(
                                     JSONObject().apply {
                                         put("role", "assistant")
-                                        // R-AGENT-002 bugfix (TC-AGENT-262-c): TOOL_CALL 分支无 reasoning，
+                                        // R-AGENT-002 bugfix (TC-AGENT-262-c/e): 仅非空 reasoning 才写入；
                                         // 不再硬塞 put("reasoning_content", "")，避免触发 DeepSeek 官方 schema 拒绝
+                                        outOfBandReasoning.takeIf { it.isNotEmpty() }?.let {
+                                            put("reasoning_content", it)
+                                        }
                                         put("content", buildContentField(context, originalContent.ifBlank { "[Empty]" }))
                                     }
                                 )
@@ -407,7 +419,13 @@ class DeepseekProvider(
                         }
 
                         PromptTurnKind.ASSISTANT -> {
-                            val (content, reasoningContent) = ChatUtils.extractThinkingContent(originalContent)
+                            // R-AGENT-002 bugfix (TC-AGENT-262-e): 优先读 turn.reasoningContent 带外字段
+                            val outOfBandReasoning = turn.reasoningContent
+                            val (content, reasoningContent) = if (!outOfBandReasoning.isNullOrEmpty()) {
+                                originalContent to outOfBandReasoning
+                            } else {
+                                ChatUtils.extractThinkingContent(originalContent)
+                            }
                             messagesArray.put(
                                 JSONObject().apply {
                                     put("role", "assistant")
@@ -424,7 +442,11 @@ class DeepseekProvider(
                             messagesArray.put(
                                 JSONObject().apply {
                                     put("role", "assistant")
-                                    // R-AGENT-002 bugfix (TC-AGENT-262-c): 不再硬塞 put("reasoning_content", "")
+                                    // R-AGENT-002 bugfix (TC-AGENT-262-c/e): 优先读带外 reasoning；
+                                    // 仅非空才写入，不再硬塞 put("reasoning_content", "")
+                                    turn.reasoningContent?.takeIf { it.isNotEmpty() }?.let {
+                                        put("reasoning_content", it)
+                                    }
                                     put("content", buildContentField(context, originalContent.ifBlank { "[Empty]" }))
                                 }
                             )

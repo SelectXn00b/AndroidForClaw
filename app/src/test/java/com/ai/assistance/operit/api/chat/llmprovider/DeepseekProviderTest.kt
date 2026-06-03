@@ -22,7 +22,16 @@ import java.io.File
  * 防"下次顺手清理时把这条逻辑回滚"。运行时正确性由 §3 E2E 兜底（DeepSeek 不在脚本里，但
  * 同 provider 链路的 MiMo OpenRouter E2E 不破即认为没回归）。
  *
- * 对应 TC-AGENT-262-a..d（见 docs/hermes-test-cases.md）。
+ * 对应 TC-AGENT-262-a..e（见 docs/hermes-test-cases.md）。
+ *
+ * **TC-AGENT-262-e 背景**（2026-06-03 第二次 bugfix）：上一次修守卫后，DeepSeek 官方 tool_call
+ * 第二轮报 400 `The reasoning_content in the thinking mode must be passed back to the API.`
+ * 根因：`buildMessagesWithReasoning` 在 ASSISTANT / TOOL_CALL 分支只信 `originalContent` 里的
+ * `<think>` 标签 (`ChatUtils.extractThinkingContent`)，但上游 `OperitChatCompletionServer` /
+ * `EnhancedAIService.toPromptTurnsForHistory` 早已把 reasoning 拆到 `PromptTurn.reasoningContent`
+ * 带外字段并把 `<think>` 从 content 里剥光 → 解构出来必然是空串 → 被 takeIf 守卫剥掉 → DeepSeek 报 400。
+ * 修复：4 处分支（useToolCall true/false × ASSISTANT/TOOL_CALL）必须优先读 `turn.reasoningContent`
+ * 带外字段，inline `<think>` 提取仅作 fallback（兼容老历史）。
  */
 class DeepseekProviderTest {
 
@@ -141,6 +150,46 @@ class DeepseekProviderTest {
             "DeepseekProvider 不应裸 put 局部变量 reasoningContent——必须走 takeIf{isNotEmpty} 守卫，" +
                 "实际发现 $nakedReasoningContentPut 处",
             nakedReasoningContentPut > 0
+        )
+    }
+
+    // ===== TC-AGENT-262-e: must read PromptTurn.reasoningContent out-of-band =====
+
+    /**
+     * TC-AGENT-262-e: 4 处分支必须优先读 `turn.reasoningContent` 带外字段。
+     *
+     * 上游 (`OperitChatCompletionServer` / `EnhancedAIService.toPromptTurnsForHistory`) 把
+     * reasoning 拆到 `PromptTurn.reasoningContent`，content 里 `<think>` 已剥光。
+     * `buildMessagesWithReasoning` 必须读带外字段，否则 ASSISTANT/TOOL_CALL 分支拿不到 reasoning
+     * → DeepSeek 官方报 400。
+     *
+     * 验证：源码必须含至少 3 处 `turn.reasoningContent` 引用（4 处分支里至少 3 处
+     * 直接 referenced；ASSISTANT 两个分支共享 1 处也接受，但 TOOL_CALL 两处必须各自 reference）。
+     * 同时 `extractThinkingContent` 不能是唯一的 reasoning 来源 —— 必须有带外 fallback 模式。
+     */
+    @Test
+    fun `TC-AGENT-262-e branches must read PromptTurn reasoningContent out-of-band`() {
+        val source = stripLineComments(File(deepseekProviderPath()).readText())
+
+        // 至少 3 处 turn.reasoningContent 引用（ASSISTANT useToolCall=true/false + TOOL_CALL useToolCall=true/false，
+        // 实际可能合并写法所以放宽到 >=3）
+        val outOfBandRefs = Regex("""turn\.reasoningContent""").findAll(source).count()
+        assertTrue(
+            "DeepseekProvider 必须至少 3 处引用 turn.reasoningContent 带外字段（ASSISTANT/TOOL_CALL × useToolCall true/false），" +
+                "实际 $outOfBandRefs 处。上游已把 reasoning 拆到带外，content 不再含 <think> 标签。",
+            outOfBandRefs >= 3
+        )
+
+        // 必须存在"非空带外则走带外，否则 fallback 到 inline 提取"的模式
+        // 用宽松匹配：源码里必须同时出现 turn.reasoningContent 的非空判断 + extractThinkingContent fallback
+        val hasOutOfBandPriorityPattern =
+            Regex("""turn\.reasoningContent""").containsMatchIn(source) &&
+                Regex("""isNullOrEmpty\(\)|isNotEmpty\(\)|isNotBlank\(\)""").containsMatchIn(source) &&
+                Regex("""extractThinkingContent""").containsMatchIn(source)
+        assertTrue(
+            "DeepseekProvider 必须存在『带外字段优先 + inline 提取 fallback』模式：" +
+                "turn.reasoningContent 非空时用带外，否则回退到 ChatUtils.extractThinkingContent",
+            hasOutOfBandPriorityPattern
         )
     }
 
