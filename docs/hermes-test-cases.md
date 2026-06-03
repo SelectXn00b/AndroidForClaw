@@ -403,6 +403,25 @@ R-AGENT-001 描述 agent turn-loop 内核，验收以 **E2E 为主**（§3 三�
 
 状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
 
+### R-AGENT-002 bugfix: DeepseekProvider 不应给 DeepSeek 官方塞空 `reasoning_content`（TC-AGENT-262-a..d）
+
+**Bug 背景**: 用户报告"DeepSeek 官方 API 无响应；同一条 key 在其他 agent 应用能正常工作"。
+排查锁定 `DeepseekProvider.buildMessagesWithReasoning` 5 处 `put("reasoning_content", ...)` 无条件写入：
+- 即便 `reasoningContent == ""` 也 put 空串（line 209/292/318/405/415）
+- DeepSeek 官方 V3 schema 严格，空 `reasoning_content` 触发拒绝/挂死；其他 platform（OpenRouter/SiliconFlow/`OPENAI_GENERIC` 路径）走 `OpenAIProvider`（line 1011-1014 的 `takeIf { it.isNotEmpty() }`），不会塞空，所以"其他平台没问题"
+- 历史 commit `024a3185` 给 MiMo 加的"无条件 put"过度防御泄漏到 DeepSeek（MiMo 实际返回 reasoning_content 时**有内容**，非空分支照常走，零回归）
+
+**修复**: 5 处统一对齐 `OpenAIProvider` 模式：`reasoning?.takeIf { it.isNotEmpty() }?.let { put("reasoning_content", it) }`。
+
+| TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-262-a | R-AGENT-002 | `buildMessagesWithReasoning` 处理 ASSISTANT turn，content 不含 `<think>` 标签（reasoningContent 为空） | 输出 JSON 不含 `reasoning_content` 键（不是空串） | unit-pure | `DeepseekProviderTest#TC-AGENT-262-a assistant without thinking omits reasoning_content` 🔴 |
+| TC-AGENT-262-b | R-AGENT-002 | `buildMessagesWithReasoning` 处理 ASSISTANT turn，content 含 `<think>some reasoning</think>actual answer` | 输出 JSON 含 `reasoning_content: "some reasoning"`（非空才塞） | unit-pure | `DeepseekProviderTest#TC-AGENT-262-b assistant with thinking keeps reasoning_content` 🔴 |
+| TC-AGENT-262-c | R-AGENT-002 | `buildMessagesWithReasoning` 处理 TOOL_CALL turn（含 xml tool_call 但无 thinking） | 输出 JSON 不含 `reasoning_content` 键（既不塞空也不塞 null） | unit-pure | `DeepseekProviderTest#TC-AGENT-262-c tool_call without thinking omits reasoning_content` 🔴 |
+| TC-AGENT-262-d | R-AGENT-002 | 源码扫描：`DeepseekProvider.kt` | 禁止 `put("reasoning_content", "")` / `put("reasoning_content", ...orEmpty())` 这两种"塞空"模式复活（防呆 wiring） | unit-scan | `DeepseekProviderTest#TC-AGENT-262-d source contract forbids empty reasoning_content put` 🔴 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
 ---
 
 ## 域 ACP

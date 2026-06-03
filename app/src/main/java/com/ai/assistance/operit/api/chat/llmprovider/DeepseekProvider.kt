@@ -206,7 +206,12 @@ class DeepseekProvider(
             messagesArray.put(
                 JSONObject().apply {
                     put("role", "assistant")
-                    put("reasoning_content", queuedAssistantReasoning.orEmpty())
+                    // R-AGENT-002 bugfix (TC-AGENT-262-a..d): DeepSeek 官方 V3 schema 严格，
+                    // 空 reasoning_content 触发拒绝/挂死。对齐 OpenAIProvider 的 takeIf 守卫，
+                    // 仅在非空时塞 —— MiMo 的非空路径保持原行为不受影响。
+                    queuedAssistantReasoning?.takeIf { it.isNotEmpty() }?.let {
+                        put("reasoning_content", it)
+                    }
                     if (!queuedAssistantToolText.isNullOrBlank()) {
                         put("content", buildContentField(context, queuedAssistantToolText!!))
                     } else {
@@ -289,7 +294,10 @@ class DeepseekProvider(
                                 messagesArray.put(
                                     JSONObject().apply {
                                         put("role", "assistant")
-                                        put("reasoning_content", reasoningContent)
+                                        // R-AGENT-002 bugfix (TC-AGENT-262-a/b)
+                                        reasoningContent.takeIf { it.isNotEmpty() }?.let {
+                                            put("reasoning_content", it)
+                                        }
                                         put("content", buildContentField(context, content.ifBlank { "[Empty]" }))
                                     }
                                 )
@@ -315,7 +323,8 @@ class DeepseekProvider(
                                 messagesArray.put(
                                     JSONObject().apply {
                                         put("role", "assistant")
-                                        put("reasoning_content", "")
+                                        // R-AGENT-002 bugfix (TC-AGENT-262-c): TOOL_CALL 分支无 reasoning，
+                                        // 不再硬塞 put("reasoning_content", "")，避免触发 DeepSeek 官方 schema 拒绝
                                         put("content", buildContentField(context, originalContent.ifBlank { "[Empty]" }))
                                     }
                                 )
@@ -402,7 +411,10 @@ class DeepseekProvider(
                             messagesArray.put(
                                 JSONObject().apply {
                                     put("role", "assistant")
-                                    put("reasoning_content", reasoningContent)
+                                    // R-AGENT-002 bugfix (TC-AGENT-262-a/b)
+                                    reasoningContent.takeIf { it.isNotEmpty() }?.let {
+                                        put("reasoning_content", it)
+                                    }
                                     put("content", buildContentField(context, content.ifBlank { "[Empty]" }))
                                 }
                             )
@@ -412,7 +424,7 @@ class DeepseekProvider(
                             messagesArray.put(
                                 JSONObject().apply {
                                     put("role", "assistant")
-                                    put("reasoning_content", "")
+                                    // R-AGENT-002 bugfix (TC-AGENT-262-c): 不再硬塞 put("reasoning_content", "")
                                     put("content", buildContentField(context, originalContent.ifBlank { "[Empty]" }))
                                 }
                             )
