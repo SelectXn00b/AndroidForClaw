@@ -59,6 +59,8 @@ MEMORY USAGE GUIDANCE:
 - When the user mentions names, places, preferences, schedules, or important facts, proactively use query_memory to check if relevant records exist in the memory library.
 - Before answering questions about the user's personal info (address, contacts, habits), query the memory library first.
 - The memory library is automatically updated by a background system after each conversation turn — you do not need to save memories manually. But proactively query when it would help you answer better.
+- EXCEPTION — persistent rules / preferences: when the user explicitly states a persistent behavior rule (format, style, taboo, workflow, naming, language, etc.), you MUST proactively call create_memory with tags including `#persistent_instruction`. The background extractor does NOT recognize these — only memories carrying that exact tag get injected into every future system prompt. Without it, the rule disappears once the context rolls over.
+- If the user says something like "remember this", "from now on", "never X", "always X", treat it as a persistent rule trigger.
 - When using query_memory, search with short keywords (e.g., user name, topic words), not full sentences."""
 
     private const val GATEWAY_AWARENESS_CN = """
@@ -74,6 +76,8 @@ MEMORY USAGE GUIDANCE:
 - 当用户提到人名、地点、偏好、日程、重要信息时，主动使用 query_memory 检查记忆库中是否已有相关记录。
 - 回答涉及用户个人信息（如地址、联系方式、习惯）的问题前，先用 query_memory 查询。
 - 记忆库会在每轮对话结束后由后台系统自动提取和更新，无需你手动保存。但如果记忆查询能帮助你更好地回答，就主动查询。
+- 例外——持久规则/偏好：当用户明确说出持久的行为规则（格式、风格、禁忌、工作流、称呼、语言习惯等），你必须主动调用 create_memory 并在 tags 中包含 `#persistent_instruction`。后台自动提取器不会识别这类规则——只有带这个 tag 的记忆才会被注入到将来每一轮的 system prompt。不带这个 tag，规则会在上下文滚动后消失。
+- 如果用户说"记住"、"以后..."、"别再..."、"始终..."之类的话，把它当作持久规则的触发信号。
 - 使用 query_memory 时，用简短关键词搜索（如用户名、主题词），不要用完整句子。"""
 
     private const val TOOL_USAGE_GUIDELINES_EN = """

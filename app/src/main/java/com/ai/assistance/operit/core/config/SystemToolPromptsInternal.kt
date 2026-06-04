@@ -471,7 +471,7 @@ object SystemToolPromptsInternal {
                     listOf(
                         ToolPrompt(
                             name = "create_memory",
-                            description = "Creates a new memory node in the library. Use this when you want to save important information for future reference. May fail with a duplicate-detection error listing similar existing memories; in that case prefer update_memory on one of the candidates, or retry with force=true if you confirm this is independent information.",
+                            description = "Creates a new memory node in the library. Use this when you want to save important information for future reference. May fail with a duplicate-detection error listing similar existing memories; in that case prefer update_memory on one of the candidates, or retry with force=true if you confirm this is independent information. PERSISTENT RULES: when the user expresses a persistent preference, format/style requirement, taboo, or workflow rule (e.g. \"always reply in Markdown lists\", \"never mention X\", \"call me Q\"), you MUST save it with tags including `#persistent_instruction` so it gets injected into every future system prompt. Without this tag, the rule will be forgotten after the context window rolls over.",
                             parametersStructured = listOf(
                                 ToolParameterSchema(name = "title", type = "string", description = "required, string", required = true),
                                 ToolParameterSchema(name = "content", type = "string", description = "required, string", required = true),
@@ -3131,7 +3131,7 @@ object SystemToolPromptsInternal {
                     listOf(
                         ToolPrompt(
                             name = "create_memory",
-                            description = "在记忆库中创建新的记忆节点。当你想保存重要信息供将来参考时使用。可能返回重复检测（duplicate detection）错误并列出相似的已有记忆——此时优先用 update_memory 在候选上修改；若你确认是独立信息可带 force=true 重试。",
+                            description = "在记忆库中创建新的记忆节点。当你想保存重要信息供将来参考时使用。可能返回重复检测（duplicate detection）错误并列出相似的已有记忆——此时优先用 update_memory 在候选上修改；若你确认是独立信息可带 force=true 重试。持久规则：当用户表达持久偏好、格式/风格要求、禁忌或工作流规则（如\"始终用 Markdown 列表回复\"、\"不要提到 X\"、\"叫我乔\"），你必须用包含 `#persistent_instruction` 的 tags 保存，这样它会被注入到将来每一轮的 system prompt。不带这个 tag，规则会在上下文窗口滚动后被遗忘。",
                             parametersStructured = listOf(
                                 ToolParameterSchema(name = "title", type = "string", description = "必需, 字符串", required = true),
                                 ToolParameterSchema(name = "content", type = "string", description = "必需, 字符串", required = true),

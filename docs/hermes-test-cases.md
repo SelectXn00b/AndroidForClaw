@@ -354,6 +354,9 @@ R-AGENT-001 描述 agent turn-loop 内核，验收以 **E2E 为主**（§3 三�
 | TC-AGENT-243-a | R-AGENT-009 | `MemoryRepository.pickNodeColor(memory)` —— memory 带 `#persistent_instruction` tag（含/不含其他 tag、与 `Person`/`Concept` 并存、含 `isDocumentNode=true` 也优先金色） | 返回金色 `Color(0xFFFFB300)`，覆盖文档紫和 Person/Concept 颜色 | unit | `MemoryNodeColorTest#persistentInstructionTakesPrecedence` 🟢 |
 | TC-AGENT-243-b | R-AGENT-009 | `MemoryRepository.pickNodeColor(memory)` —— 不带 tag / 仅 `Person` / 仅 `Concept` / 仅 `isDocumentNode` | 颜色与改动前一致（绿/蓝/紫/灰），保证既有节点视觉不回归 | unit | `MemoryNodeColorTest#existingColorsPreserved` 🟢 |
 | TC-AGENT-244-a | R-AGENT-009 | `MemoryInfoDialog` 渲染一条带 `#persistent_instruction` + `Person` 两个 tag 的记忆 | 详情对话框文本里能找到 `#persistent_instruction` 和 `Person` 字样 | manual/visual | 手测：装包后点带 tag 节点 → 详情对话框 → tags 行可见 🟡 |
+| TC-AGENT-245-a | R-AGENT-009 | `SystemToolPromptsInternal.kt` 的 EN + CN `create_memory` ToolPrompt description | description 显式 mention `#persistent_instruction` tag 与持久规则触发场景 | unit/source | `PersistentInstructionAgentHintTest#TC-AGENT-245-a create_memory descriptions instruct agent to use persistent_instruction tag` 🟢 |
+| TC-AGENT-245-b | R-AGENT-009 | `SystemPromptConfig.kt` 的 `GATEWAY_AWARENESS_EN` 中 `MEMORY USAGE GUIDANCE` 段 | 含 `#persistent_instruction` + `EXCEPTION` 限定词（避免与"无需手动保存"全局指令矛盾）| unit/source | `PersistentInstructionAgentHintTest#TC-AGENT-245-b EN memory usage guidance mentions persistent_instruction with exception clause` 🟢 |
+| TC-AGENT-245-c | R-AGENT-009 | `SystemPromptConfig.kt` 的 `GATEWAY_AWARENESS_CN` 中"记忆库使用指导"段 | 含 `#persistent_instruction` + "例外/主动调用"限定词 | unit/source | `PersistentInstructionAgentHintTest#TC-AGENT-245-c CN memory usage guidance mentions persistent_instruction with exception clause` 🟢 |
 
 状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
 
