@@ -28,6 +28,7 @@ import com.ai.assistance.operit.data.model.PromptFunctionType
 import com.ai.assistance.operit.data.preferences.preferencesManager
 import com.ai.assistance.operit.core.avatar.impl.factory.AvatarModelFactoryImpl
 import com.ai.assistance.operit.data.repository.AvatarRepository
+import com.ai.assistance.operit.data.repository.MemoryRepository
 import com.ai.assistance.operit.util.ChatMarkupRegex
 import com.ai.assistance.operit.util.ChatUtils
 import com.ai.assistance.operit.core.tools.ToolProgressBus
@@ -426,6 +427,13 @@ class ConversationService(
                         append("\n\nUser preference description: ")
                         append(preferencesText)
                     }
+                    // R-AGENT-009: 持久指令注入（USER.md 等价段）。位于 User preference description 之后，
+                    // 工具描述之前由 SystemPromptConfig 已经吐完。无 #persistent_instruction 节点 → 空串 → 不 append。
+                    val persistentInstructionsText = buildPersistentInstructionsText()
+                    if (persistentInstructionsText.isNotEmpty()) {
+                        append("\n\n")
+                        append(persistentInstructionsText)
+                    }
                 }
 
                 // 替换提示词中的占位符
@@ -691,8 +699,45 @@ class ConversationService(
         return parts.joinToString("; ")
     }
 
-    /** Data class for search-replace operations, used for JSON deserialization. */
-    private data class SearchReplaceOperation(val search: String, val replace: String)
+    /**
+     * R-AGENT-009 持久指令注入（USER.md 等价段，对应 Python `MemoryStore.format_for_system_prompt("user")`）。
+     *
+     * 拉取当前 active profile 下所有带 `#persistent_instruction` tag 的 memory 节点，
+     * 按 `updatedAt desc` 排序后拼成：
+     *
+     * ```
+     * [Persistent user instructions]
+     * - <content1>
+     * - <content2>
+     * ```
+     *
+     * 调用方负责拼接到 `finalSystemPrompt` 末尾（位于 `User preference description` 之后）。
+     *
+     * 无任何持久指令节点时返回空串 —— 调用方据此决定是否 append（不可无脑 append 多余的换行）。
+     *
+     * 单条 content 内部的换行用 single space 折叠，避免 bullet 错乱；首尾空白 trim。
+     *
+     * 对应 TC-AGENT-240-a..e（见 docs/hermes-test-cases.md）。
+     */
+    suspend fun buildPersistentInstructionsText(): String {
+        val profileId = preferencesManager.activeProfileIdFlow.first()
+        val repository = MemoryRepository(context, profileId)
+        val memories = repository.findMemoriesByTag("#persistent_instruction")
+        if (memories.isEmpty()) return ""
+
+        val sorted = memories.sortedByDescending { it.updatedAt.time }
+        val sb = StringBuilder()
+        sb.append("[Persistent user instructions]")
+        sorted.forEach { m ->
+            val flattened = m.content.replace(Regex("\\s+"), " ").trim()
+            if (flattened.isNotEmpty()) {
+                sb.append("\n- ").append(flattened)
+            }
+        }
+        return sb.toString()
+    }
+
+
 
     /**
      * Flattens the hierarchical UI node structure into a simple, flat list of key elements.

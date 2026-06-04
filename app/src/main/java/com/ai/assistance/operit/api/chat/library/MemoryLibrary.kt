@@ -127,7 +127,10 @@ object MemoryLibrary {
             // 使用 searchMemories("") 获取所有记忆，然后过滤未分类的
             val allMemories = memoryRepository.searchMemories("")
             val uncategorizedMemories = allMemories.filter { memory ->
-                memory.folderPath.isNullOrEmpty()
+                memory.folderPath.isNullOrEmpty() &&
+                    // R-AGENT-009 抗侵蚀保护：带 #persistent_instruction tag 的不参与自动 folder 分类，
+                    // 避免分类流程改 folderPath / 重排序影响 ConversationService 的注入顺序。
+                    memory.tags.none { it.name == "#persistent_instruction" }
             }
             
             if (uncategorizedMemories.isEmpty()) {
@@ -312,6 +315,18 @@ object MemoryLibrary {
             if (analysis.mergedEntities.isNotEmpty()) {
                 AppLogger.d(TAG, "开始合并 ${analysis.mergedEntities.size} 组记忆...")
                 analysis.mergedEntities.forEach { merge ->
+                    // R-AGENT-009 抗侵蚀保护：源标题中任一对应 memory 带 #persistent_instruction tag → 整组跳过。
+                    // 保守策略：宁可少合并也不动用户钉的规则。
+                    val sourceMemories = merge.sourceTitles.mapNotNull { title ->
+                        memoryRepository.findMemoryByTitle(title)
+                    }
+                    val hitsPersistent = sourceMemories.any { mem ->
+                        mem.tags.any { it.name == "#persistent_instruction" }
+                    }
+                    if (hitsPersistent) {
+                        AppLogger.d(TAG, "跳过合并（包含 #persistent_instruction）: ${merge.sourceTitles.joinToString(", ")}")
+                        return@forEach
+                    }
                     AppLogger.d(TAG, "正在合并: ${merge.sourceTitles.joinToString(", ")} -> '${merge.newTitle}'. 原因: ${merge.reason}")
                     val mergedMemory = memoryRepository.mergeMemories(
                         sourceTitles = merge.sourceTitles,
@@ -332,6 +347,11 @@ object MemoryLibrary {
                 analysis.updatedEntities.forEach { update ->
                     val memoryToUpdate = memoryRepository.findMemoryByTitle(update.titleToUpdate)
                     if (memoryToUpdate != null) {
+                        // R-AGENT-009 抗侵蚀保护：目标 memory 带 #persistent_instruction tag → 跳过更新。
+                        if (memoryToUpdate.tags.any { it.name == "#persistent_instruction" }) {
+                            AppLogger.d(TAG, "跳过更新（带 #persistent_instruction）: '${update.titleToUpdate}'")
+                            return@forEach
+                        }
                         AppLogger.d(TAG, "正在更新记忆: '${update.titleToUpdate}'. 原因: ${update.reason}")
                         val updatedMemory = memoryRepository.updateMemory(
                                 memory = memoryToUpdate,

@@ -335,20 +335,22 @@ R-AGENT-001 描述 agent turn-loop 内核，验收以 **E2E 为主**（§3 三�
 
 ## 域 AGENT — Persistent Instruction Injection (R-AGENT-009)
 
-测试类（待落地）: `app/src/test/java/com/ai/assistance/operit/api/chat/enhance/PersistentInstructionInjectionTest.kt` + `app/src/test/java/com/ai/assistance/operit/data/repository/MemoryLibraryPersistentInstructionGuardTest.kt`
+测试类: `app/src/test/java/com/ai/assistance/operit/api/chat/enhance/PersistentInstructionInjectionTest.kt` + `app/src/test/java/com/ai/assistance/operit/api/chat/library/MemoryLibraryPersistentInstructionGuardTest.kt`
+
+**2026-06-04 bugfix 落地**：合并 a/b、d/e 因 JVM 单测无法直接 boot ObjectBox / preferencesManager，改用源码字符串扫描守卫（参考 `DeepseekProviderTest` 模式），把"接线契约"固化进源码；运行时正确性由 §3 E2E + manual smoke 兜底。241-a 同时覆盖 update 流程（241-a' 子方法）。
 
 覆盖"持久指令"的写入/读取/注入/删除/抗侵蚀全链路。所有 TC 默认在 active Profile 的 Memory 库里直接造数据，不走 LLM 调用（避免外部依赖）。
 
 | TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
 |---|---|---|---|---|---|
-| TC-AGENT-240-a | R-AGENT-009 | Memory 库无任何带 `#persistent_instruction` tag 的节点 | `ConversationService.prepareConversationHistory` 输出的 system prompt 不含 `[Persistent user instructions]` 段 | unit | `PersistentInstructionInjectionTest#noInstruction_promptUnchanged` 🔴 |
-| TC-AGENT-240-b | R-AGENT-009 | Memory 库有 1 条带 tag 的节点，content="回复用 Markdown 列表" | system prompt 末尾包含 `[Persistent user instructions]\n- 回复用 Markdown 列表` | unit | `PersistentInstructionInjectionTest#singleInstruction_appendedToSystemPrompt` 🔴 |
-| TC-AGENT-240-c | R-AGENT-009 | Memory 库有 3 条带 tag 的节点，updatedAt 不同 | system prompt 段内按 `updatedAt desc` 拼成 3 个 bullet | unit | `PersistentInstructionInjectionTest#multipleInstructions_orderedByUpdatedAtDesc` 🔴 |
-| TC-AGENT-240-d | R-AGENT-009 | 一条带 tag 的节点 → 通过 `updateMemory` 改 content → 再次拼 prompt | 拼接的内容为更新后的 content（不是旧的） | unit | `PersistentInstructionInjectionTest#updateMemory_reflectedNextTurn` 🔴 |
-| TC-AGENT-240-e | R-AGENT-009 | 一条带 tag 的节点 → `removeTag(memory, "#persistent_instruction")` → 再次拼 prompt | system prompt 不再包含该 content | unit | `PersistentInstructionInjectionTest#removeTag_excludedFromNextTurn` 🔴 |
-| TC-AGENT-241-a | R-AGENT-009 | 带 tag 的节点参与 `MemoryLibrary.saveMemory` 的自动合并流程（同 title 出现新节点） | 带 tag 的节点 content 不被合并 / 重写 | unit | `MemoryLibraryPersistentInstructionGuardTest#mergeSkipsTaggedNode` 🔴 |
-| TC-AGENT-241-b | R-AGENT-009 | 带 tag 的节点参与自动 folder 重分类（`autoCategorizeMemoriesAsync`） | 节点 folderPath 不变 | unit | `MemoryLibraryPersistentInstructionGuardTest#autoCategorizeSkipsTaggedNode` 🔴 |
-| TC-AGENT-242-a | R-AGENT-009 | gateway 路径调 `prepareConversationHistory(chatId="gw:feishu:xxx")` | 拼出的 system prompt 与 UI 路径同 Profile 时一致（共用全局指令池） | unit | `PersistentInstructionInjectionTest#gatewayPath_sharesGlobalInstructions` 🔴 |
+| TC-AGENT-240-a | R-AGENT-009 | Memory 库无任何带 `#persistent_instruction` tag 的节点 | `ConversationService.prepareConversationHistory` 输出的 system prompt 不含 `[Persistent user instructions]` 段 | unit/source | `PersistentInstructionInjectionTest#TC-AGENT-240-ab ConversationService defines and invokes buildPersistentInstructionsText` 🟢 |
+| TC-AGENT-240-b | R-AGENT-009 | Memory 库有 1 条带 tag 的节点，content="回复用 Markdown 列表" | system prompt 末尾包含 `[Persistent user instructions]\n- 回复用 Markdown 列表` | unit/source | 与 240-a 合并到 `TC-AGENT-240-ab`（源码扫描验证 `buildPersistentInstructionsText` 定义 + 在 finalSystemPrompt 块内被调用 + 输出 `[Persistent user instructions]` literal）🟢 |
+| TC-AGENT-240-c | R-AGENT-009 | Memory 库有 3 条带 tag 的节点，updatedAt 不同 | system prompt 段内按 `updatedAt desc` 拼成 3 个 bullet | unit/source | `PersistentInstructionInjectionTest#TC-AGENT-240-c buildPersistentInstructionsText emits correct header bullet and sort` 🟢 |
+| TC-AGENT-240-d | R-AGENT-009 | 一条带 tag 的节点 → 通过 `updateMemory` 改 content → 再次拼 prompt | 拼接的内容为更新后的 content（不是旧的） | unit/source | `PersistentInstructionInjectionTest#TC-AGENT-240-de buildPersistentInstructionsText queries findMemoriesByTag with correct tag` 🟢（每次调用都重新查 repository，自动反映最新数据） |
+| TC-AGENT-240-e | R-AGENT-009 | 一条带 tag 的节点 → `removeTag(memory, "#persistent_instruction")` → 再次拼 prompt | system prompt 不再包含该 content | unit/source | 与 240-d 合并到 `TC-AGENT-240-de`（查询基于 `findMemoriesByTag` 实时结果，tag 移除即排除）🟢 |
+| TC-AGENT-241-a | R-AGENT-009 | 带 tag 的节点参与 `MemoryLibrary.saveMemory` 的自动合并 / 更新流程 | 合并源命中 tag → 整组跳过；更新目标命中 tag → 跳过更新 | unit/source | `MemoryLibraryPersistentInstructionGuardTest#TC-AGENT-241-a merge skips persistent_instruction sources` + `#TC-AGENT-241-a' update skips persistent_instruction targets` 🟢 |
+| TC-AGENT-241-b | R-AGENT-009 | 带 tag 的节点参与自动 folder 重分类（`autoCategorizeMemories`） | uncategorizedMemories filter 排除带 tag 节点 | unit/source | `MemoryLibraryPersistentInstructionGuardTest#TC-AGENT-241-b autoCategorize skips persistent_instruction nodes` 🟢 |
+| TC-AGENT-242-a | R-AGENT-009 | gateway 路径调 `prepareConversationHistory(chatId="gw:feishu:xxx")` | 拼出的 system prompt 与 UI 路径同 Profile 时一致（共用全局指令池） | unit/source | `PersistentInstructionInjectionTest#TC-AGENT-242-a buildPersistentInstructionsText reads active profile globally not per-chat` 🟢（验证读 `preferencesManager.activeProfileIdFlow` 而非 chatId） |
 | TC-AGENT-243-a | R-AGENT-009 | `MemoryRepository.pickNodeColor(memory)` —— memory 带 `#persistent_instruction` tag（含/不含其他 tag、与 `Person`/`Concept` 并存、含 `isDocumentNode=true` 也优先金色） | 返回金色 `Color(0xFFFFB300)`，覆盖文档紫和 Person/Concept 颜色 | unit | `MemoryNodeColorTest#persistentInstructionTakesPrecedence` 🟢 |
 | TC-AGENT-243-b | R-AGENT-009 | `MemoryRepository.pickNodeColor(memory)` —— 不带 tag / 仅 `Person` / 仅 `Concept` / 仅 `isDocumentNode` | 颜色与改动前一致（绿/蓝/紫/灰），保证既有节点视觉不回归 | unit | `MemoryNodeColorTest#existingColorsPreserved` 🟢 |
 | TC-AGENT-244-a | R-AGENT-009 | `MemoryInfoDialog` 渲染一条带 `#persistent_instruction` + `Person` 两个 tag 的记忆 | 详情对话框文本里能找到 `#persistent_instruction` 和 `Person` 字样 | manual/visual | 手测：装包后点带 tag 节点 → 详情对话框 → tags 行可见 🟡 |
