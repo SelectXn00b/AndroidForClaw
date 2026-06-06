@@ -2604,10 +2604,15 @@ class MemoryRepository(private val context: Context, profileId: String) {
 
         val nodes =
                 memories.map { memory ->
+                    // R-AGENT-012: 把 tag 列表逗号拼接放进 Node.metadata["tags"]，
+                    // 供 MemoryViewModel 做 client-side gateway 维度过滤（无需回查 ObjectBox）。
+                    val tagNames = memory.tags.map { it.name }
                     Node(
                             id = memory.uuid,
                             label = memory.title,
-                            color = pickNodeColor(memory)
+                            color = pickNodeColor(memory),
+                            metadata = if (tagNames.isEmpty()) emptyMap()
+                                       else mapOf("tags" to tagNames.joinToString(","))
                     )
                 }
 
@@ -2938,6 +2943,14 @@ internal fun pickNodeColorByAttributes(tagNames: List<String>, isDocumentNode: B
     }
     if (isDocumentNode) {
         return Color(0xFF9575CD) // Purple for documents
+    }
+    // R-AGENT-012 (2026-06-06): any tag starting with `#gateway:` (e.g. #gateway:feishu,
+    // #gateway:wechat) → teal —— so MemoryScreen 上一眼能看出哪些节点来自 gateway 路径
+    // (R-AGENT-010/011 自动总结) vs APP UI 创建的节点。
+    // 优先级低于 persistent_instruction (用户手写语义) + isDocumentNode (结构属性)，
+    // 高于 Person/Concept/默认 (来源比通用类别更值得突出)。
+    if (tagNames.any { it.startsWith("#gateway:") }) {
+        return Color(0xFF26A69A) // Teal for gateway-sourced memories
     }
     return when (tagNames.firstOrNull()) {
         "Person" -> Color(0xFF81C784) // Green

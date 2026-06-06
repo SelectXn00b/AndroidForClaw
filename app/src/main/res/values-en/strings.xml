@@ -5596,6 +5596,10 @@
     <string name="memory_error_load_graph">Failed to load memory graph: %1$s</string>
     <string name="memory_error_search">Failed to search memories: %1$s</string>
     <string name="memory_error_load_folders">Failed to load folder list: %1$s</string>
+    <!-- R-AGENT-012 (2026-06-06): Gateway source filter chip row labels -->
+    <string name="memory_filter_all">All</string>
+    <string name="memory_filter_no_gateway">No Gateway</string>
+    <string name="memory_filter_gateway_platform_format">Gateway · %1$s</string>
     <string name="memory_error_refresh_folders">Failed to refresh folder list: %1$s</string>
     <string name="memory_error_load_folder_graph">Failed to load folder graph: %1$s</string>
     <string name="memory_error_move_memories">Failed to move memories</string>

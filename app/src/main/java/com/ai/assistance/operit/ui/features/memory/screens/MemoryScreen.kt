@@ -9,11 +9,16 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
@@ -27,6 +32,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -62,6 +69,7 @@ import com.ai.assistance.operit.ui.features.memory.screens.dialogs.LinkMemoryDia
 import com.ai.assistance.operit.ui.features.memory.screens.dialogs.MemoryInfoDialog
 import com.ai.assistance.operit.ui.features.memory.screens.dialogs.EdgeInfoDialog
 import com.ai.assistance.operit.ui.features.memory.screens.dialogs.EditEdgeDialog
+import com.ai.assistance.operit.ui.features.memory.viewmodel.GatewayFilter
 import com.ai.assistance.operit.ui.features.memory.viewmodel.MemoryViewModel
 import com.ai.assistance.operit.ui.features.memory.viewmodel.MemoryViewModelFactory
 import kotlinx.coroutines.Dispatchers
@@ -367,6 +375,14 @@ fun MemoryScreen() {
                     onMenuClick = { showFolderNavigator = !showFolderNavigator }
                 )
 
+                // R-AGENT-012 (2026-06-06): Gateway 来源过滤 chip 行。仅当用户跑过 gateway
+                // (availableGatewayPlatforms 非空) 时显示，避免老用户看到空 chip 行。
+                GatewayFilterChipRow(
+                    availableGatewayPlatforms = uiState.availableGatewayPlatforms,
+                    gatewayFilter = uiState.gatewayFilter,
+                    onFilterChange = { viewModel.onGatewayFilterChange(it) }
+                )
+
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -620,3 +636,64 @@ fun MemoryScreen() {
             }
         }
     }}
+
+/**
+ * R-AGENT-012 (2026-06-06): Gateway 来源过滤 chip 行。
+ * - `availableGatewayPlatforms.isEmpty()` 时整行不渲染（老用户无视觉残留）
+ * - chip 顺序：「全部」「无网关」「<platform1>」「<platform2>」...
+ * - 多选 platform → `GatewayFilter.OnlyGateway(platforms = set)`
+ * - 选「全部」→ `GatewayFilter.All`
+ * - 选「无网关」→ `GatewayFilter.ExcludeGateway`
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GatewayFilterChipRow(
+    availableGatewayPlatforms: List<String>,
+    gatewayFilter: GatewayFilter,
+    onFilterChange: (GatewayFilter) -> Unit
+) {
+    if (availableGatewayPlatforms.isEmpty()) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        FilterChip(
+            selected = gatewayFilter is GatewayFilter.All,
+            onClick = { onFilterChange(GatewayFilter.All) },
+            label = { Text(stringResource(R.string.memory_filter_all)) }
+        )
+        Spacer(Modifier.width(8.dp))
+        FilterChip(
+            selected = gatewayFilter is GatewayFilter.ExcludeGateway,
+            onClick = { onFilterChange(GatewayFilter.ExcludeGateway) },
+            label = { Text(stringResource(R.string.memory_filter_no_gateway)) }
+        )
+        val selectedPlatforms = (gatewayFilter as? GatewayFilter.OnlyGateway)?.platforms ?: emptySet()
+        availableGatewayPlatforms.forEach { platform ->
+            Spacer(Modifier.width(8.dp))
+            val isSelected = platform in selectedPlatforms
+            FilterChip(
+                selected = isSelected,
+                onClick = {
+                    val newSet = if (isSelected) {
+                        selectedPlatforms - platform
+                    } else {
+                        selectedPlatforms + platform
+                    }
+                    if (newSet.isEmpty()) {
+                        // 取消所有 platform → 回到 All（避免空集合等同 "看全部 gateway" 造成歧义）
+                        onFilterChange(GatewayFilter.All)
+                    } else {
+                        onFilterChange(GatewayFilter.OnlyGateway(newSet))
+                    }
+                },
+                label = {
+                    Text(stringResource(R.string.memory_filter_gateway_platform_format, platform))
+                }
+            )
+        }
+    }
+}

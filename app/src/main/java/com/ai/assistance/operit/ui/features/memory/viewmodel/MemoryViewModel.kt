@@ -80,8 +80,24 @@ data class MemoryUiState(
         val message: String? = null,
 
         // --- R-AGENT-003 后续：手动重复清理 UI ---
-        val dedupScan: DedupScanState = DedupScanState.Idle
+        val dedupScan: DedupScanState = DedupScanState.Idle,
+
+        // --- R-AGENT-012: Gateway 来源过滤（飞书 / 微信等 IM 平台自动总结的记忆）---
+        val availableGatewayPlatforms: List<String> = emptyList(),
+        val gatewayFilter: GatewayFilter = GatewayFilter.All
 )
+
+/**
+ * R-AGENT-012 (2026-06-06): MemoryScreen 的 gateway 来源过滤三态。
+ *  - All：默认，不过滤，行为与 R-012 之前一致
+ *  - OnlyGateway(platforms)：只看选中的 platform；空集合 = 看全部 gateway 节点
+ *  - ExcludeGateway：屏蔽所有带 `#gateway:` tag 的节点（只看 APP UI 创建的）
+ */
+sealed class GatewayFilter {
+    object All : GatewayFilter()
+    data class OnlyGateway(val platforms: Set<String>) : GatewayFilter()
+    object ExcludeGateway : GatewayFilter()
+}
 
 /** R-AGENT-003 后续：手动重复清理弹窗的状态机。 */
 sealed class DedupScanState {
@@ -127,10 +143,75 @@ class MemoryViewModel(
 
     private suspend fun refreshGraph(): Graph {
         val selectedFolder = _uiState.value.selectedFolderPath
-        return if (selectedFolder.isEmpty()) {
+        val baseGraph = if (selectedFolder.isEmpty()) {
             repository.getMemoryGraph()
         } else {
             repository.getGraphForFolder(selectedFolder)
+        }
+        return applyGatewayFilterToGraph(baseGraph)
+    }
+
+    /**
+     * R-AGENT-012 (2026-06-06): client-side 按 `gatewayFilter` 过滤 graph nodes，
+     * `#gateway:` tag 信息保存在 `Node.metadata["tags"]`（由 MemoryRepository.buildGraphFromMemories
+     * 注入；若该 key 不存在则视为节点无 tag，不参与 gateway 维度判定）。
+     * 同步更新 `availableGatewayPlatforms`（去前缀 + distinct + 排序）。
+     */
+    private fun applyGatewayFilterToGraph(graph: Graph): Graph {
+        // 扫描所有节点的 tag，发现可用 platform 集合
+        val allPlatforms = sortedSetOf<String>()
+        graph.nodes.forEach { node ->
+            extractNodeTags(node).forEach { tag ->
+                if (tag.startsWith("#gateway:")) {
+                    val platform = tag.removePrefix("#gateway:").trim()
+                    if (platform.isNotEmpty()) allPlatforms.add(platform)
+                }
+            }
+        }
+        _uiState.update { it.copy(availableGatewayPlatforms = allPlatforms.toList()) }
+
+        val filter = _uiState.value.gatewayFilter
+        val filteredNodes = when (filter) {
+            is GatewayFilter.All -> graph.nodes
+            is GatewayFilter.ExcludeGateway -> graph.nodes.filterNot { node ->
+                extractNodeTags(node).any { it.startsWith("#gateway:") }
+            }
+            is GatewayFilter.OnlyGateway -> graph.nodes.filter { node ->
+                val tags = extractNodeTags(node)
+                val gatewayTags = tags.filter { it.startsWith("#gateway:") }
+                if (gatewayTags.isEmpty()) return@filter false
+                if (filter.platforms.isEmpty()) true
+                else gatewayTags.any { tag ->
+                    filter.platforms.contains(tag.removePrefix("#gateway:").trim())
+                }
+            }
+        }
+        if (filteredNodes.size == graph.nodes.size) return graph
+        val filteredNodeIds = filteredNodes.map { it.id }.toSet()
+        val filteredEdges = graph.edges.filter {
+            it.sourceId in filteredNodeIds && it.targetId in filteredNodeIds
+        }
+        return Graph(filteredNodes, filteredEdges)
+    }
+
+    /** 从 Node.metadata 里拿 tag 列表（buildGraphFromMemories 注入 "tags" key，逗号分隔）。 */
+    private fun extractNodeTags(node: Node): List<String> {
+        val raw = node.metadata["tags"] ?: return emptyList()
+        return raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+    }
+
+    /** R-AGENT-012: UI chip 切换 gateway 过滤模式，触发图谱重算。 */
+    fun onGatewayFilterChange(filter: GatewayFilter) {
+        _uiState.update { it.copy(gatewayFilter = filter) }
+        viewModelScope.launch {
+            try {
+                val graphData = refreshGraph()
+                _uiState.update { it.copy(graph = graphData) }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(error = context.getString(R.string.memory_error_load_graph, e.message ?: "Unknown error"))
+                }
+            }
         }
     }
 
@@ -179,7 +260,7 @@ class MemoryViewModel(
                             edgeWeight = config.edgeWeight
                         )
                     }
-                val graphData = repository.getGraphForMemories(memories)
+                val graphData = applyGatewayFilterToGraph(repository.getGraphForMemories(memories))
                 _uiState.update { it.copy(graph = graphData, isLoading = false) }
             } catch (e: Exception) {
                 _uiState.update {

@@ -407,6 +407,33 @@ R-AGENT-001 描述 agent turn-loop 内核，验收以 **E2E 为主**（§3 三�
 
 ---
 
+## 域 AGENT — MemoryScreen Gateway 可视化 + 过滤 (R-AGENT-012)
+
+测试类:
+- `app/src/test/java/com/ai/assistance/operit/data/repository/MemoryRepositoryGatewayColorTest.kt` (TC-248-a)
+- `app/src/test/java/com/ai/assistance/operit/ui/features/memory/viewmodel/MemoryViewModelGatewayFilterTest.kt` (TC-248-b/c/d)
+- `app/src/test/java/com/ai/assistance/operit/ui/features/memory/screens/MemoryScreenGatewayFilterChipWiringTest.kt` (TC-248-e/f)
+
+R-AGENT-012 是 R-AGENT-011 的 UI 兜底：R-011 已把 `#gateway:<platform>` tag 写进了 Memory，但 MemoryScreen 整条读链对 tag 无感知。本组用例覆盖三个层：
+1. **颜色策略层** (`pickNodeColorByAttributes`)：纯函数，pure-logic 测试可直接 mock `Memory` 的 tag 列表验证返回色
+2. **ViewModel 状态/过滤层** (`MemoryViewModel.gatewayFilter` + `availableGatewayPlatforms`)：依赖 Repository / ObjectBox / Android Context，走源码扫描守住 wiring 契约（filter 字段存在 + refreshGraph 应用 filter）
+3. **UI 接线层** (`MemoryScreen.kt` chip 行)：Composable 重度依赖 Compose runtime + Android，走源码扫描守住"chip 行紧贴 SearchBar 之后、调 viewModel.onGatewayFilterChange"等契约
+
+运行时正确性由手测 + §3 E2E 兜底（gateway 跑一轮后开 MemoryScreen 看 chip 是否出现 + 选 chip 是否过滤生效）。
+
+| ID | R-ID | 输入 / 触发条件 | 期望输出 | 类型 | 测试方法引用 |
+|---|---|---|---|---|---|
+| TC-AGENT-248-a | R-AGENT-012 | 调 `pickNodeColorByAttributes(memory)`，输入 5 种 memory tag 组合：(1) 仅 `#gateway:feishu` (2) `#gateway:wechat` + 普通 tag (3) `#persistent_instruction` + `#gateway:feishu`（极端共存） (4) 仅普通 tag (5) `isDocumentNode = true` + `#gateway:feishu` | (1)(2) 返回 gateway 色 `0xFF26A69A`；(3) 返回金色 `0xFFFFB300`（persistent_instruction 优先）；(4) 返回原默认色（按现有 Person/Concept/其他分支）；(5) 返回紫色 `0xFF9575CD`（isDocumentNode 优先于 gateway 色，与现有优先级一致） | unit-logic | `MemoryRepositoryGatewayColorTest#TC-AGENT-248-a pickNodeColorByAttributes handles gateway tag priority` 🟢 |
+| TC-AGENT-248-b | R-AGENT-012 | 源码扫描：`MemoryViewModel.kt` / `MemoryUiState` | `MemoryUiState` 必须含 `availableGatewayPlatforms: List<String> = emptyList()` 和 `gatewayFilter:` 字段（类型为 `GatewayFilter`，默认 `GatewayFilter.All`） | unit-scan | `MemoryViewModelGatewayFilterTest#TC-AGENT-248-b MemoryUiState contains gateway filter fields` 🟢 |
+| TC-AGENT-248-c | R-AGENT-012 | 源码扫描：`MemoryViewModel.kt` | 必须定义 sealed class / sealed interface `GatewayFilter`，含三种 case：`All` / `OnlyGateway` / `ExcludeGateway`；`OnlyGateway` 含 `platforms: Set<String>` 字段 | unit-scan | `MemoryViewModelGatewayFilterTest#TC-AGENT-248-c GatewayFilter sealed class has three variants` 🟢 |
+| TC-AGENT-248-d | R-AGENT-012 | 源码扫描：`MemoryViewModel.kt` | 必须存在 `onGatewayFilterChange(filter: GatewayFilter)` public 方法，且在 `refreshGraph()` / 搜索路径中按 `gatewayFilter` 过滤 `memory.tags`（源码中应出现 `startsWith("#gateway:")` 字面字符串） | unit-scan | `MemoryViewModelGatewayFilterTest#TC-AGENT-248-d refreshGraph applies gatewayFilter` 🟢 |
+| TC-AGENT-248-e | R-AGENT-012 | 源码扫描：`MemoryScreen.kt` | `MemoryScreen` Composable 中 `MemorySearchBar` 调用之后 / `GraphVisualizer` 调用之前必须存在 `FilterChip` 调用（chip 行渲染入口）；且引用 `uiState.availableGatewayPlatforms` 与 `uiState.gatewayFilter` 决定 chip 选中态 | unit-scan | `MemoryScreenGatewayFilterChipWiringTest#TC-AGENT-248-e MemoryScreen wires gateway filter chip row between SearchBar and GraphVisualizer` 🟢 |
+| TC-AGENT-248-f | R-AGENT-012 | 源码扫描：`MemoryScreen.kt` | chip 点击 callback 必须调用 `viewModel.onGatewayFilterChange(...)`；`availableGatewayPlatforms.isEmpty()` 分支必须有条件渲染（chip 行隐藏，避免老用户看到空 chip 行） | unit-scan | `MemoryScreenGatewayFilterChipWiringTest#TC-AGENT-248-f MemoryScreen hides chip row when no gateway platforms` 🟢 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — Memory Dedup (R-AGENT-003 bugfix)
 
 测试类: `app/src/test/java/com/ai/assistance/operit/data/repository/MemoryDedupTest.kt`

@@ -224,6 +224,33 @@ HermesApp 必须提供与 Python Hermes 等价的 agent turn-loop 内核。Pytho
   - `MemoryLibrary.saveMemory` 主问题创建分支 + 实体创建分支均 `forEach extraTags` 调 `addTagToMemory`
   - §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增）
 
+### R-AGENT-012: MemoryScreen 让 `#gateway:<platform>` tag 可视化 + 可过滤
+**来源**: 无 Python 上游（Android 侧 UI 需求；用户报"R-AGENT-011 加了 tag 但 MemoryScreen 看不出区别 —— 不是和之前一样吗？"，2026-06-06 明确要"做 UI 让 tag 真正能用"）
+**背景**: R-AGENT-011 已让 gateway 路径写入的记忆节点强制带 `#gateway:<platform>` tag（如 `#gateway:feishu`），但 MemoryScreen 的整条读取链（`MemoryRepository.pickNodeColorByAttributes` / `MemoryViewModel.MemoryUiState` / `MemorySearchBar` / `GraphVisualizer` / `MemoryDialogs`）对 `#gateway:` 前缀完全无感知 —— 节点颜色与 APP UI 创建的混在一起、过滤维度只有 folder 树和全文搜索。用户在图谱里既看不出哪些节点是 gateway 来源，也无法只看/只屏蔽某个 IM 平台。
+**行为**: 在 MemoryScreen 引入"gateway 来源"维度的可视化 + 过滤能力，不改变 Memory 数据模型与 ObjectBox schema。
+- **节点颜色区分**：`MemoryRepository.pickNodeColorByAttributes` 的 tag 识别分支扩展，识别任意以 `#gateway:` 开头的 tag → 返回 gateway 专属色（蓝绿 `0xFF26A69A`）。优先级位于现有 `#persistent_instruction`（金色）与 `isDocumentNode`（紫色）之后、`Person/Concept/默认` 分支之前 —— 用户手工写入语义（persistent_instruction）和"这是文档"这种结构属性（isDocumentNode）都比"来自哪个 IM 平台"语义更强。
+- **ViewModel state 扩展**：`MemoryUiState` 追加两个字段：
+  - `availableGatewayPlatforms: List<String> = emptyList()` —— 从当前 profile 全库扫描所有以 `#gateway:` 开头的 tag，去前缀后 distinct + 排序得到（如 `["feishu", "wechat"]`）；`refreshGraph()` / `selectFolder()` / `searchMemories()` 任一刷新点末尾同步更新。
+  - `gatewayFilter: GatewayFilter = GatewayFilter.All` —— 三态枚举：`All`（不过滤）/ `OnlyGateway(platforms: Set<String>)`（只看选中的 platform；空集合 = 看全部 gateway）/ `ExcludeGateway`（屏蔽所有 gateway 节点，只看 APP UI 创建的）。
+- **过滤策略（client-side）**：`refreshGraph()` / 搜索结果路径在拿到 `List<Memory>` 后、调 `repository.getGraphForMemories` 之前先按 `gatewayFilter` 过滤：遍历 `memory.tags.map { it.name }` 判断是否 `startsWith("#gateway:")` 与是否匹配选中 platform。性能上节点数千级别可接受；超过即考虑 P1 下推到 ObjectBox query（本期不做）。
+- **UI 注入**：`MemoryScreen.kt` 在 `MemorySearchBar` 与 `GraphVisualizer` 之间插一行横向 chip 容器（`LazyRow` 或 `FlowRow`），渲染：
+  - 左：`FilterChip("全部")` —— 选中 = `GatewayFilter.All`
+  - 中：`FilterChip("无网关")` —— 选中 = `GatewayFilter.ExcludeGateway`
+  - 右：`uiState.availableGatewayPlatforms` 每项一个 `FilterChip(platform)` —— 多选切换为 `OnlyGateway(selected)`
+  - chip 行高度紧凑（< 48dp），不挤压图谱区
+  - 平台列表为空（用户从未跑过 gateway）时整行隐藏，不留视觉残留
+- **MemoryInfoDialog 不动**：现有"Tags: a, b, c"一行展示 tag 已包含 `#gateway:` 前缀，节点详情天然可见；不做 chip 化以最小改动
+- **APP UI 路径完全不受影响**：APP UI 创建的节点不带 `#gateway:` tag → `pickNodeColorByAttributes` 走原有分支 → 颜色不变；`gatewayFilter == All` 默认值 = 全部显示，老用户开 app 行为完全不变
+- **i18n**：chip 文案走 `res/values*/strings.xml`，新增键 `memory_filter_all` / `memory_filter_no_gateway` / `memory_filter_gateway_platform_format`（zh: "全部" / "无网关" / "%s"；en: "All" / "No Gateway" / "%s"）
+- **验收**：
+  - 用户从未跑过 gateway → MemoryScreen 行为与 R-AGENT-012 之前完全一致（chip 行隐藏、节点颜色不变）
+  - 跑完一轮飞书 gateway → `availableGatewayPlatforms` 含 "feishu"，chip 行出现含 "feishu" 项，图谱中 gateway 节点显示为蓝绿色
+  - 选中 "无网关" chip → 图谱只显示无 `#gateway:` tag 的节点
+  - 选中 "feishu" chip → 图谱只显示带 `#gateway:feishu` tag 的节点
+  - 同时多选 "feishu" + "wechat" → 图谱显示两者并集
+  - `#persistent_instruction` 节点同时带 `#gateway:feishu` tag（极端 case）→ 颜色显示金色（persistent_instruction 优先），过滤按 gateway 维度仍可命中
+  - §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增）
+
 ---
 
 ## 域 ACP — Agent Client Protocol
