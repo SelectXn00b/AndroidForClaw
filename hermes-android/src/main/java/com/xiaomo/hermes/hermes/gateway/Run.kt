@@ -408,7 +408,7 @@ class GatewayRunner(
                     replyTo = currentEvent.message_id)
 
                 if (!result.success) {
-                    Log.w(_TAG, "First delivery attempt failed (${result.error}); retrying after 2s...")
+                    Log.w(_TAG, "First delivery attempt failed: platform=$platformName chatId=${currentEvent.source.chatId} len=${sendText.length} error=${result.error}; retrying after 2s...")
                     kotlinx.coroutines.delay(2000)
                     result = deliveryRouter.deliverText(
                         platform = platformName,
@@ -422,7 +422,7 @@ class GatewayRunner(
                     status.countersFor(platformName).recordSent()
                 } else {
                     status.countersFor(platformName).recordError()
-                    Log.w(_TAG, "Failed to send response after retry: ${result.error}")
+                    Log.w(_TAG, "Failed to send response after retry: platform=$platformName chatId=${currentEvent.source.chatId} len=${sendText.length} error=${result.error}")
                 }
 
                 // Run post-send hooks

@@ -373,6 +373,7 @@ class FeishuAdapter(
             .onP2MessageReceiveV1(object : com.lark.oapi.service.im.ImService.P2MessageReceiveV1Handler() {
                 override fun handle(data: com.lark.oapi.service.im.v1.model.P2MessageReceiveV1?) {
                     val ev = data?.event ?: return
+                    Log.i(_TAG, "WS event received from SDK: chat=${ev.message?.chatId} msg=${ev.message?.messageId}")
                     scope.launch { _dispatchSdkMessage(ev) }
                 }
             })
@@ -559,13 +560,13 @@ class FeishuAdapter(
 
         // Dedup check
         if (_dedup.isDuplicate(messageId)) {
-            Log.d(_TAG, "Duplicate message: $messageId")
+            Log.i(_TAG, "Duplicate message dropped: $messageId")
             return
         }
 
         // Allowlist check
         if (!_allowAllUsers && openId !in _allowedUsers) {
-            Log.d(_TAG, "User not in allowlist: $openId")
+            Log.i(_TAG, "User not in allowlist (message rejected): $openId")
             return
         }
 

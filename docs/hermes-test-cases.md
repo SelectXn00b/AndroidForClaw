@@ -959,6 +959,18 @@ inline `<think>` 提取仅作 fallback（兼容老历史）。
 | TC-GW-151-a | R-GW-005 | `send(reply_to=msg_id)` | 消息带 `message_reference` | unit | `DiscordAdapterTest#send reply_to wired` ✅ |
 | TC-GW-152-a | R-GW-005 | typing 状态 | POST `/typing` 无 body | unit | `DiscordAdapterTest#typing endpoint` ✅ |
 
+### Run.kt — 出站失败可观测性 (R-GW-001 bugfix, 2026-06-06)
+
+**背景**：用户报告飞书双向偶发丢消息（亮屏前台也发生）。静态审查发现 `Run.kt:425` 出站重试失败仅 `Log.w` 一行短消息（chat 不知是谁、文本不知是啥、错误细节也没），release 包还把关键路径的 `Log.d` strip 掉了——下次再丢，gateway.log 里没证据可查。Commit 3 只升级日志可见度，不改控制流。
+
+| TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
+|---|---|---|---|---|---|
+| TC-GW-170-a | R-GW-001 | `Run.kt` 出站重试失败的 `Log.w` | 必须包含 `chatId` + `len=` + `error=`（不只是错误字符串） | unit/source | `RunSendFailureLoggingTest#TC-GW-170-a final send-failure log carries chatId and length` 🟢 |
+| TC-GW-170-b | R-GW-001 | `Run.kt` 第一次重试前的 `Log.w` | 必须包含 `chatId` + `error=` | unit/source | `RunSendFailureLoggingTest#TC-GW-170-b first attempt failure log carries chatId` 🟢 |
+| TC-GW-171-a | R-GW-002 | `Feishu.kt` dedup 命中分支 | 必须升级到 `Log.i`（release 包要能看到证据） | unit/source | `FeishuDiagnosticLoggingTest#TC-GW-171-a duplicate hit logged at INFO` 🟢 |
+| TC-GW-171-b | R-GW-002 | `Feishu.kt` allowlist 拒绝分支 | 必须升级到 `Log.i` | unit/source | `FeishuDiagnosticLoggingTest#TC-GW-171-b allowlist rejection logged at INFO` 🟢 |
+| TC-GW-171-c | R-GW-002 | `Feishu.kt` `Starting official Feishu WS client` 后 5 行内 | 必须存在 `WS event received` 或等价的"WS 已连"证据日志（用于诊断假说 #2 的 SDK 静默断线） | unit/source | `FeishuDiagnosticLoggingTest#TC-GW-171-c WS lifecycle has post-start liveness log` 🟢 |
+
 ### Stub adapters (Signal/Slack/Matrix/WhatsApp/SMS/Email/Homeassistant/Mattermost/Webhook/BlueBubbles)
 
 | TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
