@@ -93,6 +93,16 @@ class GatewayRunner(
     @Volatile
     var agentRunner: (suspend (text: String, sessionKey: String, platform: String, chatId: String, userId: String) -> String)? = null
 
+    /**
+     * R-GW-003 bugfix (2026-06-06): notified when an outbound delivery fails after the
+     * one-time retry. Controllers can persist the reply + pop a local notification so the
+     * agent's reply isn't silently lost when a platform (e.g. Feishu API) is misbehaving.
+     * Only invoked on **final** failure — first-attempt failures with successful retry do
+     * not fire this callback.
+     */
+    @Volatile
+    var onSendFailed: ((platform: String, chatId: String, text: String, error: String) -> Unit)? = null
+
     /** Get the interrupt flag for a session. Returns null if the session is not processing. */
     fun getInterruptFlag(sessionKey: String): AtomicBoolean? = _interruptFlags[sessionKey]
 
@@ -423,6 +433,17 @@ class GatewayRunner(
                 } else {
                     status.countersFor(platformName).recordError()
                     Log.w(_TAG, "Failed to send response after retry: platform=$platformName chatId=${currentEvent.source.chatId} len=${sendText.length} error=${result.error}")
+                    // R-GW-003: surface to controller so the reply isn't silently lost.
+                    try {
+                        onSendFailed?.invoke(
+                            platformName,
+                            currentEvent.source.chatId,
+                            sendText,
+                            result.error ?: "unknown"
+                        )
+                    } catch (e: Throwable) {
+                        Log.w(_TAG, "onSendFailed callback threw: ${e.message}")
+                    }
                 }
 
                 // Run post-send hooks

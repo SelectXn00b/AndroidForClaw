@@ -8,6 +8,8 @@ import com.ai.assistance.operit.data.model.InputProcessingState
 import com.ai.assistance.operit.data.repository.ChatHistoryManager
 import com.ai.assistance.operit.util.ChatMarkupRegex
 import com.xiaomo.hermes.hermes.gateway.GatewayRunner
+import com.xiaomo.hermes.hermes.gateway.UndeliveredReplyNotifier
+import com.xiaomo.hermes.hermes.gateway.UndeliveredReplyStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -66,6 +68,23 @@ class HermesGatewayController private constructor(private val appContext: Contex
                     chatId = chatId,
                     interruptCheck = { runner?.getInterruptFlag(sessionKey)?.get() == true }
                 )
+            }
+            // R-GW-003 bugfix: when a delivery finally fails (after retry), persist the reply
+            // and pop a local Android notification so the user can copy-paste it manually.
+            // UndeliveredReplyStore + UndeliveredReplyNotifier together form the "rescue kit".
+            instance.onSendFailed = run {
+                val rescueStore: UndeliveredReplyStore = UndeliveredReplyStore(undeliveredFile(appContext))
+                val rescueNotifier: UndeliveredReplyNotifier = UndeliveredReplyNotifier(appContext)
+                rescueNotifier.ensureChannel()
+                ({ platform: String, chatId: String, text: String, error: String ->
+                    try {
+                        rescueStore.append(platform, chatId, text, error)
+                        rescueNotifier.notify(platform, chatId, text, error)
+                        GatewayFileLogger.w(TAG, "onSendFailed: persisted+notified platform=$platform chatId=$chatId len=${text.length} error=$error")
+                    } catch (e: Throwable) {
+                        Log.w(TAG, "rescue kit failed: ${e.message}")
+                    }
+                })
             }
             runner = instance
             instance.start()
@@ -401,6 +420,15 @@ class HermesGatewayController private constructor(private val appContext: Contex
         val platform = sessionKey.substringBefore(':').ifEmpty { sessionKey }
         val shortChat = chatId.substringBefore('@').take(24).ifEmpty { chatId.take(24) }
         return "[$platform] $shortChat"
+    }
+
+    /** R-GW-003: path to the undelivered-reply JSONL store. Same folder as gateway logs. */
+    private fun undeliveredFile(ctx: Context): java.io.File {
+        // Mirror GatewayFileLogger's path layout for consistency.
+        val externalDir = ctx.getExternalFilesDir(null) ?: ctx.filesDir
+        val dir = java.io.File(externalDir, "gateway_rescue")
+        dir.mkdirs()
+        return java.io.File(dir, "undelivered.jsonl")
     }
 
     /** Strip all internal XML markup from a text segment, leaving only user-visible text. */

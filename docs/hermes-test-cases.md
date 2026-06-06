@@ -971,6 +971,28 @@ inline `<think>` 提取仅作 fallback（兼容老历史）。
 | TC-GW-171-b | R-GW-002 | `Feishu.kt` allowlist 拒绝分支 | 必须升级到 `Log.i` | unit/source | `FeishuDiagnosticLoggingTest#TC-GW-171-b allowlist rejection logged at INFO` 🟢 |
 | TC-GW-171-c | R-GW-002 | `Feishu.kt` `Starting official Feishu WS client` 后 5 行内 | 必须存在 `WS event received` 或等价的"WS 已连"证据日志（用于诊断假说 #2 的 SDK 静默断线） | unit/source | `FeishuDiagnosticLoggingTest#TC-GW-171-c WS lifecycle has post-start liveness log` 🟢 |
 
+### Run.kt + UndeliveredReplyStore — 出站失败救命包 (R-GW-003 bugfix, 2026-06-06)
+
+**背景**：commit 3 让 release 包能看到"发失败了"的证据，但 agent 算出来的回复还是丢了——用户看不见、没法手动补救。Commit 4 补齐救命包：
+
+1. `GatewayRunner` 加 `onSendFailed: (platform, chatId, text, error) -> Unit` 回调（仿 `agentRunner` 模式）
+2. `Run.kt:425` 最终失败分支调用 `onSendFailed`（第一次失败不调，避免 retry 成功的误报）
+3. `UndeliveredReplyStore` 把失败回复追加到 `/sdcard/Download/Hermes/undelivered.jsonl`（JSONL = 每行一个 JSON，原子写）
+4. `UndeliveredReplyNotifier` 通过 Android NotificationManager 弹本地通知；点击 → 把全文复制到剪贴板（Toast 提示"已复制"）
+5. `HermesGatewayController.start()` 把 Store + Notifier 接到 `runner.onSendFailed`
+
+**测试策略**：JVM 单测里 Notifier / NotificationManager 强依赖 Android，走源码字符串扫描；Store 的 append + read 路径用真文件（`File.createTempFile`）。Run.kt 回调挂载点用源码扫描确认。
+
+| TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
+|---|---|---|---|---|---|
+| TC-GW-172-a | R-GW-003 | `GatewayRunner` 类定义 | 必须有 `onSendFailed: (platform, chatId, text, error) -> Unit` 类型的 `@Volatile var` 属性 | unit/source | `RunOnSendFailedCallbackTest#TC-GW-172-a defines onSendFailed callback property` 🟢 |
+| TC-GW-172-b | R-GW-003 | `Run.kt` 最终失败分支 | 必须调用 `onSendFailed?.invoke(platformName, currentEvent.source.chatId, sendText, result.error ?: "unknown")` —— 第一次失败那个分支**不**调（retry 可能救活） | unit/source | `RunOnSendFailedCallbackTest#TC-GW-172-b invokes onSendFailed only on final failure` 🟢 |
+| TC-GW-173-a | R-GW-003 | `UndeliveredReplyStore.append(platform, chatId, text, error)` 再 `read()` | 返回单条 entry：platform/chatId/text/error/timestampMs 全部正确；文件每行一个 JSON | unit | `UndeliveredReplyStoreTest#TC-GW-173-a append then read returns same entry` 🟢 |
+| TC-GW-173-b | R-GW-003 | `Store.append` 调用 3 次 → `Store.read()` | 返回 3 条按时间顺序排列；文件正好 3 行（不重写、不损坏） | unit | `UndeliveredReplyStoreTest#TC-GW-173-b appends are durable and ordered` 🟢 |
+| TC-GW-173-c | R-GW-003 | `Store.clear()` 后 `read()` | 返回空列表；文件被截断或删除 | unit | `UndeliveredReplyStoreTest#TC-GW-173-c clear truncates store` 🟢 |
+| TC-GW-174-a | R-GW-003 | `UndeliveredReplyNotifier.kt` 源码 | 必须创建 NotificationChannel id 含 `undelivered`；必须用 `NotificationManager.notify` 弹通知；点击 PendingIntent 必须把 text 写入剪贴板（`ClipboardManager`） | unit/source | `UndeliveredReplyNotifierTest#TC-GW-174-a notifies on local channel and copies text on click` 🟢 |
+| TC-GW-175-a | R-GW-003 | `HermesGatewayController.start()` 源码 | `agentRunner = ...` 后必须紧跟设置 `instance.onSendFailed`，内部调用 Store.append + Notifier.notify | unit/source | `HermesGatewayControllerSendFailedWiringTest#TC-GW-175-a wires Store and Notifier into onSendFailed` 🟢 |
+
 ### Stub adapters (Signal/Slack/Matrix/WhatsApp/SMS/Email/Homeassistant/Mattermost/Webhook/BlueBubbles)
 
 | TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
