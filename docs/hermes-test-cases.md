@@ -383,6 +383,30 @@ R-AGENT-001 描述 agent turn-loop 内核，验收以 **E2E 为主**（§3 三�
 
 ---
 
+## 域 AGENT — Gateway 保存的记忆节点强制打 `#gateway:<platform>` tag (R-AGENT-011)
+
+测试类:
+- `app/src/test/java/com/ai/assistance/operit/api/chat/library/MemoryLibrarySaveExtraTagsApiTest.kt`（MemoryLibrary 签名 + 注入点）
+- `app/src/test/java/com/ai/assistance/operit/hermes/gateway/HermesGatewayControllerGatewayTagWiringTest.kt`（gateway 调用点）
+- `app/src/test/java/com/ai/assistance/operit/api/chat/EnhancedAIServiceMemoryAutosaveTagsTest.kt`（APP UI 路径不受影响）
+
+**背景**：R-AGENT-010 让 gateway 路径每轮自动保存记忆，但 LLM 决定的 tag 与 APP UI 内 `create_memory` 产出的 tag 同质化，用户无法在 `MemoryScreen` 区分/过滤。修复策略：`MemoryLibrary.saveMemoryAsync` 加可选 `extraTags: List<String> = emptyList()` 参数，gateway 调用点显式传 `listOf("#gateway:$platform")`（platform 从 sessionKey 派生），APP UI 路径保持默认 emptyList。
+
+测试策略与 R-AGENT-010 一致——`runHermesAgent` / `handleTaskCompletion` mock ROI 低，走源码字符串扫描守住 wiring；`MemoryLibrary` API 表面则走源码扫描验证签名与两个创建分支的 `forEach extraTags` 注入。
+
+| ID | R-ID | 输入 / 触发条件 | 期望输出 | 类型 | 测试方法引用 |
+|---|---|---|---|---|---|
+| TC-AGENT-247-a | R-AGENT-011 | 源码扫描：`MemoryLibrary.kt` | `saveMemoryAsync` 函数签名必须含 `extraTags: List<String> = emptyList()` 参数（默认空 list 保 APP UI 路径不被影响）。 | unit-scan | `MemoryLibrarySaveExtraTagsApiTest#TC-AGENT-247-a saveMemoryAsync signature contains extraTags parameter with default emptyList` 🔴 |
+| TC-AGENT-247-b | R-AGENT-011 | 源码扫描：`MemoryLibrary.kt` | `saveMemory` 主问题创建分支必须 `extraTags.forEach { addTagToMemory(memory, it) }`，与 `mainProblem.tags.forEach` 并列；不能只对 LLM tags 加而漏 extraTags。 | unit-scan | `MemoryLibrarySaveExtraTagsApiTest#TC-AGENT-247-b saveMemory main problem branch injects extraTags` 🔴 |
+| TC-AGENT-247-c | R-AGENT-011 | 源码扫描：`MemoryLibrary.kt` | `saveMemory` 实体创建分支必须 `extraTags.forEach { addTagToMemory(memory, it) }`，与 `entity.tags.forEach` 并列；保证 gateway 一轮总结产出的实体节点同样带 `#gateway:` tag。 | unit-scan | `MemoryLibrarySaveExtraTagsApiTest#TC-AGENT-247-c saveMemory entity branch injects extraTags` 🔴 |
+| TC-AGENT-247-d | R-AGENT-011 | 源码扫描：`HermesGatewayController.kt` | `runHermesAgent` 调 `saveMemoryAsync` 时必须显式传 `extraTags = listOf("#gateway:...")`（前缀 `#gateway:` 固定），不能传空 list 或漏传。 | unit-scan | `HermesGatewayControllerGatewayTagWiringTest#TC-AGENT-247-d runHermesAgent passes gateway tag to saveMemoryAsync` 🔴 |
+| TC-AGENT-247-e | R-AGENT-011 | 源码扫描：`HermesGatewayController.kt` | gateway tag 中 `platform` 必须从 `sessionKey` 派生（`sessionKey.substringBefore(':')` 或等价 split），不能硬编码 `"unknown"` / `""` / `"gateway"`；保证飞书 → `#gateway:feishu`、微信 → `#gateway:wechat` 等可区分。 | unit-scan | `HermesGatewayControllerGatewayTagWiringTest#TC-AGENT-247-e gateway tag platform derives from sessionKey` 🔴 |
+| TC-AGENT-247-f | R-AGENT-011 | 源码扫描：`EnhancedAIService.kt` | `handleTaskCompletion`（APP UI 路径）调用 `saveMemoryAsync` 时**不得**传 `extraTags` 参数，走默认 emptyList()——APP 内聊天记忆不应被打 `#gateway:` tag。 | unit-scan | `EnhancedAIServiceMemoryAutosaveTagsTest#TC-AGENT-247-f handleTaskCompletion saveMemoryAsync does not pass extraTags` 🔴 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — Memory Dedup (R-AGENT-003 bugfix)
 
 测试类: `app/src/test/java/com/ai/assistance/operit/data/repository/MemoryDedupTest.kt`

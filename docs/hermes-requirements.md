@@ -208,6 +208,22 @@ HermesApp 必须提供与 Python Hermes 等价的 agent turn-loop 内核。Pytho
   - APP 内聊天路径行为不变（仍由 `handleTaskCompletion` 在 `<complete>` 时触发，避免重复保存）
   - §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增）
 
+### R-AGENT-011: Gateway 保存的记忆节点强制打 `#gateway:<platform>` tag
+**来源**: 无 Python 上游（Android 侧用户体验需求；用户报"R-AGENT-010 上线后 gateway 的记忆和 APP UI 自己创建的混在一起，无法在 MemoryScreen 区分/过滤"，2026-06-06 明确要求加 tag）
+**背景**: R-AGENT-010 让飞书 / 微信等 gateway 路径每轮自动保存记忆，但 MEMORY 总结模型产出的节点 tag 完全由 LLM 决定。实战中这些 tag 与 APP UI 内 agent 主动 `create_memory` 产出的 tag 同质化（比如都是话题词），用户既无法在 `MemoryScreen` 里通过 tag 过滤掉"机器人路径的记忆"，也无法快速定位某个 IM 平台积累了哪些上下文。需要在 gateway 写入路径**强制**附加一个固定前缀的 tag，UI 侧靠这个前缀即可分类。
+**行为**: `MemoryLibrary.saveMemoryAsync` 在签名上扩展一个可选参数 `extraTags: List<String> = emptyList()`（默认空，保 APP UI 路径行为不变）；`saveMemory` 内部在创建主问题节点 / 实体节点时除遍历 LLM 给出的 `mainProblem.tags` / `entity.tags` 外，**额外**遍历 `extraTags` 调 `memoryRepository.addTagToMemory(memory, tagName)`。`HermesGatewayController.runHermesAgent` 在调用 `saveMemoryAsync` 时传入 `extraTags = listOf("#gateway:$platform")`，`platform` 取自 `sessionKey.substringBefore(':')`（与 §1 sessionKey 约定 `<platform>:<chat>` 一致，如 `feishu:oc_xxx` → `feishu`）。
+- **触发时机**：与 R-AGENT-010 同一调用点；不新增任何独立写入分支。
+- **tag 命名约定**：固定前缀 `#gateway:`，后接平台名小写；保留 `#` 前缀与 `#persistent_instruction` 同风格，便于 UI 用 `startsWith("#gateway:")` 一次性筛掉/筛出。
+- **APP UI 路径行为不变**：`EnhancedAIService.handleTaskCompletion` 不传 `extraTags`（走默认 `emptyList()`），不会被打 `#gateway:` tag。
+- **不影响合并 / 去重**：`MemoryLibrary` 内部合并已存在节点时仍按既有逻辑（content / title 匹配），`extraTags` 只在**新建**节点时附加，不在合并分支重复写。
+- **不与 R-AGENT-009 冲突**：`#persistent_instruction` 是 R-AGENT-009 的标记，gateway 保存的节点不会带它（gateway 这层只加 `#gateway:<platform>`），所以也不会误把 gateway 的总结当成持久指令注回 system prompt。
+- **验收**：
+  - `MemoryLibrary.saveMemoryAsync` 签名含 `extraTags: List<String> = emptyList()`
+  - `HermesGatewayController.runHermesAgent` 调用 `saveMemoryAsync` 时显式传 `extraTags = listOf("#gateway:$platform")`，且 `platform` 从 `sessionKey` 派生（不是硬编码 `"unknown"` 或 `""`）
+  - APP UI 路径（`EnhancedAIService.handleTaskCompletion`）调用 `saveMemoryAsync` 时**不传** `extraTags`（保持默认 emptyList），不被打 gateway tag
+  - `MemoryLibrary.saveMemory` 主问题创建分支 + 实体创建分支均 `forEach extraTags` 调 `addTagToMemory`
+  - §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增）
+
 ---
 
 ## 域 ACP — Agent Client Protocol

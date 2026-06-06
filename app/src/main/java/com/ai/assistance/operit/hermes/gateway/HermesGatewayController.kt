@@ -457,6 +457,12 @@ class HermesGatewayController private constructor(private val appContext: Contex
                     val memoryService = EnhancedAIService.getAIServiceForFunction(
                         appContext, FunctionType.MEMORY
                     )
+                    // R-AGENT-011 (2026-06-06): tag every memory node produced by this gateway
+                    // turn with `#gateway:<platform>` so users can distinguish (or filter out)
+                    // bot-driven memories from APP-UI-created ones in MemoryScreen. `platform`
+                    // is derived from sessionKey (§1: sessionKey = "<platform>:<chat>"), so
+                    // feishu → "#gateway:feishu", wechat → "#gateway:wechat", etc.
+                    val gatewayPlatform = sessionKey.substringBefore(':').ifEmpty { sessionKey }
                     MemoryLibrary.saveMemoryAsync(
                         appContext,
                         AIToolHandler.getInstance(appContext),
@@ -465,9 +471,10 @@ class HermesGatewayController private constructor(private val appContext: Contex
                         memoryService,
                         onError = { e ->
                             GatewayFileLogger.w(TAG, "  R-AGENT-010: saveMemoryAsync failed: ${e.message}")
-                        }
+                        },
+                        extraTags = listOf("#gateway:$gatewayPlatform")
                     )
-                    GatewayFileLogger.i(TAG, "  R-AGENT-010: dispatched saveMemoryAsync (history=${conversationHistory.size} msgs)")
+                    GatewayFileLogger.i(TAG, "  R-AGENT-010: dispatched saveMemoryAsync (history=${conversationHistory.size} msgs, gatewayTag=#gateway:$gatewayPlatform)")
                 } else {
                     GatewayFileLogger.i(TAG, "  R-AGENT-010: enableMemoryQuery=false — skipped memory save")
                 }

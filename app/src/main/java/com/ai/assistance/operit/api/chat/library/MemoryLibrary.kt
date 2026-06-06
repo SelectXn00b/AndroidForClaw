@@ -87,7 +87,12 @@ object MemoryLibrary {
             content: String,
             aiService: AIService,
             onSuccess: (suspend () -> Unit)? = null,
-            onError: (suspend (Exception) -> Unit)? = null
+            onError: (suspend (Exception) -> Unit)? = null,
+            // R-AGENT-011: optional caller-supplied tags (e.g. "#gateway:feishu") appended to
+            // every newly created memory node (main problem + entities). APP UI path omits this
+            // argument → default emptyList() → behavior unchanged. Gateway path passes
+            // `listOf("#gateway:$platform)` so users can filter gateway-origin memories in the UI.
+            extraTags: List<String> = emptyList()
     ) {
         ensureInitialized(context)
 
@@ -98,7 +103,8 @@ object MemoryLibrary {
                     toolHandler,
                     conversationHistory,
                     content,
-                    aiService
+                    aiService,
+                    extraTags
                 )
                 onSuccess?.invoke()
             } catch (e: CancellationException) {
@@ -254,7 +260,11 @@ object MemoryLibrary {
             toolHandler: AIToolHandler,
             conversationHistory: List<Pair<String, String>>,
             content: String,
-            aiService: AIService
+            aiService: AIService,
+            // R-AGENT-011: see saveMemoryAsync above. Appended to mainProblem + each entity
+            // memory after the LLM-supplied tags. Empty for APP UI path; gateway passes
+            // `listOf("#gateway:$platform")`.
+            extraTags: List<String> = emptyList()
     ) {
         mutex.withLock {
             val profileId = preferencesManager.activeProfileIdFlow.first()
@@ -413,6 +423,11 @@ object MemoryLibrary {
                         mainProblem.tags.forEach { tagName ->
                             memoryRepository.addTagToMemory(memory, tagName)
                         }
+                        // R-AGENT-011: extra caller-supplied tags (e.g. "#gateway:feishu") so
+                        // gateway-saved memories are filterable in MemoryScreen.
+                        extraTags.forEach { tagName ->
+                            memoryRepository.addTagToMemory(memory, tagName)
+                        }
                         memory
                     }
                 }
@@ -451,6 +466,11 @@ object MemoryLibrary {
                         )
                         memoryRepository.saveMemory(memory)
                         entity.tags.forEach { tagName ->
+                            memoryRepository.addTagToMemory(memory, tagName)
+                        }
+                        // R-AGENT-011: extra caller-supplied tags (e.g. "#gateway:feishu") so
+                        // gateway-saved entity nodes are filterable in MemoryScreen.
+                        extraTags.forEach { tagName ->
                             memoryRepository.addTagToMemory(memory, tagName)
                         }
                     }
