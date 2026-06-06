@@ -4,7 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.ai.assistance.operit.api.chat.ChatRuntimeHolder
 import com.ai.assistance.operit.api.chat.ChatRuntimeSlot
-import com.ai.assistance.operit.api.chat.enhance.MultiServiceManager
+import com.ai.assistance.operit.api.chat.EnhancedAIService
 import com.ai.assistance.operit.api.chat.library.MemoryLibrary
 import com.ai.assistance.operit.core.tools.AIToolHandler
 import com.ai.assistance.operit.data.model.FunctionType
@@ -448,10 +448,15 @@ class HermesGatewayController private constructor(private val appContext: Contex
                         GatewayFileLogger.w(TAG, "  R-AGENT-010: failed to load history for memory save: ${e.message}")
                         emptyList()
                     }
-                    val multiServiceManager = MultiServiceManager(appContext)
-                    multiServiceManager.initialize()
-                    val memoryService = multiServiceManager
-                        .getServiceForFunction(FunctionType.MEMORY)
+                    // bugfix 2026-06-06 (TC-AGENT-246-f): reuse EnhancedAIService singleton's
+                    // multiServiceManager (via the public companion helper) instead of allocating
+                    // a fresh MultiServiceManager per turn —— shares service cache + token
+                    // counters with APP UI and honors EnhancedAIService.refreshServiceForFunction
+                    // (FunctionType.MEMORY) cache-invalidation when the user changes MEMORY
+                    // config in settings.
+                    val memoryService = EnhancedAIService.getAIServiceForFunction(
+                        appContext, FunctionType.MEMORY
+                    )
                     MemoryLibrary.saveMemoryAsync(
                         appContext,
                         AIToolHandler.getInstance(appContext),

@@ -43,11 +43,18 @@ class HermesGatewayControllerMemoryAutosaveWiringTest {
 
     @Test
     fun `TC-AGENT-246-c runHermesAgent uses MEMORY function service`() {
+        // R-AGENT-010 + bugfix 2026-06-06：MEMORY service 来源必须是 FunctionType.MEMORY，
+        // 走 `getServiceForFunction(FunctionType.MEMORY)`（直接调）或
+        // `getAIServiceForFunction(context, FunctionType.MEMORY)`（EnhancedAIService 公共 helper，
+        // 内部也是 multiServiceManager.getServiceForFunction(FunctionType.MEMORY)）。
+        // 两种等价；TC-246-f 进一步约束必须复用 singleton，不能 new MultiServiceManager。
         assertTrue(
-            "saveMemoryAsync 调用必须用 multiServiceManager.getServiceForFunction(FunctionType.MEMORY) " +
-                "取 MEMORY 模型 —— 与 APP 内路径一致，确保总结质量。",
-            runBlock.contains("FunctionType.MEMORY") &&
-                Regex("""getServiceForFunction\s*\(\s*FunctionType\.MEMORY""").containsMatchIn(runBlock)
+            "saveMemoryAsync 调用必须用 MEMORY function service —— 取自 " +
+                "getServiceForFunction(FunctionType.MEMORY) 或 getAIServiceForFunction(..., FunctionType.MEMORY)。",
+            runBlock.contains("FunctionType.MEMORY") && (
+                Regex("""getServiceForFunction\s*\(\s*FunctionType\.MEMORY""").containsMatchIn(runBlock) ||
+                    Regex("""getAIServiceForFunction\s*\([\s\S]*?FunctionType\.MEMORY""").containsMatchIn(runBlock)
+            )
         )
     }
 
@@ -63,15 +70,41 @@ class HermesGatewayControllerMemoryAutosaveWiringTest {
     }
 
     @Test
+    fun `TC-AGENT-246-f runHermesAgent reuses EnhancedAIService singleton multiServiceManager`() {
+        // bugfix 2026-06-06: 不得 new MultiServiceManager()，必须复用 EnhancedAIService singleton 的
+        // multiServiceManager —— 否则每轮 gateway 重建 service、冷缓存、token counter 脱离、
+        // refreshServiceForFunction 配置失效路径绕过。
+        // 复用模式两种之一即可：
+        //   a) EnhancedAIService.getInstance(...).multiServiceManager.getServiceForFunction(...)
+        //   b) EnhancedAIService.getAIServiceForFunction(context, FunctionType.XXX)
+        //      （helper 内部就是 a，是 public 包外推荐入口）
+        val reusesSingleton =
+            Regex("""EnhancedAIService\s*\.\s*getInstance\s*\([^)]*\)\s*\.\s*multiServiceManager""")
+                .containsMatchIn(runBlock) ||
+            Regex("""EnhancedAIService\s*\.\s*getAIServiceForFunction\s*\(""")
+                .containsMatchIn(runBlock)
+        assertTrue(
+            "runHermesAgent 必须复用 EnhancedAIService singleton（getInstance(...).multiServiceManager " +
+                "或 getAIServiceForFunction(...)）取 MEMORY service —— 实际 runBlock:\n$runBlock",
+            reusesSingleton
+        )
+        assertTrue(
+            "runHermesAgent 严禁 new MultiServiceManager(...) —— 每轮新建会丢 service 缓存 + 与 APP UI 的 token counter 脱钩。",
+            !Regex("""\bMultiServiceManager\s*\(""").containsMatchIn(runBlock)
+        )
+    }
+
+    @Test
     fun `TC-AGENT-246-e runHermesAgent skips save on empty or interrupted`() {
         // saveMemoryAsync 调用必须落在"非空 + 未中断"分支里。
-        // 找到 saveMemoryAsync 调用点，向上 30 行内必须有 aiText 非空检查
+        // 找到 saveMemoryAsync 调用点，向上 60 行内必须有 aiText 非空检查
         // (例如 isNotEmpty/isNotBlank/length>0) 或 if-not-empty 守卫。
+        // 窗口设 60 是为了容纳调用前可能存在的多行注释 + helper 调用 + history 加载（每行都算）。
         val idx = runBlock.indexOf("saveMemoryAsync")
         assertTrue("找不到 saveMemoryAsync 调用点", idx >= 0)
         val beforeWindow = runBlock.substring(0, idx)
             .lines()
-            .takeLast(30)
+            .takeLast(60)
             .joinToString("\n")
 
         val hasEmptinessGuard = Regex(
@@ -83,8 +116,8 @@ class HermesGatewayControllerMemoryAutosaveWiringTest {
 
         assertTrue(
             "saveMemoryAsync 调用必须落在 aiText 非空 + 未中断的分支内 —— " +
-                "中断 / 异常 / 空回复路径不得保存。实际前 30 行窗口:\n$beforeWindow",
-            hasEmptinessGuard || hasInterruptGuard
+                "中断 / 异常 / 空回复路径不得保存。实际前 60 行窗口:\n$beforeWindow",
+            hasEmptinessGuard && hasInterruptGuard
         )
     }
 

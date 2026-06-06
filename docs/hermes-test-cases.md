@@ -377,6 +377,7 @@ R-AGENT-001 描述 agent turn-loop 内核，验收以 **E2E 为主**（§3 三�
 | TC-AGENT-246-c | R-AGENT-010 | 源码扫描：`HermesGatewayController.kt` | `saveMemoryAsync` 必须用 `multiServiceManager.getServiceForFunction(FunctionType.MEMORY)` 取 MEMORY 模型，与 APP 内路径一致。 | unit-scan | `HermesGatewayControllerMemoryAutosaveWiringTest#TC-AGENT-246-c runHermesAgent uses MEMORY function service` 🟢 |
 | TC-AGENT-246-d | R-AGENT-010 | 源码扫描：`HermesGatewayController.kt` | `runHermesAgent` 的 conversationHistory 来源必须是 `ChatHistoryManager.loadChatMessages(historyChatId)`（取 gateway 会话历史，而非空 list 或硬编码）。 | unit-scan | `HermesGatewayControllerMemoryAutosaveWiringTest#TC-AGENT-246-d runHermesAgent reads gateway chat history` 🟢 |
 | TC-AGENT-246-e | R-AGENT-010 | 源码扫描：`HermesGatewayController.kt` | `saveMemoryAsync` 调用点必须位于"agent 回复非空 + 未中断"分支内（即 `aiText` 非空、`interruptCheck()` 未真）；中断 / 异常 / 空回复路径不调用。 | unit-scan | `HermesGatewayControllerMemoryAutosaveWiringTest#TC-AGENT-246-e runHermesAgent skips save on empty or interrupted` 🟢 |
+| TC-AGENT-246-f | R-AGENT-010 | 源码扫描：`HermesGatewayController.kt` | （bugfix 2026-06-06）`runHermesAgent` 取 MEMORY service 必须复用 `EnhancedAIService.getInstance(...).multiServiceManager` —— 禁止 `MultiServiceManager(...)` 构造调用。否则每轮 gateway 都重建 service / 冷缓存 / 与 APP UI 的 token counter 脱离，且配置变更后 `refreshServiceForFunction` 不会失效缓存。 | unit-scan | `HermesGatewayControllerMemoryAutosaveWiringTest#TC-AGENT-246-f runHermesAgent reuses EnhancedAIService singleton multiServiceManager` 🟢 |
 
 状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
 
