@@ -190,6 +190,24 @@ HermesApp 必须提供与 Python Hermes 等价的 agent turn-loop 内核。Pytho
   - 自动总结跑完一轮 → 带 tag 的节点 content 一字不动（不被合并/重写）
   - §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增）
 
+### R-AGENT-010: Gateway 路径每轮强制保存对话摘要到长期记忆
+**来源**: 无 Python 上游（Android 侧用户体验需求；用户报"app 里聊天有自动总结，飞书 gateway 路径没看到自动生成的记忆"）
+**背景**: APP 内聊天路径 `EnhancedAIService.handleTaskCompletion` 会调 `MemoryLibrary.saveMemoryAsync` 自动总结当轮对话写入长期记忆，但**只有 agent 输出 `<complete>` 标记**（`ConversationMarkupManager.containsTaskCompletion(aggregatedContent) == true`）时才触发。飞书 / 微信等 Gateway 场景下，agent 是被动应答短消息，几乎不会主动写 `<complete>`，导致这些路径的对话从不进入长期记忆，违背"agent 应当持续积累用户上下文"的预期。
+**行为**: `HermesGatewayController.runHermesAgent`（飞书 / 微信 / 其他平台都经此入口）在 agent 回复成功生成、即将 return 给 GatewayRunner 之前，**强制调用一次** `MemoryLibrary.saveMemoryAsync(appContext, toolHandler, conversationHistory, aiText, memoryService, ...)`，不依赖 `<complete>` 标记。
+- **触发时机**：`runHermesAgent` 的"agent 回复非空且即将返回"分支；中断 (`interruptCheck() == true`) / 异常 / 空回复路径**不存**。
+- **conversationHistory 来源**：从 `ChatHistoryManager.loadChatMessages(historyChatId)` 取当前 gateway 会话的消息列表（`historyChatId = "gw:$sessionKey:$chatId"`，§1 已用），转换为 `List<Pair<String,String>>`（pair.first = role "user"/"assistant"/"system"，pair.second = content）。
+- **memoryService 来源**：`multiServiceManager.getServiceForFunction(FunctionType.MEMORY)`，与 APP 内聊天路径走同一 MEMORY function 模型。
+- **enableMemoryQuery 开关**：复用 `ApiPreferences.enableMemoryQueryFlow`，与 APP 内路径同一开关；false 时跳过保存（一致行为）。
+- **失败容忍**：`saveMemoryAsync` 内部异常 / 网络失败不得影响 gateway 回复返回——`saveMemoryAsync` 已是 fire-and-forget 协程，自带异常隔离，gateway 这边 best-effort 启动后立即继续。
+- **去重 / 合并**：复用现有 `MemoryLibrary.saveMemory` 内部的合并 / 重写 / tag 跳过逻辑（R-AGENT-009 的 `#persistent_instruction` 节点天然受保护），gateway 这层不重复造轮子。
+- **不与 R-AGENT-009 冲突**：本需求负责"主动总结"，R-AGENT-009 负责"注入持久指令"，二者写入与读取链路独立。
+- **验收**：
+  - gateway 走完一轮非空回复 → `MemoryRepository` 新增 1 条由 MEMORY 模型总结的记忆节点
+  - gateway 中断 / 异常 / agent 返回空文本 → 不新增记忆
+  - `enableMemoryQuery = false` → 即使 gateway 正常回复也不新增记忆
+  - APP 内聊天路径行为不变（仍由 `handleTaskCompletion` 在 `<complete>` 时触发，避免重复保存）
+  - §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增）
+
 ---
 
 ## 域 ACP — Agent Client Protocol

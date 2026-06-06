@@ -4,7 +4,12 @@ import android.content.Context
 import android.util.Log
 import com.ai.assistance.operit.api.chat.ChatRuntimeHolder
 import com.ai.assistance.operit.api.chat.ChatRuntimeSlot
+import com.ai.assistance.operit.api.chat.enhance.MultiServiceManager
+import com.ai.assistance.operit.api.chat.library.MemoryLibrary
+import com.ai.assistance.operit.core.tools.AIToolHandler
+import com.ai.assistance.operit.data.model.FunctionType
 import com.ai.assistance.operit.data.model.InputProcessingState
+import com.ai.assistance.operit.data.preferences.ApiPreferences
 import com.ai.assistance.operit.data.repository.ChatHistoryManager
 import com.ai.assistance.operit.util.ChatMarkupRegex
 import com.xiaomo.hermes.hermes.gateway.GatewayRunner
@@ -411,6 +416,61 @@ class HermesGatewayController private constructor(private val appContext: Contex
         } else {
             GatewayFileLogger.i(TAG, "  full reply (${strippedReply.length} chars): ${strippedReply.take(2000)}${if (strippedReply.length > 2000) "…[truncated]" else ""}")
         }
+
+        // R-AGENT-010: force-save gateway conversation as long-term memory.
+        // APP UI path triggers MemoryLibrary.saveMemoryAsync only when the agent
+        // outputs <complete>; gateway short-chat scenarios almost never write
+        // <complete>, so we must force a save here. Gated by ApiPreferences
+        // .enableMemoryQueryFlow (same switch as APP UI). Skipped on interrupt
+        // (already short-circuited above), empty/timeout placeholders.
+        if (!interruptCheck() &&
+            strippedReply.isNotBlank() &&
+            strippedReply != "(empty response)" &&
+            strippedReply != "(agent timed out)"
+        ) {
+            try {
+                val enableMemoryQuery = ApiPreferences.getInstance(appContext)
+                    .enableMemoryQueryFlow.first()
+                if (enableMemoryQuery) {
+                    val conversationHistory: List<Pair<String, String>> = try {
+                        ChatHistoryManager.getInstance(appContext)
+                            .loadChatMessages(historyChatId)
+                            .map { msg ->
+                                val role = when (msg.sender) {
+                                    "ai" -> "assistant"
+                                    "user" -> "user"
+                                    "system" -> "system"
+                                    else -> msg.sender
+                                }
+                                role to msg.content
+                            }
+                    } catch (e: Throwable) {
+                        GatewayFileLogger.w(TAG, "  R-AGENT-010: failed to load history for memory save: ${e.message}")
+                        emptyList()
+                    }
+                    val multiServiceManager = MultiServiceManager(appContext)
+                    multiServiceManager.initialize()
+                    val memoryService = multiServiceManager
+                        .getServiceForFunction(FunctionType.MEMORY)
+                    MemoryLibrary.saveMemoryAsync(
+                        appContext,
+                        AIToolHandler.getInstance(appContext),
+                        conversationHistory,
+                        strippedReply,
+                        memoryService,
+                        onError = { e ->
+                            GatewayFileLogger.w(TAG, "  R-AGENT-010: saveMemoryAsync failed: ${e.message}")
+                        }
+                    )
+                    GatewayFileLogger.i(TAG, "  R-AGENT-010: dispatched saveMemoryAsync (history=${conversationHistory.size} msgs)")
+                } else {
+                    GatewayFileLogger.i(TAG, "  R-AGENT-010: enableMemoryQuery=false — skipped memory save")
+                }
+            } catch (e: Throwable) {
+                GatewayFileLogger.w(TAG, "  R-AGENT-010: memory save wiring failed: ${e.message}")
+            }
+        }
+
         GatewayFileLogger.i(TAG, "═══ runHermesAgent END ═══\n")
 
         return strippedReply

@@ -362,6 +362,26 @@ R-AGENT-001 描述 agent turn-loop 内核，验收以 **E2E 为主**（§3 三�
 
 ---
 
+## 域 AGENT — Gateway 路径每轮强制保存对话摘要到长期记忆 (R-AGENT-010)
+
+测试类: `app/src/test/java/com/ai/assistance/operit/hermes/gateway/HermesGatewayControllerMemoryAutosaveWiringTest.kt`
+
+**背景**：APP 内聊天路径的自动总结保存 (`EnhancedAIService.handleTaskCompletion` → `MemoryLibrary.saveMemoryAsync`) 只在 agent 输出 `<complete>` 时触发。飞书 / 微信 gateway 路径的 agent 是被动应答，几乎不写 `<complete>`，导致这些对话从不进入长期记忆。修复策略：在 `HermesGatewayController.runHermesAgent` 即将 return aiText 给 `GatewayRunner` 前，强制调一次 `MemoryLibrary.saveMemoryAsync`。中断 / 异常 / 空回复不存。受 `ApiPreferences.enableMemoryQueryFlow` 开关控制。
+
+测试策略与 R-GW-003 (TC-GW-175-a) 一致：`HermesGatewayController.runHermesAgent` 是 suspend + 重度依赖 Android Context / multiServiceManager / ChatHistoryManager，JVM mock ROI 太低，走源码字符串扫描守住 wiring。运行时正确性由手测 + §3 E2E 兜底。
+
+| ID | R-ID | 输入 / 触发条件 | 期望输出 | 类型 | 测试方法引用 |
+|---|---|---|---|---|---|
+| TC-AGENT-246-a | R-AGENT-010 | 源码扫描：`HermesGatewayController.kt` | `runHermesAgent` 函数体必须 reference `MemoryLibrary.saveMemoryAsync` —— 否则 gateway 路径永远不主动总结。 | unit-scan | `HermesGatewayControllerMemoryAutosaveWiringTest#TC-AGENT-246-a runHermesAgent invokes saveMemoryAsync` 🟢 |
+| TC-AGENT-246-b | R-AGENT-010 | 源码扫描：`HermesGatewayController.kt` | `runHermesAgent` 必须读 `enableMemoryQueryFlow`（与 APP 内路径同一开关），开关 false 时跳过保存。 | unit-scan | `HermesGatewayControllerMemoryAutosaveWiringTest#TC-AGENT-246-b runHermesAgent gates on enableMemoryQueryFlow` 🟢 |
+| TC-AGENT-246-c | R-AGENT-010 | 源码扫描：`HermesGatewayController.kt` | `saveMemoryAsync` 必须用 `multiServiceManager.getServiceForFunction(FunctionType.MEMORY)` 取 MEMORY 模型，与 APP 内路径一致。 | unit-scan | `HermesGatewayControllerMemoryAutosaveWiringTest#TC-AGENT-246-c runHermesAgent uses MEMORY function service` 🟢 |
+| TC-AGENT-246-d | R-AGENT-010 | 源码扫描：`HermesGatewayController.kt` | `runHermesAgent` 的 conversationHistory 来源必须是 `ChatHistoryManager.loadChatMessages(historyChatId)`（取 gateway 会话历史，而非空 list 或硬编码）。 | unit-scan | `HermesGatewayControllerMemoryAutosaveWiringTest#TC-AGENT-246-d runHermesAgent reads gateway chat history` 🟢 |
+| TC-AGENT-246-e | R-AGENT-010 | 源码扫描：`HermesGatewayController.kt` | `saveMemoryAsync` 调用点必须位于"agent 回复非空 + 未中断"分支内（即 `aiText` 非空、`interruptCheck()` 未真）；中断 / 异常 / 空回复路径不调用。 | unit-scan | `HermesGatewayControllerMemoryAutosaveWiringTest#TC-AGENT-246-e runHermesAgent skips save on empty or interrupted` 🟢 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — Memory Dedup (R-AGENT-003 bugfix)
 
 测试类: `app/src/test/java/com/ai/assistance/operit/data/repository/MemoryDedupTest.kt`
