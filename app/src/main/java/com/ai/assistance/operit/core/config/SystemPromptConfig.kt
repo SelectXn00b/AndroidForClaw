@@ -61,7 +61,14 @@ MEMORY USAGE GUIDANCE:
 - The memory library is automatically updated by a background system after each conversation turn — you do not need to save memories manually. But proactively query when it would help you answer better.
 - EXCEPTION — persistent rules / preferences: when the user explicitly states a persistent behavior rule (format, style, taboo, workflow, naming, language, etc.), you MUST proactively call create_memory with tags including `#persistent_instruction`. The background extractor does NOT recognize these — only memories carrying that exact tag get injected into every future system prompt. Without it, the rule disappears once the context rolls over.
 - If the user says something like "remember this", "from now on", "never X", "always X", treat it as a persistent rule trigger.
-- When using query_memory, search with short keywords (e.g., user name, topic words), not full sentences."""
+- When using query_memory, search with short keywords (e.g., user name, topic words), not full sentences.
+
+WORKSPACE MEMORY FILES (long-term project memory, on-demand read):
+- The workspace root `/Users/qiao/.openclaw/workspace-dev-androidclaw/` keeps a set of long-term memory markdown files maintained across sessions. These are NOT auto-injected into every prompt — read them on demand.
+- `MEMORY-AUTO.md` — auto-appended conversation summary. A PreCompact hook writes a snippet here every time the conversation gets compacted. Read it when the user asks about prior conversations ("what did we do last time", "I told you X before", "what was the previous fix") or when you suspect a historical session holds the root cause.
+- `MEMORY-<TOPIC>.md` (e.g., `MEMORY-MIMO.md`, `MEMORY-DEEPSEEK.md`, `MEMORY-GATEWAY-VIZ.md`) — per-topic post-mortems with root cause, fix, and troubleshooting checklist. Read the matching one BEFORE editing the corresponding subsystem.
+- `CLAUDE.md` §5.1 (topic memory index) and §5.2 (auto-summary index) list every memory file and when to read it.
+- Rule: whenever you finish a bugfix series that spans multiple files/commits, append a `MEMORY-<TOPIC>.md` to the workspace root and register it in `CLAUDE.md` §5.1, otherwise the lesson is lost on the next session window."""
 
     private const val GATEWAY_AWARENESS_CN = """
 网关模块感知：
@@ -78,7 +85,14 @@ MEMORY USAGE GUIDANCE:
 - 记忆库会在每轮对话结束后由后台系统自动提取和更新，无需你手动保存。但如果记忆查询能帮助你更好地回答，就主动查询。
 - 例外——持久规则/偏好：当用户明确说出持久的行为规则（格式、风格、禁忌、工作流、称呼、语言习惯等），你必须主动调用 create_memory 并在 tags 中包含 `#persistent_instruction`。后台自动提取器不会识别这类规则——只有带这个 tag 的记忆才会被注入到将来每一轮的 system prompt。不带这个 tag，规则会在上下文滚动后消失。
 - 如果用户说"记住"、"以后..."、"别再..."、"始终..."之类的话，把它当作持久规则的触发信号。
-- 使用 query_memory 时，用简短关键词搜索（如用户名、主题词），不要用完整句子。"""
+- 使用 query_memory 时，用简短关键词搜索（如用户名、主题词），不要用完整句子。
+
+工作区记忆文件（跨会话长期记忆，按需读取）：
+- 工作区根目录 `/Users/qiao/.openclaw/workspace-dev-androidclaw/` 维护着一组跨会话的长期记忆 markdown 文件。这些文件**不会**被自动注入每次 prompt —— 按需读取。
+- `MEMORY-AUTO.md` —— 自动对话摘要。PreCompact hook 在每次对话被压缩前追加一段摘要。当用户问到历史对话（如"上次我们做了什么"、"我之前跟你说过 X"、"上次的修复是什么"），或你怀疑历史会话埋了根因时，读这份。
+- `MEMORY-<TOPIC>.md`（如 `MEMORY-MIMO.md`、`MEMORY-DEEPSEEK.md`、`MEMORY-GATEWAY-VIZ.md`）—— 各类历史踩坑的专题档案，含根因/修复/排查 checklist。**改对应子系统前先读这份**。
+- `CLAUDE.md` §5.1（专题记忆索引）和 §5.2（自动摘要索引）列出了每份记忆文件 + 何时该读。
+- 规则：每次完成一类涉及多文件/多 commit 的修复（特别是 bugfix 串联），在工作区根追加一份 `MEMORY-<TOPIC>.md`，并登记到 `CLAUDE.md` §5.1，否则下次会话开窗这份经验就丢了。"""
 
     private const val TOOL_USAGE_GUIDELINES_EN = """
 When calling a tool, the user will see your response, and then will automatically send the tool results back to you in a follow-up message.
