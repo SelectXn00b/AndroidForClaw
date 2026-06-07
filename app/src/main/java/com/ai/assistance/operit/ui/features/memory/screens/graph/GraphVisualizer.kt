@@ -139,20 +139,34 @@ private fun getNodeLayoutMetrics(
     node: Node,
     textMeasurer: TextMeasurer,
     nodeLayoutCache: MutableMap<NodeLayoutCacheKey, NodeLayoutMetrics>,
-    nodePalette: NodePalette
+    nodePalette: NodePalette,
+    nodeFillColor: Color
 ): NodeLayoutMetrics {
+    // R-AGENT-012 bugfix 2026-06-07 (TC-AGENT-250-a): TC-AGENT-249 让节点 fill 走
+    // 固定 hex（金/蓝绿/绿/蓝/紫）之后，按主题算的 nodePalette.textColor 在彩色
+    // fill 上对比度严重不足（暗色主题下浅文字 vs 金 fill 仅 1.34:1，WCAG 失败）。
+    // 按 fill 亮度反推文字色：亮 fill (luminance >= 0.5) 用深文字，暗 fill 用浅文字。
+    // 阈值 0.5 是 WCAG 推荐的简单二分；金 (0.61) / 绿 (0.50) → 深文字，
+    // 蓝绿 (0.32) / 蓝 (0.45) / 紫 (0.25) → 浅文字。
+    val effectiveTextColor = if (nodeFillColor.luminance() >= 0.5f) {
+        Color(0xFF1F2937) // 深文字，与浅色主题 textColor 同
+    } else {
+        Color(0xFFE5E7EB) // 浅文字，与暗色主题 textColor 同
+    }
     return nodeLayoutCache.getOrPut(
         NodeLayoutCacheKey(
             nodeId = node.id,
             label = node.label,
-            styleKey = nodePalette.textColor.hashCode()
+            // cache key 含 effectiveTextColor + nodeFillColor 双因子：同一节点 id
+            // 可能因 tag 变化拿到不同 fill 色，若 cache key 不区分会复用旧 textColor
+            styleKey = effectiveTextColor.hashCode() * 31 + nodeFillColor.hashCode()
         )
     ) {
         val baseScale = 1f
         val textStyle = TextStyle(
             fontSize = (11.5f * baseScale).sp,
             lineHeight = (12.5f * baseScale).sp,
-            color = nodePalette.textColor
+            color = effectiveTextColor
         )
         val maxTextWidth = (280f * baseScale).toInt().coerceAtLeast(1)
         val textLayoutResult = textMeasurer.measure(
@@ -194,7 +208,11 @@ private fun resolveNodeScreenRect(
         node = node,
         textMeasurer = textMeasurer,
         nodeLayoutCache = nodeLayoutCache,
-        nodePalette = nodePalette
+        nodePalette = nodePalette,
+        // 命中检测路径：布局尺寸只取决于 label + padding，与 fill 色无关。
+        // 传 nodePalette.fillColor（即 LightGray 节点的 fallback 路径）保持
+        // 与最终渲染时 fallback 节点的 cache 命中一致，避免重复测量。
+        nodeFillColor = nodePalette.fillColor
     )
     val visualScale = resolveNodeVisualScale(viewScale)
     val halfWidth = layoutMetrics.boxWidth * visualScale / 2f + extraPadding
@@ -1142,11 +1160,24 @@ private fun DrawScope.drawNode(
     isBoxSelected: Boolean // 新增：接收框选状态
 ) {
     val visualScale = resolveNodeVisualScale(viewScale)
+    // R-AGENT-012 bugfix 2026-06-07 (TC-AGENT-249-a + TC-AGENT-250-a):
+    // 先算节点 fill 色，再传进 getNodeLayoutMetrics —— 后者按 fill 亮度反推文字色
+    // (luminance >= 0.5 → 深文字 #1F2937，否则浅文字 #E5E7EB)，避免暗色主题下
+    // 浅文字落到金/绿 fill 上对比度严重不足。
+    //
+    // Repository.pickNodeColor(memory) 已按 tag 算好节点专属色
+    // (#persistent_instruction → 金 0xFFFFB300, #gateway:* → 蓝绿 0xFF26A69A,
+    //  Person → 绿, Concept → 蓝, 默认 LightGray)。先前实现这里硬编码
+    // nodePalette.fillColor 把这些色全部丢弃，导致 R-AGENT-005 / R-AGENT-012
+    // 的颜色策略在 UI 层完全不可见。node.color 非默认 (LightGray) 时用 node.color；
+    // 默认色时 fallback 到 nodePalette.fillColor 保持普通节点跟主题一致。
+    val nodeFillColor = if (node.color != Color.LightGray) node.color else nodePalette.fillColor
     val layoutMetrics = getNodeLayoutMetrics(
         node = node,
         textMeasurer = textMeasurer,
         nodeLayoutCache = nodeLayoutCache,
-        nodePalette = nodePalette
+        nodePalette = nodePalette,
+        nodeFillColor = nodeFillColor
     )
 
     val textLayoutResult = layoutMetrics.textLayoutResult
@@ -1180,16 +1211,6 @@ private fun DrawScope.drawNode(
             size = Size(boxWidth, boxHeight),
             cornerRadius = cornerRadius
         )
-
-        // R-AGENT-012 bugfix 2026-06-07 (TC-AGENT-249-a):
-        // Repository.pickNodeColor(memory) 已按 tag 算好节点专属色
-        // (#persistent_instruction → 金 0xFFFFB300, #gateway:* → 蓝绿 0xFF26A69A,
-        //  Person → 绿, Concept → 蓝, 默认 LightGray)。先前实现这里硬编码
-        // nodePalette.fillColor 把这些色全部丢弃，导致 R-AGENT-005 / R-AGENT-012
-        // 的颜色策略在 UI 层完全不可见。改为：node.color 非默认 (LightGray) 时用
-        // node.color；默认色时 fallback 到 nodePalette.fillColor 以保持暗色主题
-        // 下普通节点的对比度。
-        val nodeFillColor = if (node.color != Color.LightGray) node.color else nodePalette.fillColor
 
         drawRoundRect(
             color = nodeFillColor,
