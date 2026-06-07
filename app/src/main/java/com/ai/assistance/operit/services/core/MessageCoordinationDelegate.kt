@@ -13,6 +13,7 @@ import com.ai.assistance.operit.api.chat.llmprovider.AIService
 import com.ai.assistance.operit.data.model.ModelParameter
 import com.ai.assistance.operit.data.model.CharacterCard
 import com.ai.assistance.operit.data.model.FunctionType
+import com.ai.assistance.operit.data.model.Memory
 import com.ai.assistance.operit.data.model.PromptFunctionType
 import com.ai.assistance.operit.data.model.ChatMessage
 import com.ai.assistance.operit.data.model.InputProcessingState
@@ -20,10 +21,13 @@ import com.ai.assistance.operit.data.model.CharacterCardChatModelBindingMode
 import com.ai.assistance.operit.data.model.ActivePrompt
 import com.ai.assistance.operit.core.tools.ToolProgressBus
 import com.ai.assistance.operit.ui.features.chat.viewmodel.UiStateDelegate
+import com.ai.assistance.operit.data.preferences.ApiPreferences
 import com.ai.assistance.operit.data.preferences.CharacterCardManager
 import com.ai.assistance.operit.data.preferences.CharacterGroupCardManager
 import com.ai.assistance.operit.data.preferences.ActivePromptManager
 import com.ai.assistance.operit.data.preferences.DisplayPreferencesManager
+import com.ai.assistance.operit.data.preferences.preferencesManager
+import com.ai.assistance.operit.data.repository.MemoryRepository
 import com.ai.assistance.operit.services.ChatServiceUiBridge
 import com.ai.assistance.operit.util.ChatMarkupRegex
 import com.ai.assistance.operit.util.ChatUtils
@@ -1562,6 +1566,24 @@ class MessageCoordinationDelegate(
                     chatIdOverride = originalChatId
                 )
 
+                // R-AGENT-013: 强行把摘要写入长期记忆，绕过 MemoryLibrary 的 LLM 价值判官
+                // (generateAnalysis 可能返回 {} 直接丢弃)。直写 MemoryRepository.saveMemory 是
+                // 用户明确决策："不是 agent 决定要不要保存，而是强行摘要保存为长期记忆"。
+                try {
+                    val enableMemoryQuery = ApiPreferences.getInstance(context)
+                        .enableMemoryQueryFlow.first()
+                    if (enableMemoryQuery) {
+                        forcePersistSummaryToMemory(
+                            summaryText = summaryMessage.content,
+                            chatId = originalChatId
+                        )
+                    } else {
+                        AppLogger.d(TAG, "R-AGENT-013: enableMemoryQuery=false — 摘要不写入长期记忆")
+                    }
+                } catch (e: Throwable) {
+                    AppLogger.w(TAG, "R-AGENT-013: 摘要强制落档失败（不影响 chat 历史）: ${e.message}", e)
+                }
+
                 refreshStableContextWindow(
                     chatId = originalChatId,
                     roleCardId = roleCardId,
@@ -1660,6 +1682,22 @@ class MessageCoordinationDelegate(
                     chatIdOverride = currentChatId
                 )
 
+                // R-AGENT-013: token-limit 摘要路径同样强行写入长期记忆，绕过 LLM 价值判官。
+                try {
+                    val enableMemoryQuery = ApiPreferences.getInstance(context)
+                        .enableMemoryQueryFlow.first()
+                    if (enableMemoryQuery && currentChatId != null) {
+                        forcePersistSummaryToMemory(
+                            summaryText = summaryMessage.content,
+                            chatId = currentChatId
+                        )
+                    } else {
+                        AppLogger.d(TAG, "R-AGENT-013: enableMemoryQuery=$enableMemoryQuery / chatId=$currentChatId — 摘要不写入长期记忆")
+                    }
+                } catch (e: Throwable) {
+                    AppLogger.w(TAG, "R-AGENT-013: 摘要强制落档失败（不影响 chat 历史）: ${e.message}", e)
+                }
+
                 refreshStableContextWindow(
                     chatId = currentChatId,
                     roleCardId = roleCardIdOverride,
@@ -1754,5 +1792,52 @@ class MessageCoordinationDelegate(
 
     fun setUiBridge(uiBridge: ChatServiceUiBridge) {
         this.uiBridge = uiBridge
+    }
+
+    /**
+     * R-AGENT-013：把自动摘要强行写入长期记忆库。
+     *
+     * 用户决策（2026-06-07）："自动总结一定要加上对话上下文保存到长期记忆，不是 agent 决定要不要保存，
+     * 而是强行摘要保存为长期记忆"。所以这里**直接**调 `MemoryRepository.saveMemory(...)`，
+     * **不**走 `MemoryLibrary.saveMemoryAsync` —— 后者内部调 `EnhancedAIService.generateAnalysis`
+     * 让 MEMORY 模型当价值判官，可能返回 `{}` 直接丢弃摘要。
+     *
+     * tag 约定：每条摘要节点都打两个 tag——
+     * - `#auto_summary`：来源类别（区分 agent create_memory / R-AGENT-011 gateway / 本路径）
+     * - `#chat:<chatId>`：摘要属于哪个 chat（让用户在 MemoryScreen 找出某个 chat 的全部摘要）
+     *
+     * `source` 字段设为 `"auto_summary"`，让 `EditMemoryDialog` 的 source 行可见来源
+     * （与 R-UI-004 的 chip 视觉提示形成两层提示）。
+     *
+     * 失败容忍：任何 ObjectBox / embedding / 网络异常都不能影响 `addSummaryMessage` /
+     * `refreshStableContextWindow`，这里只 try-catch 并打日志。
+     */
+    private suspend fun forcePersistSummaryToMemory(summaryText: String, chatId: String) {
+        if (summaryText.isBlank()) {
+            AppLogger.d(TAG, "R-AGENT-013: 摘要内容为空，跳过长期记忆写入")
+            return
+        }
+        val profileId = preferencesManager.activeProfileIdFlow.first()
+        val repository = MemoryRepository(context, profileId)
+        val titleText = summaryText.lineSequence()
+            .firstOrNull { it.isNotBlank() }
+            ?.trim()
+            ?.take(60)
+            .orEmpty()
+            .ifEmpty { context.getString(R.string.memory_auto_summary_chip) }
+        val memory = Memory(
+            title = titleText,
+            content = summaryText,
+            contentType = "text/plain",
+            source = "auto_summary",
+            credibility = 0.9f,
+            importance = 0.6f,
+            folderPath = null
+        )
+        val id = repository.saveMemory(memory)
+        AppLogger.d(TAG, "R-AGENT-013: 摘要已落档 memoryId=$id chatId=$chatId len=${summaryText.length}")
+        // 打 tag —— addTagToMemory 内部会 memoryBox.put(memory) 持久化关系
+        repository.addTagToMemory(memory, "#auto_summary")
+        repository.addTagToMemory(memory, "#chat:$chatId")
     }
 }
