@@ -62,6 +62,7 @@ MEMORY USAGE GUIDANCE:
 - EXCEPTION — persistent rules / preferences: when the user explicitly states a persistent behavior rule (format, style, taboo, workflow, naming, language, etc.), you MUST proactively call create_memory with tags including `#persistent_instruction`. The background extractor does NOT recognize these — only memories carrying that exact tag get injected into every future system prompt. Without it, the rule disappears once the context rolls over.
 - If the user says something like "remember this", "from now on", "never X", "always X", treat it as a persistent rule trigger.
 - When using query_memory, search with short keywords (e.g., user name, topic words), not full sentences.
+- AUTO-SUMMARY MEMORIES: every time a chat is auto-compacted (token-limit summary) or hits the send-summary threshold, the system force-persists a condensed snapshot of that chat into the memory library with tags `#auto_summary` and `#chat:<chatId>`. To recall an earlier conversation, call query_memory with `tags=#auto_summary` (optionally `tags=#auto_summary|#chat:<chatId>` to scope to one chat). Multiple tags use `|` and mean ALL-of (intersection).
 
 WORKSPACE MEMORY FILES (long-term project memory, on-demand read):
 - The workspace root `/Users/qiao/.openclaw/workspace-dev-androidclaw/` keeps a set of long-term memory markdown files maintained across sessions. These are NOT auto-injected into every prompt — read them on demand.
@@ -86,6 +87,7 @@ WORKSPACE MEMORY FILES (long-term project memory, on-demand read):
 - 例外——持久规则/偏好：当用户明确说出持久的行为规则（格式、风格、禁忌、工作流、称呼、语言习惯等），你必须主动调用 create_memory 并在 tags 中包含 `#persistent_instruction`。后台自动提取器不会识别这类规则——只有带这个 tag 的记忆才会被注入到将来每一轮的 system prompt。不带这个 tag，规则会在上下文滚动后消失。
 - 如果用户说"记住"、"以后..."、"别再..."、"始终..."之类的话，把它当作持久规则的触发信号。
 - 使用 query_memory 时，用简短关键词搜索（如用户名、主题词），不要用完整句子。
+- 自动摘要记忆：每当聊天被自动压缩（token-limit 摘要）或达到发送摘要阈值，系统会把那段聊天的浓缩快照强制写入记忆库，并打上 `#auto_summary` 和 `#chat:<chatId>` 这两个 tag。要回忆早前的对话，调用 query_memory 时传 `tags=#auto_summary`（要锁定到某个 chat 就传 `tags=#auto_summary|#chat:<chatId>`）。多个 tag 用 `|` 分隔，语义是 ALL-of（交集）。
 
 工作区记忆文件（跨会话长期记忆，按需读取）：
 - 工作区根目录 `/Users/qiao/.openclaw/workspace-dev-androidclaw/` 维护着一组跨会话的长期记忆 markdown 文件。这些文件**不会**被自动注入每次 prompt —— 按需读取。

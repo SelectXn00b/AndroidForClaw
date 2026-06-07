@@ -503,7 +503,8 @@ object SystemToolPrompts {
                     ToolParameterSchema(name = "end_time", type = "string", description = "optional, local-time string in `YYYY-MM-DD` or `YYYY-MM-DD HH:mm` format. Filters memories by createdAt <= end_time", required = false),
                     ToolParameterSchema(name = "snapshot_id", type = "string", description = "optional, string. Omit or pass empty to create a new snapshot automatically. If you pass a non-empty snapshot_id, that exact id will be used; if it does not exist yet, it will be created and can be reused across follow-up or parallel queries to exclude memories already returned by that snapshot", required = false),
                     ToolParameterSchema(name = "threshold", type = "number", description = "optional, number >= 0. Minimum relevance score required for a memory to be returned. Defaults to 0 for query_memory", required = false, default = "0"),
-                    ToolParameterSchema(name = "limit", type = "integer", description = "optional, int >= 1, maximum number of results to return. When > 20, only titles and truncated content are returned", required = false, default = "20")
+                    ToolParameterSchema(name = "limit", type = "integer", description = "optional, int >= 1, maximum number of results to return. When > 20, only titles and truncated content are returned", required = false, default = "20"),
+                    ToolParameterSchema(name = "tags", type = "string", description = "optional, string. Hard pre-filter by tag name(s). Use `|` to separate multiple tags, e.g. `tags=#auto_summary` or `tags=#auto_summary|#chat:gw:feishu:user1:chat1`. Semantics: ALL-of (intersection) — only memories carrying every listed tag pass the filter. Common tags: `#auto_summary` (chat auto-summaries), `#chat:<chatId>` (chat source), `#persistent_instruction` (persistent user rules). This is a hard filter, not scoring", required = false)
                 )
             ),
             ToolPrompt(
@@ -534,7 +535,8 @@ object SystemToolPrompts {
                     ToolParameterSchema(name = "end_time", type = "string", description = "可选, 本地时间字符串，格式支持 `YYYY-MM-DD` 或 `YYYY-MM-DD HH:mm`。按创建时间过滤 createdAt <= end_time", required = false),
                     ToolParameterSchema(name = "snapshot_id", type = "string", description = "可选, 字符串。不传或传空时会自动创建新快照；传入任意非空 snapshot_id 时会直接使用这个 id，不存在则按该 id 创建。后续串行或并发查询复用同一个 snapshot_id 时，会排除该快照里已经返回过的记忆", required = false),
                     ToolParameterSchema(name = "threshold", type = "number", description = "可选, number >= 0。返回记忆所需的最小相关度分数。query_memory 默认值为 0", required = false, default = "0"),
-                    ToolParameterSchema(name = "limit", type = "integer", description = "可选, int >= 1, 返回结果的最大数量. 当 > 20 时，只返回标题和截断内容", required = false, default = "20")
+                    ToolParameterSchema(name = "limit", type = "integer", description = "可选, int >= 1, 返回结果的最大数量. 当 > 20 时，只返回标题和截断内容", required = false, default = "20"),
+                    ToolParameterSchema(name = "tags", type = "string", description = "可选, 字符串。按 tag 名做硬前置过滤。多个 tag 用 `|` 分隔，例如 `tags=#auto_summary` 或 `tags=#auto_summary|#chat:gw:feishu:user1:chat1`。语义是 ALL-of（交集）—— 只有同时含全部所列 tag 的记忆才通过过滤。常用 tag：`#auto_summary`（聊天自动摘要）、`#chat:<chatId>`（聊天来源）、`#persistent_instruction`（持久规则）。这是硬过滤，不是打分", required = false)
                 )
             ),
             ToolPrompt(
