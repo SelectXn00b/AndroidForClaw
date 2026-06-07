@@ -13,33 +13,21 @@ object FunctionalPrompts {
      * Prompt for the AI to generate a comprehensive and structured summary of a conversation.
      */
     const val SUMMARY_PROMPT = """
-        你是负责生成对话摘要的AI助手。你的任务是根据"上一次的摘要"（如果提供）和"最近的对话内容"，生成一份全新的、独立的、全面的摘要。这份新摘要将完全取代之前的摘要，成为后续对话的唯一历史参考。
+        你是负责生成对话摘要的AI助手。你的任务是根据"上一次的摘要"（如果提供）和"最近的对话内容"，生成一份**精简、抓重点**的全新摘要。这份新摘要将完全取代之前的摘要，成为后续对话的唯一历史参考。
+
+        **核心原则：精简 > 详尽。只记录真正影响后续决策的关键事实，不堆字数、不复述原文、不为了凑结构而扩写。**
 
         **必须严格遵循以下固定格式输出，不得更改格式结构：**
 
         ==========对话摘要==========
 
         【核心任务状态】
-        [先交代用户最新需求的内容与情境类型（真实执行/角色扮演/故事/假设等），再说明当前所处步骤、已完成的动作、正在处理的事项以及下一步。]
-        [明确任务状态（已完成/进行中/等待中），列出未完成的依赖或所需信息；如在等待用户输入，说明原因与所需材料。]
-        [显式覆盖信息搜集、任务执行、代码编写或其他关键环节的状态，哪怕某环节尚未启动也要说明原因。]
-        [最后补充最近一次任务的进度拆解：哪些已完成、哪些进行中、哪些待处理。]
+        [1-2 句话说明：用户最新要做什么 + 当前进展（已完成/进行中/等待中）+ 下一步。如果没有明确任务则写"无任务，闲聊/咨询性质"。]
 
-        【互动情节与设定】
-        [如存在虚构或场景设定，概述名称、角色身份、背景约束及其来源，避免把剧情当成现实。]
-        [用1-2段概括近期关键互动：谁提出了什么、目的为何、采用何种表达方式、对任务或剧情的影响，以及仍需确认的事项。]
-        [若用户给出剧本/业务/策略等非技术内容，提炼要点并说明它们如何指导后续输出。]
-
-        【对话历程与概要】
-        [用不少于3段描述整体演进，每段包含“行动+目的+结果”，可涵盖技术、业务、剧情或策略等不同主题，需特别点名信息搜集、任务执行、代码编写等阶段的衔接；如涉及具体代码，可引用关键片段以辅助说明。]
-        [突出转折、已解决的问题和形成的共识，引用必要的路径、命令、场景节点或原话，确保读者能看懂上下文和因果关系。]
-
-        【关键信息与上下文】
-        - [信息点1：用户需求、限制、背景或引用的文件/接口/角色等，说明其具体内容及作用。]
-        - [信息点2：技术或剧本结构中的关键元素（函数、配置、日志、人物动机等）及其意义。]
-        - [信息点3：问题或创意的探索路径、验证结果与当前状态。]
-        - [信息点4：影响后续决策的因素，如优先级、情绪基调、角色约束、外部依赖、时间节点。]
-        - [信息点5+：补充其他必要细节，覆盖现实与虚构信息。每条至少两句：先述事实，再讲影响或后续计划。]
+        【关键事实】
+        - [事实1：一句话写一个对后续真正重要的事实——用户的硬性需求、明确决策、关键参数、约束条件等。每条只写事实本身，不要展开。]
+        - [事实2：同上。]
+        - [事实3-N：按需添加，**有几个写几个**，没有就不写。不要为了凑数硬编。]
 
         ============================
 
@@ -47,47 +35,34 @@ object FunctionalPrompts {
         1. 必须使用上述固定格式，包括分隔线、标题标识符【】、列表符号等，不得更改。
         2. 标题"对话摘要"必须放在第一行，前后用等号分隔。
         3. 每个部分必须使用【】标识符作为标题，标题后换行。
-        4. "核心任务状态"、"互动情节与设定"、"对话历程与概要"使用段落形式；方括号只为示例，实际输出不需保留.
-        5. "关键信息与上下文"使用列表格式，每个信息点以"- "开头.
-        6. 结尾使用等号分隔线.
+        4. "核心任务状态"用 1-2 句段落形式（方括号只为示例，实际输出不保留）。
+        5. "关键事实"使用列表格式，每个事实以"- "开头，**一条一句**。
+        6. 结尾使用等号分隔线。
 
-        **内容要求：**
-        1. 语言风格：专业、清晰、客观.
-        2. 内容长度：不要限制字数，根据对话内容的复杂程度和重要性，自行决定合适的长度。可以写得详细一些，确保重要信息不丢失。宁可内容多一点，也不要因为过度精简导致关键信息丢失或失真。每个部分都要具备充分篇幅，绝不能以一句话敷衍.
-        3. 信息完整性：优先保证信息的完整性和准确性，技术与非技术内容都需提供必要证据或引用.
-        4. 内容还原：摘要既要说明“过程如何推进”，也要写清“实际产出/讨论内容是什么”，必要时引用结果文本、结论、代码片段或参数，确保在没有原始对话的情况下依然能完全还原信息本身.
-        5. 目标：生成的摘要必须是自包含的。即使AI完全忘记了之前的对话，仅凭这份摘要也能够准确理解历史背景、当前状态、具体进度和下一步行动.
-        6. 时序重点：请先聚焦于最新一段对话（约占输入的最后30%），明确最新指令、问题和进展，再回顾更早的内容。若新消息与旧内容冲突或更新，应以最新对话为准，并解释差异.
+        **内容要求（精简优先）：**
+        1. 语言风格：简洁、客观、凝练。**短即是美**。
+        2. 抓重点优先于完整性：宁可漏掉无关紧要的细节，也不要因为堆砌使关键事实被淹没。如果对话只有几轮闲聊，摘要可以只有 3-5 行。
+        3. 不复述原文：摘要是**提炼**，不是**节选**。原文有的内容如果不是关键决策点或硬约束就不要进摘要。
+        4. 时序重点：聚焦最新一段对话（约最后 30%），明确最新指令、决策和进展。新内容与旧内容冲突时以最新为准。
+        5. 自包含：即使没有原始对话，仅凭这份摘要也能让 AI 知道"在做什么 + 还要做什么 + 有哪些硬约束"。
     """
 
     const val SUMMARY_PROMPT_EN = """
-        You are an AI assistant responsible for generating a conversation summary. Your task is to generate a brand-new, self-contained, comprehensive summary based on the "Previous Summary" (if provided) and the "Recent Conversation". This new summary will completely replace the previous summary and will become the only historical reference for subsequent conversations.
+        You are an AI assistant responsible for generating a conversation summary. Your task is to generate a brand-new, **concise, key-fact-focused** summary based on the "Previous Summary" (if provided) and the "Recent Conversation". This new summary will completely replace the previous summary and will become the only historical reference for subsequent conversations.
+
+        **Core principle: concise > exhaustive. Only record facts that genuinely affect future decisions. Do not pad word count, do not paraphrase the original text, do not invent structure just to fill sections.**
 
         **You MUST follow the fixed output format below strictly. Do NOT change the structure.**
 
         ==========Conversation Summary==========
 
         [Core Task Status]
-        [First describe the user's latest request and the scenario type (real execution / roleplay / story / hypothetical, etc.), then explain the current step, completed actions, ongoing work, and next step.]
-        [Explicitly state the task status (completed / in progress / waiting), and list missing dependencies or required information; if waiting for user input, explain why and what is needed.]
-        [Explicitly cover the status of information gathering, task execution, code writing, or other key phases; even if a phase has not started, state why.]
-        [Finally, provide a recent progress breakdown: what is done, what is in progress, what is pending.]
+        [1-2 sentences: what the user is trying to do + current progress (done/in progress/waiting) + next step. If there is no clear task, write "No task — casual chat / consultation."]
 
-        [Interaction & Scenario]
-        [If there is fictional setup or scenario, summarize names, roles, background constraints and their sources; do not treat fiction as reality.]
-        [In 1-2 paragraphs, summarize key recent interactions: who asked what, for what purpose, how it was expressed, impacts on the task/story, and what still needs confirmation.]
-        [If the user provided scripts/business/strategy or other non-technical content, extract the key points and explain how they guide future output.]
-
-        [Conversation Progress & Overview]
-        [Use no fewer than 3 paragraphs to describe the overall evolution. Each paragraph should include “action + intent + result”. You may cover technical, business, story, or strategy topics. Explicitly mention the handoff between information gathering, task execution, code writing, etc. If relevant, quote key code snippets.]
-        [Highlight turning points, resolved issues, and agreements reached. Quote necessary file paths, commands, scenario nodes, or original wording so the reader can understand context and causality.]
-
-        [Key Information & Context]
-        - [Info point 1: user requirements, constraints, background, referenced files/APIs/roles, and their purpose.]
-        - [Info point 2: key elements in the technical/script structure (functions, configs, logs, motivations, etc.) and their meaning.]
-        - [Info point 3: exploration path, verification results, and current status.]
-        - [Info point 4: factors affecting future decisions, such as priorities, emotional tone, role constraints, external dependencies, deadlines.]
-        - [Info point 5+: any other necessary details covering both real and fictional information. Each point must have at least two sentences: state the fact, then explain its impact or next plan.]
+        [Key Facts]
+        - [Fact 1: one sentence per fact — user's hard requirements, explicit decisions, critical parameters, constraints. Write only the fact itself, do not expand.]
+        - [Fact 2: same as above.]
+        - [Fact 3-N: add as needed. **Write only as many as truly exist**; do not fabricate facts to fill a quota.]
 
         =======================================
 
@@ -95,17 +70,16 @@ object FunctionalPrompts {
         1. You must use the fixed format above, including separators, headers, list markers, etc. Do not change them.
         2. The title "Conversation Summary" must be on the first line, surrounded by '='.
         3. Each section must use bracket headers like [Core Task Status] and start on a new line.
-        4. "Core Task Status", "Interaction & Scenario", "Conversation Progress & Overview" must be paragraph-style. Brackets in examples are placeholders; do not keep them in actual output.
-        5. "Key Information & Context" must be a list, each item starting with "- ".
+        4. "Core Task Status" is a 1-2 sentence paragraph (brackets in examples are placeholders; do not keep them).
+        5. "Key Facts" must be a list, each item starting with "- " and **one fact per line**.
         6. End with the separator line.
 
-        **Content requirements:**
-        1. Style: professional, clear, objective.
-        2. Length: do not limit length. Decide an appropriate length based on complexity and importance. Prefer being detailed to avoid missing key information.
-        3. Completeness: prioritize completeness and accuracy. Provide evidence/quotes when needed.
-        4. Reconstruction: the summary must describe both “how the process progressed” and “what the actual outputs/discussion were”. Quote resulting text, conclusions, code snippets, or parameters when needed.
-        5. Goal: the summary must be self-contained so that even if the AI forgets the original conversation, it can fully reconstruct context, current status, progress, and next actions.
-        6. Recency: focus first on the most recent part of the conversation (about the last 30% of input), then review earlier content. If new messages conflict with old content, use the latest messages and explain the differences.
+        **Content requirements (concise first):**
+        1. Style: succinct, objective, distilled. **Short is beautiful.**
+        2. Key facts over completeness: rather drop minor details than bury the important ones. If the conversation was just a few casual turns, the summary can be 3-5 lines.
+        3. Do not paraphrase: a summary is **distillation**, not **excerpt**. Content from the original that is not a key decision or hard constraint should NOT enter the summary.
+        4. Recency: focus on the latest portion of the conversation (~last 30%), identifying the latest instructions, decisions, and progress. When new content conflicts with old content, use the latest.
+        5. Self-contained: even without the original conversation, this summary alone should let the AI know "what is being done + what still needs doing + what hard constraints exist".
     """
 
     fun summaryPrompt(useEnglish: Boolean): String {
@@ -233,13 +207,9 @@ object FunctionalPrompts {
     const val SUMMARY_MARKER_CN = "==========对话摘要=========="
     const val SUMMARY_MARKER_EN = "==========Conversation Summary=========="
     const val SUMMARY_SECTION_CORE_TASK_CN = "【核心任务状态】"
-    const val SUMMARY_SECTION_INTERACTION_CN = "【互动情节与设定】"
-    const val SUMMARY_SECTION_PROGRESS_CN = "【对话历程与概要】"
-    const val SUMMARY_SECTION_KEY_INFO_CN = "【关键信息与上下文】"
+    const val SUMMARY_SECTION_KEY_INFO_CN = "【关键事实】"
     const val SUMMARY_SECTION_CORE_TASK_EN = "[Core Task Status]"
-    const val SUMMARY_SECTION_INTERACTION_EN = "[Interaction & Scenario]"
-    const val SUMMARY_SECTION_PROGRESS_EN = "[Conversation Progress & Overview]"
-    const val SUMMARY_SECTION_KEY_INFO_EN = "[Key Information & Context]"
+    const val SUMMARY_SECTION_KEY_INFO_EN = "[Key Facts]"
 
     fun summaryUserMessage(useEnglish: Boolean): String {
         return if (useEnglish) "Please summarize the conversation as instructed." else "请按照要求总结对话内容"

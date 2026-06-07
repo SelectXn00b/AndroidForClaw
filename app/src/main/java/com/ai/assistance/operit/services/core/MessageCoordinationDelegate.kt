@@ -1817,9 +1817,36 @@ class MessageCoordinationDelegate(
             AppLogger.d(TAG, "R-AGENT-013: 摘要内容为空，跳过长期记忆写入")
             return
         }
+        // R-AGENT-013 bugfix (2026-06-08)：AIMessageManager.summarizeMemory 在 AI 摘要正文
+        // 之后**额外拼接**了两段尾部块：
+        //   - "对话回顾" / "Dialogue review"  —— 每条消息原文截头去尾粘一遍，给下一轮 agent
+        //     上下文用
+        //   - "【工具包预热】" / "[Package Warmup]"  —— 高频包的 use_package 完整返回
+        // 这两块对 chat 历史里的下一轮 agent 有价值（保留在 summary 消息里），但写进长期记忆
+        // 会让 #auto_summary 节点 content 大部分变成原文复述、淹没 AI 真摘要。用户 2026-06-08
+        // 反馈"摘要太长了，没有捉住对话重要内容"——这里在落库前裁掉两块尾部块。
+        // 按 4 个标记任一最靠前的位置 substring 截断。
+        val summaryDelimiters = listOf(
+            "对话回顾",
+            "Dialogue review",
+            "【工具包预热】",
+            "[Package Warmup]"
+        )
+        var summaryCutIdx = summaryText.length
+        for (delimiter in summaryDelimiters) {
+            val idx = summaryText.indexOf(delimiter)
+            if (idx >= 0 && idx < summaryCutIdx) {
+                summaryCutIdx = idx
+            }
+        }
+        val strippedSummary = summaryText.substring(0, summaryCutIdx).trimEnd()
+        if (strippedSummary.isBlank()) {
+            AppLogger.d(TAG, "R-AGENT-013: 裁剪后摘要内容为空，跳过长期记忆写入")
+            return
+        }
         val profileId = preferencesManager.activeProfileIdFlow.first()
         val repository = MemoryRepository(context, profileId)
-        val titleText = summaryText.lineSequence()
+        val titleText = strippedSummary.lineSequence()
             .firstOrNull { it.isNotBlank() }
             ?.trim()
             ?.take(60)
@@ -1827,7 +1854,7 @@ class MessageCoordinationDelegate(
             .ifEmpty { context.getString(R.string.memory_auto_summary_chip) }
         val memory = Memory(
             title = titleText,
-            content = summaryText,
+            content = strippedSummary,
             contentType = "text/plain",
             source = "auto_summary",
             credibility = 0.9f,
@@ -1835,7 +1862,7 @@ class MessageCoordinationDelegate(
             folderPath = null
         )
         val id = repository.saveMemory(memory)
-        AppLogger.d(TAG, "R-AGENT-013: 摘要已落档 memoryId=$id chatId=$chatId len=${summaryText.length}")
+        AppLogger.d(TAG, "R-AGENT-013: 摘要已落档 memoryId=$id chatId=$chatId len=${strippedSummary.length} (原长 ${summaryText.length})")
         // 打 tag —— addTagToMemory 内部会 memoryBox.put(memory) 持久化关系
         repository.addTagToMemory(memory, "#auto_summary")
         repository.addTagToMemory(memory, "#chat:$chatId")

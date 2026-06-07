@@ -148,22 +148,12 @@ class ConversationService(
                 ),
                 Stage(
                     matchers = listOf({ it.contains(FunctionalPrompts.SUMMARY_SECTION_CORE_TASK_EN) || it.contains(FunctionalPrompts.SUMMARY_SECTION_CORE_TASK_CN) }),
-                    progress = 0.40f,
+                    progress = 0.50f,
                     message = context.getString(R.string.conversation_summary_core_task)
                 ),
                 Stage(
-                    matchers = listOf({ it.contains(FunctionalPrompts.SUMMARY_SECTION_INTERACTION_EN) || it.contains(FunctionalPrompts.SUMMARY_SECTION_INTERACTION_CN) }),
-                    progress = 0.55f,
-                    message = context.getString(R.string.conversation_summary_interaction)
-                ),
-                Stage(
-                    matchers = listOf({ it.contains(FunctionalPrompts.SUMMARY_SECTION_PROGRESS_EN) || it.contains(FunctionalPrompts.SUMMARY_SECTION_PROGRESS_CN) }),
-                    progress = 0.70f,
-                    message = context.getString(R.string.conversation_summary_progress)
-                ),
-                Stage(
                     matchers = listOf({ it.contains(FunctionalPrompts.SUMMARY_SECTION_KEY_INFO_EN) || it.contains(FunctionalPrompts.SUMMARY_SECTION_KEY_INFO_CN) }),
-                    progress = 0.85f,
+                    progress = 0.80f,
                     message = context.getString(R.string.conversation_summary_key_info)
                 ),
                 Stage(
