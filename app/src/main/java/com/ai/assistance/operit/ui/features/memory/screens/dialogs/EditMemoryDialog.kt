@@ -7,6 +7,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -102,13 +103,30 @@ fun EditMemoryDialog(
                             singleLine = true
                         )
                         Spacer(modifier = Modifier.height(8.dp))
+                        // R-UI-004: 当该节点带 R-AGENT-013 的 #auto_summary tag 时，content 上方
+                        // 显示一个 AssistChip 提示用户"这是自动摘要节点（可编辑）"。
+                        // 与 MemoryScreen 图谱的颜色区分（R-AGENT-012）形成"图谱看色 / 编辑看 chip"两层提示。
+                        if (tags.any { it == "#auto_summary" }) {
+                            AssistChip(
+                                onClick = {},
+                                label = { Text(stringResource(R.string.memory_auto_summary_chip)) },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(AssistChipDefaults.IconSize)
+                                    )
+                                }
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
                         OutlinedTextField(
                             value = content,
                             onValueChange = { content = it },
                             label = { Text(stringResource(R.string.memory_content)) },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .heightIn(min = 100.dp, max = 200.dp),
+                                .heightIn(min = 160.dp, max = 480.dp),
                             enabled = memory?.isDocumentNode != true
                         )
                         Spacer(modifier = Modifier.height(16.dp))

@@ -5489,6 +5489,7 @@
     <string name="memory_content">内容</string>
     <string name="memory_create_new">新建记忆</string>
     <string name="memory_edit_memory">编辑记忆</string>
+    <string name="memory_auto_summary_chip">自动摘要节点（可编辑）</string>
     <string name="memory_folder">文件夹</string>
     <string name="memory_uncategorized">未分类</string>
     <string name="memory_uuid">UUID</string>
