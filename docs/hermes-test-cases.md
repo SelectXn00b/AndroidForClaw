@@ -436,6 +436,41 @@ R-AGENT-012 是 R-AGENT-011 的 UI 兜底：R-011 已把 `#gateway:<platform>` t
 
 ---
 
+## 域 AGENT — APP 内自动摘要强行写入长期记忆（绕过判官）(R-AGENT-013)
+
+测试类: `app/src/test/java/com/ai/assistance/operit/services/core/MessageCoordinationDelegateAutoSummaryMemoryWiringTest.kt`
+
+**背景**: R-AGENT-013 要求 `MessageCoordinationDelegate.launchAsyncSummaryForSend` / `summarizeHistory` 在成功 `addSummaryMessage` 之后强制把摘要文本直接写入 `MemoryRepository.saveMemory`（绕过 `MemoryLibrary.saveMemoryAsync` / `generateAnalysis` LLM 判官），并打上 `#auto_summary` + `#chat:<chatId>` tag。两条路径共享同一份"摘要持久化"行为，但 `MessageCoordinationDelegate` 重度依赖 Android Context / `EnhancedAIService` / `ChatHistoryDelegate` / `ApiPreferences`，JVM mock ROI 太低；与 R-AGENT-010/011 同策略 —— 走源码字符串扫描守住 wiring，运行时正确性由手测 + §3 E2E 兜底。
+
+| ID | R-ID | 输入 / 触发条件 | 期望输出 | 类型 | 测试方法引用 |
+|---|---|---|---|---|---|
+| TC-AGENT-013-a | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | `launchAsyncSummaryForSend` 函数体必须 reference `memoryRepository.saveMemory(` —— 否则发送阈值摘要永远不进长期记忆。 | unit-scan | `MessageCoordinationDelegateAutoSummaryMemoryWiringTest#TC-AGENT-013-a launchAsyncSummaryForSend invokes MemoryRepository saveMemory` 🔴 |
+| TC-AGENT-013-b | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | `summarizeHistory` 函数体必须 reference `memoryRepository.saveMemory(` —— 否则 token-limit 摘要永远不进长期记忆。 | unit-scan | `MessageCoordinationDelegateAutoSummaryMemoryWiringTest#TC-AGENT-013-b summarizeHistory invokes MemoryRepository saveMemory` 🔴 |
+| TC-AGENT-013-c | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | 两条路径**禁止**调用 `MemoryLibrary.saveMemoryAsync`（绕过 LLM 判官的硬约束）—— 全文不得出现 `MemoryLibrary.saveMemoryAsync` 字面字符串。R-AGENT-010 的 `saveMemoryAsync` 调用点在 `HermesGatewayController`，与本文件无关。 | unit-scan | `MessageCoordinationDelegateAutoSummaryMemoryWiringTest#TC-AGENT-013-c MessageCoordinationDelegate does not call MemoryLibrary saveMemoryAsync` 🔴 |
+| TC-AGENT-013-d | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | 摘要保存必须打 `"#auto_summary"` tag —— 源码包含 `addTagToMemory(` 调用且参数含字面字符串 `"#auto_summary"`。 | unit-scan | `MessageCoordinationDelegateAutoSummaryMemoryWiringTest#TC-AGENT-013-d adds auto_summary tag` 🔴 |
+| TC-AGENT-013-e | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | 摘要保存必须打来源 chat tag —— 源码包含 `"#chat:"` 字面字符串作为 `addTagToMemory` 的参数前缀（与 `originalChatId` / `currentChatId` 拼接）。 | unit-scan | `MessageCoordinationDelegateAutoSummaryMemoryWiringTest#TC-AGENT-013-e adds chat source tag` 🔴 |
+| TC-AGENT-013-f | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | `saveMemory` 调用点必须读 `enableMemoryQueryFlow`（与 R-AGENT-010 同一开关） —— 源码包含 `enableMemoryQueryFlow` 字面字符串，否则用户关闭记忆查询后摘要仍然偷偷写库。 | unit-scan | `MessageCoordinationDelegateAutoSummaryMemoryWiringTest#TC-AGENT-013-f gates on enableMemoryQueryFlow` 🔴 |
+| TC-AGENT-013-g | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | `saveMemory` + `addTagToMemory` 调用必须被 try-catch 包围（不影响 `addSummaryMessage` / `refreshStableContextWindow`）—— 源码 `saveMemory` 调用所在的函数体包含 `try {` 与对应 `catch` 块。 | unit-scan | `MessageCoordinationDelegateAutoSummaryMemoryWiringTest#TC-AGENT-013-g saveMemory wrapped in try catch` 🔴 |
+| TC-AGENT-013-h | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | `saveMemory` 调用必须位于 `addSummaryMessage(` 调用**之后**（确保摘要先入 chat 历史）—— 两条路径函数体内 `addSummaryMessage` 字面位置 < `saveMemory` 字面位置。 | unit-scan | `MessageCoordinationDelegateAutoSummaryMemoryWiringTest#TC-AGENT-013-h saveMemory called after addSummaryMessage` 🔴 |
+| TC-AGENT-013-i | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | 新建的 `Memory(...)` 实例必须设置 `source = "auto_summary"`（让 `MemoryScreen` `EditMemoryDialog` 的 source 字段可见来源）—— 源码包含 `"auto_summary"` 字面字符串作为 `source` 参数值。 | unit-scan | `MessageCoordinationDelegateAutoSummaryMemoryWiringTest#TC-AGENT-013-i memory source set to auto_summary` 🔴 |
+
+### R-AGENT-014: Agent 感知 `#auto_summary` + `query_memory` tag 过滤（2026-06-07）
+
+| TC ID | R-ID | 输入 / 触发 | 期望 | 测试类型 | 实现 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-014-a | R-AGENT-014 | 源码扫描：`SystemPromptConfig.kt` | `GATEWAY_AWARENESS_EN` 常量内 `MEMORY USAGE GUIDANCE` 段必须含 `"#auto_summary"` 字面 + `"query_memory"` 引用 + `"tags="` 或 `"tags ="` 用法示例 —— agent 才知道日记本存在且能用 tag 精准查询。 | unit-scan | `SystemPromptConfigAutoSummaryGuidanceWiringTest#TC-AGENT-014-a english guidance mentions auto_summary tag` 🔴 |
+| TC-AGENT-014-b | R-AGENT-014 | 源码扫描：`SystemPromptConfig.kt` | `GATEWAY_AWARENESS_CN` 常量内 `记忆库使用指导` 段必须含 `"#auto_summary"` 字面 + `"query_memory"` 引用 + `"tags="` 或 `"tags="` 用法示例（中文版同英文版语义对齐）。 | unit-scan | `SystemPromptConfigAutoSummaryGuidanceWiringTest#TC-AGENT-014-b chinese guidance mentions auto_summary tag` 🔴 |
+| TC-AGENT-014-c | R-AGENT-014 | 源码扫描：`SystemToolPrompts.kt` | `memoryTools`（EN）的 `query_memory` ToolPrompt `parametersStructured` 列表必须含 `name = "tags"` 的 `ToolParameterSchema` 条目，description 含 `"#auto_summary"` 示例 + `"|"` 分隔约定说明。 | unit-scan | `QueryMemoryToolPromptsTagsWiringTest#TC-AGENT-014-c english tool prompt declares tags parameter` 🔴 |
+| TC-AGENT-014-d | R-AGENT-014 | 源码扫描：`SystemToolPrompts.kt` | `memoryToolsCn`（CN）的 `query_memory` ToolPrompt `parametersStructured` 列表必须含 `name = "tags"` 的 `ToolParameterSchema` 条目，description 含 `"#auto_summary"` 示例 + `"|"` 分隔约定说明（中文版与英文版语义对齐）。 | unit-scan | `QueryMemoryToolPromptsTagsWiringTest#TC-AGENT-014-d chinese tool prompt declares tags parameter` 🔴 |
+| TC-AGENT-014-e | R-AGENT-014 | 源码扫描：`SystemToolPrompts.kt` | `tags` 参数必须 `required = false` —— 不传时必须与既有行为完全一致，向后兼容所有既有 `query_memory` 调用方。 | unit-scan | `QueryMemoryToolPromptsTagsWiringTest#TC-AGENT-014-e tags parameter is optional` 🔴 |
+| TC-AGENT-014-f | R-AGENT-014 | 源码扫描：`MemoryQueryToolExecutor.kt` | `executeQueryMemory` 函数体必须含 `tool.parameters.find { it.name == "tags" }` 风格的解析 + 把解析结果传入 `searchMemories(...)` 调用（参数名 `tags`）—— 否则 tool description 加了参数但执行器忽略。 | unit-scan | `MemoryQueryToolExecutorTagsWiringTest#TC-AGENT-014-f executor parses tags param and forwards to searchMemories` 🔴 |
+| TC-AGENT-014-g | R-AGENT-014 | 源码扫描：`MemoryQueryToolExecutor.kt` | `tags` 参数解析必须按 `"\|"` 切分支持多 tag（与 `query` 参数 `\|` 分隔关键词风格一致）—— 源码含 `split('\|')` 或 `split("\\|")` 等等价调用。 | unit-scan | `MemoryQueryToolExecutorTagsWiringTest#TC-AGENT-014-g executor splits tags by pipe` 🔴 |
+| TC-AGENT-014-h | R-AGENT-014 | 源码扫描：`MemoryRepository.kt` | `searchMemories` 公开签名必须含 `tags: List<String>?` 参数（默认值 `null`），且 `runSearchMemoriesWithDebug` 函数体含按 `tags` 做硬过滤的代码（`tags.all { ... mem.tags.any ...}` 或等价 ObjectBox 查询风格） —— 必须是前置过滤，不是 tagWeight 打分混合。 | unit-scan | `MemoryRepositorySearchTagsFilterWiringTest#TC-AGENT-014-h searchMemories adds tags filter parameter` 🔴 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — Memory Dedup (R-AGENT-003 bugfix)
 
 测试类: `app/src/test/java/com/ai/assistance/operit/data/repository/MemoryDedupTest.kt`
@@ -1377,6 +1412,22 @@ SAFETY 大多通过引用其它域的 TC 覆盖；此处列集成层 smoke。
 | TC-UI-073-c | R-UI-003 | `EnhancedAIService.kt` 源码包含 `AgentEventBus.emit(` 与 `AgentTokenBus.emit(` | 源码断言通过 | unit | `AgentStatusOverlayWiringTest#enhanced ai service emits to bus` 🟡 待写 |
 | TC-UI-073-d | R-UI-003 | `HermesAdapter.kt` 源码包含 `AgentEventBus.emit(chatId,` | 源码断言通过 | unit | `AgentStatusOverlayWiringTest#hermes adapter emits to bus` 🟡 待写 |
 | TC-UI-073-e | R-UI-003 | `ToolRegistration.kt` 源码包含 `agentStatusOverlay?.setOverlayVisible(false)` 与 `setOverlayVisible(true)` | 源码断言通过 | unit | `AgentStatusOverlayWiringTest#tool registration toggles overlay during ui tools` 🟡 待写 |
+
+### R-UI-004: EditMemoryDialog content 高度抬高 + `#auto_summary` 节点 hint
+
+测试类: `app/src/test/java/com/ai/assistance/operit/ui/features/memory/screens/dialogs/EditMemoryDialogAutoSummaryHintWiringTest.kt`
+
+**背景**: R-UI-004 是 R-AGENT-013 的 UI 兜底——自动摘要节点 content 通常 500~2000 字，现有 `EditMemoryDialog.kt:111` 的 `.heightIn(min=100.dp, max=200.dp)` 严重限制编辑舒适度，且用户在编辑界面无法识别"这条是自动摘要"。Composable 重度依赖 Compose runtime + Android resources，走源码扫描守住 wiring；视觉效果由手测验证。
+
+| ID | R-ID | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
+|---|---|---|---|---|---|
+| TC-UI-004-a | R-UI-004 | 源码扫描：`EditMemoryDialog.kt` | content `OutlinedTextField` 的 `Modifier.heightIn(...)` 必须含 `min = 160.dp`（短摘要也舒展） | unit-scan | `EditMemoryDialogAutoSummaryHintWiringTest#TC-UI-004-a content field min height raised to 160dp` 🔴 |
+| TC-UI-004-b | R-UI-004 | 源码扫描：`EditMemoryDialog.kt` | content `OutlinedTextField` 的 `Modifier.heightIn(...)` 必须含 `max = 480.dp`（长摘要可舒展，配合外层 verticalScroll 不破坏布局） | unit-scan | `EditMemoryDialogAutoSummaryHintWiringTest#TC-UI-004-b content field max height raised to 480dp` 🔴 |
+| TC-UI-004-c | R-UI-004 | 源码扫描：`EditMemoryDialog.kt` | 源码必须包含 `"#auto_summary"` 字面字符串作为 tag 判断条件（标识 chip 渲染分支） | unit-scan | `EditMemoryDialogAutoSummaryHintWiringTest#TC-UI-004-c references auto_summary tag literal` 🔴 |
+| TC-UI-004-d | R-UI-004 | 源码扫描：`EditMemoryDialog.kt` | 必须存在 `AssistChip` 或 `SuggestionChip` 调用（auto_summary hint chip 的渲染入口） | unit-scan | `EditMemoryDialogAutoSummaryHintWiringTest#TC-UI-004-d uses AssistChip or SuggestionChip for hint` 🔴 |
+| TC-UI-004-e | R-UI-004 | 源码扫描：`EditMemoryDialog.kt` | chip 渲染必须被 `if`（或等价条件分支）包裹，且条件引用 `tags` 列表 + `"#auto_summary"` —— 防止普通节点 / gateway 节点 / persistent_instruction 节点也显示该 chip | unit-scan | `EditMemoryDialogAutoSummaryHintWiringTest#TC-UI-004-e chip rendered conditionally on auto_summary tag` 🔴 |
+| TC-UI-004-f | R-UI-004 | 源码扫描：`EditMemoryDialog.kt` | chip 文案必须走 `stringResource(R.string.memory_auto_summary_chip)`（i18n 不得硬编码）；且 `strings.xml` 含 `memory_auto_summary_chip` 键 | unit-scan | `EditMemoryDialogAutoSummaryHintWiringTest#TC-UI-004-f chip label uses string resource` 🔴 |
+| TC-UI-004-g | R-UI-004 | 源码扫描：`EditMemoryDialog.kt` | 文档节点限制保留 —— content `OutlinedTextField` 仍含 `enabled = memory?.isDocumentNode != true`（R-UI-004 不解锁文档节点编辑） | unit-scan | `EditMemoryDialogAutoSummaryHintWiringTest#TC-UI-004-g document node remains disabled` 🔴 |
 
 
 

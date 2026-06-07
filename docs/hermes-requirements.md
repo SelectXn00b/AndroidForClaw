@@ -251,6 +251,69 @@ HermesApp 必须提供与 Python Hermes 等价的 agent turn-loop 内核。Pytho
   - `#persistent_instruction` 节点同时带 `#gateway:feishu` tag（极端 case）→ 颜色显示金色（persistent_instruction 优先），过滤按 gateway 维度仍可命中
   - §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增）
 
+### R-AGENT-013: APP 内聊天的自动摘要强制写入长期记忆（绕过 LLM 价值判官）
+**来源**: 无 Python 上游（Android 侧用户体验需求；用户 2026-06-07 明确："自动总结一定要加上对话上下文保存到长期记忆，不是 agent 决定要不要保存，而是强行摘要保存为长期记忆"。Python 上游有 `memory_provider.on_pre_compress` 钩子的概念（`reference/hermes-agent/agent/memory_provider.py:163`），Android 侧对齐这一"压缩前必落档"的语义）
+**背景**: APP 内聊天有两条摘要触发路径：
+1. **发送时阈值触发** —— `MessageCoordinationDelegate.launchAsyncSummaryForSend`（`AIMessageManager.shouldGenerateSummary` 返回 true 时启动），产出 `ChatMessage(sender="summary", ...)` 插回对话历史用于压缩上下文
+2. **token-limit 异常触发** —— `MessageCoordinationDelegate.summarizeHistory`（`handleTokenLimitExceeded` 路径调用），同样产出 `summary` 消息插回历史
+
+两条路径产出的摘要**只**进 ChatMessage JSON 历史，不进 `MemoryRepository` 长期记忆库。现有 `MemoryLibrary.saveMemoryAsync` 路径走 `EnhancedAIService.generateAnalysis`（独立 LLM 价值判官），可能因模型判断"内容无价值"返回 `{}` 直接丢弃。结果：用户在 APP 内长时间聊天产出大量摘要，但 `MemoryScreen` / `query_memory` 工具看不到这些总结性上下文 —— 跨会话的累积知识完全断层。
+
+修复策略：在 APP 内聊天的两条摘要插入路径（`launchAsyncSummaryForSend` 与 `summarizeHistory`）成功调用 `chatHistoryDelegate.addSummaryMessage` **之后**，**强制**调用 `MemoryRepository.saveMemory(Memory(content=summaryText, tags=[...]))` 直接落 ObjectBox + embedding，**完全绕过** `MemoryLibrary.saveMemoryAsync` / `generateAnalysis` 的 LLM 价值判官 —— 摘要永不被丢弃。
+
+**行为**:
+- **写入入口**：`MessageCoordinationDelegate` 在两条路径成功 `addSummaryMessage` 之后调用 `memoryRepository.saveMemory(memory)`，其中 `memory = Memory(title=<chat 标题或 "自动摘要 yyyy-MM-dd HH:mm">, content=<summaryMessage.content>, contentType="text/plain", source="auto_summary", credibility=0.9f, importance=0.6f, folderPath=<默认或 "自动摘要">)`
+- **绕过 LLM 判官**：禁止走 `MemoryLibrary.saveMemoryAsync` —— 它会调 `EnhancedAIService.generateAnalysis` 让 MEMORY 模型决定是否保留，与本需求"强行保存"的语义冲突。直接调 `MemoryRepository.saveMemory(memory)` 是唯一允许路径。
+- **强制 tag**：写入后立刻调 `memoryRepository.addTagToMemory(memory, "#auto_summary")`，外加来源 tag `addTagToMemory(memory, "#chat:$chatId")`（`chatId` 即 `originalChatId` / `currentChatId`）。这两个 tag 让用户在 `MemoryScreen` 区分"自动摘要"vs"agent create_memory 产出"vs"R-AGENT-011 gateway 路径产出"。
+- **不与 R-AGENT-010/011 冲突**：R-010/011 只覆盖 gateway 路径（`HermesGatewayController.runHermesAgent`），且走 `MemoryLibrary.saveMemoryAsync`（LLM 判官路径）；R-013 只覆盖 APP UI 路径（`MessageCoordinationDelegate.launchAsyncSummaryForSend` / `summarizeHistory`），走 `MemoryRepository.saveMemory`（直写路径）。两组互不相交，不会双写。
+- **失败容忍**：`saveMemory` 内部异常（ObjectBox / embedding 网络）必须 try-catch 隔离，不得影响 `addSummaryMessage` 本身的持久化或后续 `refreshStableContextWindow` 调用。失败仅打日志。
+- **触发时机精确**：必须在 `chatHistoryDelegate.addSummaryMessage(...)` 调用**之后**（确保摘要先入 chat 历史），且在同一 `try` 块内（catch CancellationException + Exception 已存在）。中断 / 异常 / `summaryMessage == null` 路径**不存**。
+- **enableMemoryQuery 开关**：复用 `ApiPreferences.enableMemoryQueryFlow`，与 R-AGENT-010 / 现有 APP 内 `handleTaskCompletion` 同一开关；false 时跳过保存（一致行为）。
+- **去重**：`MemoryRepository.saveMemory` 内部按 `memory.id` 处理重写 vs 新建；本路径每次都传新 `Memory()`（id=0），无需在 delegate 这层做去重 —— 用户即使短时间内连续触发摘要，每次摘要内容本身已经不同（包含新轮次的对话）。
+- **embedding 处理**：`saveMemory` 内部已经在 IO 线程同步生成 embedding，调用方协程已是 `coroutineScope.launch`（async），用户感知无阻塞。
+- **架构合规**（§6 红线）：本需求只在 Android UX 层做"摘要必落档"的兜底，**不**改 Hermes agent loop 架构、**不**新增 RAG 注入 system prompt（Python 上游也只在 USER 消息里注入 memory，不动 system prompt）、**不**改 `MemoryLibrary` API 表面 —— 保留 LLM 判官路径供 agent `create_memory` / gateway 路径继续使用。
+- **验收**：
+  - APP 内聊天触发"阈值摘要"（`shouldGenerateSummary` 返回 true）→ `MemoryRepository` 新增 1 条 `source="auto_summary"` + tags 含 `#auto_summary` + `#chat:<chatId>` 的记忆
+  - APP 内聊天触发"token-limit 摘要"（`summarizeHistory` 路径）→ 同样新增 1 条
+  - `enableMemoryQuery = false` → 即使摘要成功也不写记忆
+  - `MemoryLibrary.saveMemoryAsync` / `generateAnalysis` 被调用次数 = 0（确认绕过判官）
+  - `saveMemory` 异常 → 日志记录但 `addSummaryMessage` / `refreshStableContextWindow` 继续执行
+  - gateway 路径（R-AGENT-010）行为不变：不产出 `#auto_summary` tag、仍走 `saveMemoryAsync` / `generateAnalysis`
+  - 用户在 `MemoryScreen` 编辑 `#auto_summary` 节点（改 content / 改 tag / 删）后，下次 `query_memory` 返回的是用户编辑后的版本（不被 LLM 判官回滚 —— 因为编辑路径走 `updateMemory` 同样不触发判官）
+  - §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增）
+
+### R-AGENT-014: Agent 感知 `#auto_summary` 节点 + `query_memory` 支持 tag 过滤
+**来源**: 无 Python 上游（Android 侧扩展；Python 上游 `tools/memory_tool.py` 用的是 "MEMORY.md + USER.md + 单一 `memory` 工具带 action 参数" 的完全不同设计，没有 `query_memory` 概念、没有 ObjectBox `MemoryTag` 体系。R-AGENT-014 作为 R-AGENT-013 的闭环兜底——用户 2026-06-07 明确："agent 知道自己有长期记忆了吗？" 经查 R-AGENT-013 让摘要强行落库但 agent 完全不知道 `#auto_summary` tag 的存在，`query_memory` 也没有 tag 过滤入口，导致摘要"存了没人查"）
+**背景**: R-AGENT-013 让 APP 内每轮对话都强行把摘要落到 `MemoryRepository`，并打 `#auto_summary` + `#chat:<chatId>` 两个 tag。但目前：
+1. **agent 不知道 `#auto_summary` 的存在** —— `SystemPromptConfig.GATEWAY_AWARENESS_EN/CN` 的 `MEMORY USAGE GUIDANCE` 段（行 49-71 / 73-95）只提到 `query_memory` / `create_memory` / `#persistent_instruction`，完全没提自动摘要 tag。agent 不会想起来"我可以查最近的对话摘要"。
+2. **`query_memory` 没有 tag 过滤参数** —— `SystemToolPrompts.memoryTools(Cn)` 的 query_memory description（行 494-508 / 525-539）参数列表只有 `query / folder_path / start_time / end_time / snapshot_id / threshold / limit` 七个。即使 agent 知道 `#auto_summary` tag，也没法说"我只要带这个 tag 的记忆"，只能靠语义模糊检索撞运气命中。
+3. **`MemoryRepository.searchMemories`（行 1200-1224）** 的 `tagWeight` 是**打分权重**而非**硬过滤** —— 不能用来做"必须含某 tag"的前置过滤。
+
+修复策略：给 agent 加一条 system-prompt 提示让它知道 `#auto_summary` tag 存在 + 给 `query_memory` 工具加可选 `tags` 参数（多 tag 用 `|` 分隔）+ `MemoryRepository.searchMemories` 加 `tags: List<String>?` 前置过滤参数。三处变更最小工作量打通"agent 知道有日记 → 能精准查日记 → 仓库支持按 tag 取日记"全链路。架构红线：**不**改 agent loop、**不**新增 system prompt 自动 RAG 注入（Python `memory_provider.prefetch()` 在 Android `InMemoryMemoryProvider` 留空是历史决策，要补需独立评估，R-014 不动）、**不**改既有 `query_memory` 调用签名（`tags` 参数默认为空 = 老调用 100% 兼容）。
+
+**行为**:
+- **MEMORY USAGE GUIDANCE 加 `#auto_summary` 段（EN+CN）**：在 `SystemPromptConfig.GATEWAY_AWARENESS_EN` 行 49-64 的 `MEMORY USAGE GUIDANCE` 段尾、紧接 "search with short keywords" 行之后插入一行，明确告知：
+  - "Conversation summaries are automatically saved to the memory library with the `#auto_summary` tag after each compression. To recall previous chats in this app, call query_memory with `tags=#auto_summary` or `tags=#chat:<chatId>`."
+  - 中文版（行 73-88 `GATEWAY_AWARENESS_CN` 的 "记忆库使用指导" 段尾）对应插入："对话摘要会在每次压缩后自动保存到记忆库并打上 `#auto_summary` tag。想回顾本 app 之前聊过的内容，调用 query_memory 并传 `tags=#auto_summary` 或 `tags=#chat:<chatId>` 即可精准检索。"
+- **`query_memory` 工具 description 加 `tags` 参数（EN+CN）**：在 `SystemToolPrompts.memoryTools` 和 `memoryToolsCn` 的 `query_memory` ToolPrompt 的 `parametersStructured` 列表里**新增**一个 `ToolParameterSchema(name = "tags", type = "string", required = false)`，description 明确：
+  - EN: "optional, string. Filter results to memories carrying **all** of these tags. Multiple tags are separated by `|`, e.g. `#auto_summary` or `#auto_summary|#chat:abc123`. Common tags: `#auto_summary` (auto conversation summaries), `#persistent_instruction` (long-term user rules), `#chat:<chatId>` (specific in-app chat), `#gateway:<platform>` (external gateway conversations)."
+  - CN 对应文案。
+- **`MemoryQueryToolExecutor.executeQueryMemory` 解析 `tags` 参数**：在 `executeQueryMemory`（`MemoryQueryToolExecutor.kt` 行 176+）里读 `tool.parameters.find { it.name == "tags" }?.value`，按 `|` 切分、trim、过滤空串得到 `List<String>?`（空 list 视为 null），下传到 `memoryRepository.searchMemories(..., tags = ...)`。空字符串 / null → 不过滤（与既有行为一致）。
+- **`MemoryRepository.searchMemories` 加 `tags: List<String>? = null` 参数**：默认值 null 保证既有 18 处调用方零改动。`runSearchMemoriesWithDebug` 内部在 `timeFilteredMemoriesInScope` 那一步之后追加一次 filter：`if (tags.isNullOrEmpty()) timeFiltered else timeFiltered.filter { mem -> tags.all { req -> mem.tags.any { it.name == req } } }`（**all** 语义：要求 memory 同时含**所有**指定 tag，便于 `tags=#auto_summary|#chat:abc` 精确定位某个 chat 的某条摘要）。
+- **不引入 ToolParameterSchema 类型 breaking change**：直接复用既有 `type = "string"` + `description` 里写明 `|` 分隔约定（与 query 参数的 `|` 关键词分隔风格一致），不新增 `array` 类型支持。
+- **架构合规（§6 红线）**：本需求仅在 prompt + tool description + 工具/Repository 入口加一个可选 tag filter；**不**改 agent loop turn-cycle、**不**改 `ConversationService.buildPersistentInstructionsText`、**不**改 `<memory_context>` attachment 路径、**不**触碰 Python `memory_provider.prefetch()` 缺失的 RAG 设计决策（独立需求评估）。
+- **i18n 完整性**：所有面向 agent 的字符串都在 `SystemPromptConfig` / `SystemToolPrompts` 的中英文常量里两份并行（EN+CN），与 R-AGENT-009 / R-AGENT-013 一致。无 `res/values` 字符串改动（用户不可见，纯 agent prompt）。
+- **测试策略**：与 R-AGENT-009 (`PersistentInstructionAgentHintTest`) / R-AGENT-013 同策略走源码字符串扫描守 wiring（`SystemPromptConfig` / `SystemToolPrompts` / `MemoryQueryToolExecutor` 三处都用 wiring test）。`MemoryRepository.searchMemories` 的 tag 过滤运行时单测因重度依赖 ObjectBox in-memory 启动 + Robolectric ROI 低，沿用 §0.3 策略：wiring 扫描 + 手测兜底。
+- **验收**：
+  - `SystemPromptConfig.kt` 的 `GATEWAY_AWARENESS_EN` 和 `GATEWAY_AWARENESS_CN` 常量内 `MEMORY USAGE GUIDANCE` / `记忆库使用指导` 段都含 `"#auto_summary"` 字面字符串 + `"query_memory"` + tag 用法引用（如 `"tags="` 或 `"tags 参数"`）
+  - `SystemToolPrompts.kt` 的 `memoryTools` 和 `memoryToolsCn` 的 `query_memory` ToolPrompt 的 `parametersStructured` 列表都含 `name = "tags"` 的 ToolParameterSchema；EN description 含 `"#auto_summary"` 示例；CN description 含 `"#auto_summary"` 示例
+  - `MemoryQueryToolExecutor.kt` 的 `executeQueryMemory` 函数体含解析 `"tags"` 参数 + 把解析结果传给 `searchMemories` 的代码片段（源码扫描）
+  - `MemoryRepository.kt` 的 `searchMemories` 公开签名含 `tags: List<String>?` 参数；`runSearchMemoriesWithDebug` 函数体含按 `tags` 过滤 `tags.all { ... mem.tags.any ...}` 风格代码
+  - agent 收到 system prompt 后能在 tool description 里看到 `tags` 参数说明（手测：发送 chat，模型回 `<query_memory>` 工具调含 `tags="#auto_summary"`，工具结果只返回带该 tag 的 memory）
+  - 既有 `query_memory` 调用方（agent 不传 tags）行为完全不变（向后兼容）
+  - R-AGENT-009 `PersistentInstructionAgentHintTest` / R-AGENT-013 `MessageCoordinationDelegateAutoSummaryMemoryWiringTest` / R-UI-004 `EditMemoryDialogAutoSummaryHintWiringTest` 三个既有测试类全绿（不破坏既有 wiring）
+  - §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增）
+
 ---
 
 ## 域 ACP — Agent Client Protocol
@@ -452,4 +515,21 @@ CONFIG 原先的三条 R-CONFIG-001..003（Preferences / ConfigBuilder / Control
 - `EnhancedAIService.runAgentLoopViaHermes`：sink 内 `AgentEventBus.emit(taskIdValue, event)`；token 回调内 `AgentTokenBus.emit(taskIdValue, input, output, turnComplete=true/false)`
 - `HermesAdapter.sendMessage`：sink 内 `AgentEventBus.emit(chatId, event)`
 - 用户主动点 X：Service `stopSelf`；下次新 chat 触发 `ProcessingStarted` 时由 `GatewayForegroundService` 重新拉起
+- §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增）
+
+### R-UI-004: `EditMemoryDialog` content 高度上限抬高 + `#auto_summary` 节点 hint
+**来源**: 无 Python 上游；Android UI 体验需求（用户 2026-06-07 决策："长期记忆需要可以被用户编辑"，作为 R-AGENT-013 的兜底通路 —— 自动摘要可能很长，现有 200dp 高度上限对自动摘要节点的编辑严重不友好）
+**背景**: R-AGENT-013 让 APP 内每次自动摘要强行写入长期记忆 + `#auto_summary` tag。这些节点 content 通常较长（往往 500~2000 字），且用户需要保留编辑权来手工修剪 / 增删事实。当前 `EditMemoryDialog.kt:111` 的 content `OutlinedTextField` 使用 `Modifier.heightIn(min = 100.dp, max = 200.dp)` —— 200dp 在主流屏幕上只能容纳 7~9 行文本，长摘要必须靠内部 scroll 编辑，体验极差。R-UI-002 已经验证 `EditMemoryDialog` 的保存路径走 `MemoryViewModel.updateMemory → MemoryRepository.updateMemory`，**不**触发 LLM 价值判官（用户编辑结果不会被回滚）—— 所以只剩 UI 输入区域大小的问题。
+**行为**:
+- `EditMemoryDialog.kt:111` content `OutlinedTextField` 的 `.heightIn(min = 100.dp, max = 200.dp)` 改为 `.heightIn(min = 160.dp, max = 480.dp)`（min 抬到 160dp 让短摘要也舒展；max 抬到 480dp ≈ 18~20 行，结合 dialog 外层 `.fillMaxHeight(0.9f)` + `.verticalScroll(scrollState)` 不会破坏对话框整体布局）
+- 当被编辑的 `memory.tags` 含有 `"#auto_summary"` 时，在 content `OutlinedTextField` 上方插入一条小型 `AssistChip` / `SuggestionChip`（label 例如 "自动摘要节点"，icon 用 `Icons.Default.AutoAwesome` 或等价），让用户在编辑界面就能识别此节点的来源（与 R-AGENT-012 在 `MemoryScreen` 图谱上做颜色区分形成"图谱看色 / 编辑看 chip"两层视觉提示）
+- chip 文案走 `res/values*/strings.xml`，新增键 `memory_auto_summary_chip`（zh: "自动摘要节点（可编辑）" / en: "Auto-summary node (editable)"）
+- 不改 `EditMemoryDialog` 函数签名 / 调用方 / 保存逻辑；只动 UI 渲染层
+- 文档节点（`isDocumentNode = true`）的 content `OutlinedTextField` 仍保持 `enabled = false`，本需求不解锁它（与既有约束一致）
+- 当 memory 不含 `#auto_summary` tag 时（普通节点 / R-AGENT-011 gateway 节点 / R-AGENT-009 persistent_instruction 节点），chip 不渲染 —— 老用户编辑体验完全不变（除了高度上限抬高，这是普适改进）
+**验收**:
+- 编辑 `#auto_summary` 节点：content 文本框可舒展到 480dp 高度；上方出现"自动摘要节点（可编辑）" chip
+- 编辑普通节点 / gateway 节点 / persistent_instruction 节点：content 文本框高度上限同样为 480dp（普适改进），chip 不出现
+- 编辑文档节点（`isDocumentNode = true`）：content 文本框仍为 disabled；chip 不出现
+- 保存后 `MemoryRepository.updateMemory` 路径不变；`#auto_summary` tag 不被自动删除（仍在 `tags` 列表中可见，由用户在 `TagsEditor` 区域手动删除）
 - §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增）
