@@ -1207,7 +1207,8 @@ class MemoryRepository(private val context: Context, profileId: String) {
         edgeWeight: Float = 0.4f,
         relevanceThreshold: Double = SEARCH_RELEVANCE_THRESHOLD,
         createdAtStartMs: Long? = null,
-        createdAtEndMs: Long? = null
+        createdAtEndMs: Long? = null,
+        tags: List<String>? = null
     ): List<Memory> {
         return runSearchMemoriesWithDebug(
             query = query,
@@ -1219,7 +1220,8 @@ class MemoryRepository(private val context: Context, profileId: String) {
             edgeWeight = edgeWeight,
             relevanceThreshold = relevanceThreshold,
             createdAtStartMs = createdAtStartMs,
-            createdAtEndMs = createdAtEndMs
+            createdAtEndMs = createdAtEndMs,
+            tags = tags
         ).memories
     }
 
@@ -1233,7 +1235,8 @@ class MemoryRepository(private val context: Context, profileId: String) {
         edgeWeight: Float = 0.4f,
         relevanceThreshold: Double = SEARCH_RELEVANCE_THRESHOLD,
         createdAtStartMs: Long? = null,
-        createdAtEndMs: Long? = null
+        createdAtEndMs: Long? = null,
+        tags: List<String>? = null
     ): MemorySearchDebugInfo {
         return runSearchMemoriesWithDebug(
             query = query,
@@ -1245,7 +1248,8 @@ class MemoryRepository(private val context: Context, profileId: String) {
             edgeWeight = edgeWeight,
             relevanceThreshold = relevanceThreshold,
             createdAtStartMs = createdAtStartMs,
-            createdAtEndMs = createdAtEndMs
+            createdAtEndMs = createdAtEndMs,
+            tags = tags
         ).debug
     }
 
@@ -1259,7 +1263,8 @@ class MemoryRepository(private val context: Context, profileId: String) {
         edgeWeight: Float = 0.4f,
         relevanceThreshold: Double = SEARCH_RELEVANCE_THRESHOLD,
         createdAtStartMs: Long? = null,
-        createdAtEndMs: Long? = null
+        createdAtEndMs: Long? = null,
+        tags: List<String>? = null
     ): SearchComputationResult = withContext(Dispatchers.IO) {
         val normalizedFolderPath = normalizeFolderPath(folderPath)
 
@@ -1282,6 +1287,17 @@ class MemoryRepository(private val context: Context, profileId: String) {
                 val createdAtMs = memory.createdAt.time
                 (createdAtStartMs == null || createdAtMs >= createdAtStartMs) &&
                     (createdAtEndMs == null || createdAtMs <= createdAtEndMs)
+            }
+        }
+
+        // R-AGENT-014: tags 硬前置过滤 —— 与 tagWeight 打分加权完全不同。
+        // 语义是 ALL-of：每个传入 tag 名必须在 memory.tags 中至少出现一次（intersection）。
+        // null / 空 list 等价于不过滤，向后兼容所有既有调用方。
+        val tagFilteredMemoriesInScope = if (tags.isNullOrEmpty()) {
+            timeFilteredMemoriesInScope
+        } else {
+            timeFilteredMemoriesInScope.filter { mem ->
+                tags.all { req -> mem.tags.any { it.name == req } }
             }
         }
 
@@ -1326,7 +1342,7 @@ class MemoryRepository(private val context: Context, profileId: String) {
                 effectiveSemanticWeight = effectiveSemanticWeight,
                 semanticKeywordNormFactor = debugSemanticKeywordNormFactor,
                 effectiveEdgeWeight = effectiveEdgeWeight,
-                memoriesInScopeCount = timeFilteredMemoriesInScope.size,
+                memoriesInScopeCount = tagFilteredMemoriesInScope.size,
                 keywordMatchesCount = keywordMatchesCount,
                 tagMatchesCount = tagMatchesCount,
                 reverseContainmentMatchesCount = reverseContainmentMatchesCount,
@@ -1342,15 +1358,15 @@ class MemoryRepository(private val context: Context, profileId: String) {
         // 支持通配符搜索：如果查询是 "*"，返回所有记忆（在文件夹过滤后）
         if (query.trim() == "*") {
             return@withContext SearchComputationResult(
-                memories = timeFilteredMemoriesInScope,
-                debug = buildDebug(finalResultIds = timeFilteredMemoriesInScope.map { it.id })
+                memories = tagFilteredMemoriesInScope,
+                debug = buildDebug(finalResultIds = tagFilteredMemoriesInScope.map { it.id })
             )
         }
 
         if (query.isBlank()) {
             return@withContext SearchComputationResult(
-                memories = timeFilteredMemoriesInScope,
-                debug = buildDebug(finalResultIds = timeFilteredMemoriesInScope.map { it.id })
+                memories = tagFilteredMemoriesInScope,
+                debug = buildDebug(finalResultIds = tagFilteredMemoriesInScope.map { it.id })
             )
         }
 
@@ -1390,7 +1406,7 @@ class MemoryRepository(private val context: Context, profileId: String) {
         // --- PRE-FILTERING BY FOLDER ---
         // If a folder path is provided, all subsequent searches will be performed on this subset.
         // Otherwise, search all memories.
-        val memoriesToSearch = timeFilteredMemoriesInScope
+        val memoriesToSearch = tagFilteredMemoriesInScope
 
         if (memoriesToSearch.isEmpty()) {
             com.ai.assistance.operit.util.AppLogger.d("MemoryRepo", "No memories found in folder '$folderPath' to search.")

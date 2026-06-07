@@ -184,8 +184,16 @@ class MemoryQueryToolExecutor(private val context: Context) : ToolExecutor {
         val endTimeParam = tool.parameters.find { it.name == "end_time" }?.value
         val snapshotIdParam = tool.parameters.find { it.name == "snapshot_id" }?.value
         val thresholdParam = tool.parameters.find { it.name == "threshold" }?.value
+        val tagsParam = tool.parameters.find { it.name == "tags" }?.value
         val normalizedSnapshotId = snapshotIdParam?.trim()?.takeIf { it.isNotEmpty() }
         val threshold = thresholdParam?.trim()?.takeIf { it.isNotEmpty() }?.toDoubleOrNull()
+        // R-AGENT-014: tags 参数按 `|` 切分，去空白，去空项，去重；空/null 等价于不传过滤。
+        val tagsFilter: List<String>? = tagsParam
+            ?.split('|')
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.distinct()
+            ?.takeIf { it.isNotEmpty() }
 
         if (!thresholdParam.isNullOrBlank() && threshold == null) {
             return ToolResult(
@@ -267,7 +275,8 @@ class MemoryQueryToolExecutor(private val context: Context) : ToolExecutor {
                 edgeWeight = settings.edgeWeight,
                 relevanceThreshold = threshold ?: DEFAULT_RELEVANCE_THRESHOLD,
                 createdAtStartMs = startTimeMs,
-                createdAtEndMs = endTimeMs
+                createdAtEndMs = endTimeMs,
+                tags = tagsFilter
             )
 
             // Keep de-duplication stable even when multiple calls share the same snapshot in parallel.
