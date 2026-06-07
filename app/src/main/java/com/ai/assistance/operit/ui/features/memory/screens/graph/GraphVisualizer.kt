@@ -1181,8 +1181,18 @@ private fun DrawScope.drawNode(
             cornerRadius = cornerRadius
         )
 
+        // R-AGENT-012 bugfix 2026-06-07 (TC-AGENT-249-a):
+        // Repository.pickNodeColor(memory) 已按 tag 算好节点专属色
+        // (#persistent_instruction → 金 0xFFFFB300, #gateway:* → 蓝绿 0xFF26A69A,
+        //  Person → 绿, Concept → 蓝, 默认 LightGray)。先前实现这里硬编码
+        // nodePalette.fillColor 把这些色全部丢弃，导致 R-AGENT-005 / R-AGENT-012
+        // 的颜色策略在 UI 层完全不可见。改为：node.color 非默认 (LightGray) 时用
+        // node.color；默认色时 fallback 到 nodePalette.fillColor 以保持暗色主题
+        // 下普通节点的对比度。
+        val nodeFillColor = if (node.color != Color.LightGray) node.color else nodePalette.fillColor
+
         drawRoundRect(
-            color = nodePalette.fillColor,
+            color = nodeFillColor,
             topLeft = boxTopLeft,
             size = Size(boxWidth, boxHeight),
             cornerRadius = cornerRadius
