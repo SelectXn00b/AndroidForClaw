@@ -514,6 +514,18 @@ R-AGENT-012 是 R-AGENT-011 的 UI 兜底：R-011 已把 `#gateway:<platform>` t
 | TC-AGENT-016-h | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | 失败容忍：fact 抽取整段必须 try-catch 包围（解析异常 / 单条 saveMemory 异常都不能拖垮父 `#auto_summary` 落库）—— fact 抽取函数体含 `try {` + 对应 `catch (`。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-h fact extractor wrapped in try catch` 🟢 |
 | TC-AGENT-016-i | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | i18n 完整性：fact 抽取函数必须能根据 `useEnglish` 选 `SUMMARY_SECTION_KEY_INFO_EN` 或 `..._CN` 段头 —— 函数签名含 `useEnglish` 形参 / 函数体同时引用 `SUMMARY_SECTION_KEY_INFO_CN` 和 `SUMMARY_SECTION_KEY_INFO_EN`。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-i fact extractor handles both languages` 🟢 |
 
+### TC-AGENT-017 — R-AGENT-017 让 agent 知道自己有 memory 维护职责
+
+| ID | 关联 R-ID | 输入 / 调用 | 期望 | 类型 | 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-017-a | R-AGENT-017 | 源码扫描：`SystemPromptConfig.kt` 常量 `GATEWAY_AWARENESS_EN` | 必须同时包含 `update_memory` + `link_memories` + `delete_memory` 三个工具名字面值（"维护工具三件套被明确点名"），任一缺失即未告知 agent 维护职责。 | unit-scan | `SystemPromptMemoryMaintenanceWiringTest#TC-AGENT-017-a english prompt names three maintenance tools` 🟢 |
+| TC-AGENT-017-b | R-AGENT-017 | 源码扫描：`SystemPromptConfig.kt` 常量 `GATEWAY_AWARENESS_EN` | 必须含 `contradicts` 字面值（鼓励 `link_type="contradicts"` 的 hint）+ `conflict resolution` 或 `consistency maintenance` 任一字面值（"维护责任"语义已下沉到 prompt）。 | unit-scan | `SystemPromptMemoryMaintenanceWiringTest#TC-AGENT-017-b english prompt mentions contradicts and maintenance duty` 🟢 |
+| TC-AGENT-017-c | R-AGENT-017 | 源码扫描：`SystemPromptConfig.kt` 常量 `GATEWAY_AWARENESS_EN` | **不得**再包含字面字符串 `you do not need to save memories manually`（堵路的老句子必须删/替换 —— 否则 R-AGENT-017 维护语义会被它直接抵消）。 | unit-scan | `SystemPromptMemoryMaintenanceWiringTest#TC-AGENT-017-c english prompt removes do-not-save-manually anti-pattern` 🟢 |
+| TC-AGENT-017-d | R-AGENT-017 | 源码扫描：`SystemPromptConfig.kt` 常量 `GATEWAY_AWARENESS_CN` | 必须同时包含 `update_memory` + `link_memories` + `delete_memory` 三个工具名字面值（中文 prompt 也点名维护工具）。 | unit-scan | `SystemPromptMemoryMaintenanceWiringTest#TC-AGENT-017-d chinese prompt names three maintenance tools` 🟢 |
+| TC-AGENT-017-e | R-AGENT-017 | 源码扫描：`SystemPromptConfig.kt` 常量 `GATEWAY_AWARENESS_CN` | 必须含 `contradicts` 字面值（中英 link_type 字面值保留英文）+ `矛盾` 字面字符 + （`维护` 或 `职责` 任一）字面字符（"维护责任"中文语义已下沉）。 | unit-scan | `SystemPromptMemoryMaintenanceWiringTest#TC-AGENT-017-e chinese prompt mentions contradiction and maintenance duty` 🟢 |
+| TC-AGENT-017-f | R-AGENT-017 | 源码扫描：`SystemPromptConfig.kt` 常量 `GATEWAY_AWARENESS_CN` | **不得**再包含字面字符串 `无需你手动保存`（中文堵路老句子必须删/替换）。 | unit-scan | `SystemPromptMemoryMaintenanceWiringTest#TC-AGENT-017-f chinese prompt removes do-not-save-manually anti-pattern` 🟢 |
+| TC-AGENT-017-g | R-AGENT-017 | 源码扫描：`SystemPromptConfig.kt` 整文件 | 必须**不得**含字面字符串 `auto_extracted`（机制泄漏黑名单：R-AGENT-016 内部 tag 名不得出现在 agent-facing prompt 里 —— 防 prompt 污染：agent 知道 fact 来源后会回避具体表述/故意多输出 bullet/递归把自己幻觉当 fact）。 | unit-scan | `SystemPromptMemoryMaintenanceWiringTest#TC-AGENT-017-g prompt does not leak auto_extracted mechanism` 🟢 |
+
 状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
 
 ---

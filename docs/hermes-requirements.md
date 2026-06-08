@@ -432,6 +432,49 @@ Hermes Android 翻译已半成品：`hermes-android/.../MemoryManager.kt:339-362
 
 ---
 
+### R-AGENT-017: 让 agent 知道自己有 memory 维护职责（自我学习闭环：能存能用能改）
+**来源**: 无 Python 直接上游对应；Python Hermes 通过 `MemoryProvider.sync_turn` 把 fact 维护委托给云端插件（Mem0/Hindsight 自带 dedup/conflict 解决），所以上游 agent 角色定位是"消费者"。Android 侧没有云端插件托底，本地写入路径已建（R-AGENT-013/016 自动落库 + `create_memory` 工具），但 `SystemPromptConfig.kt` 当前 `MEMORY USAGE GUIDANCE` 段把 agent 角色定位成纯"查询者 + persistent_instruction setter"——L60 英文 `"automatically updated by a background system after each conversation turn — you do not need to save memories manually"` / L86 中文「记忆库会在每轮对话结束后由后台系统自动提取和更新，无需你手动保存」**显式劝退** agent 去主动维护 fact。结果：即使 `update_memory` / `delete_memory` / `link_memories` 工具早已注册（`SystemToolPromptsInternal.kt:485/500/507`），agent 几乎不会主动用——读写齿轮在工具层咬合，但在 prompt 引导层断裂。
+
+**背景**: 用户 2026-06-08 反馈："还是需要让 agent 知道一下，它们自己有了自我学习能力，这样它才会调整已经有的记忆库节点"。R-AGENT-015 + 016 解决了"能存能用"（读取齿轮 + 自动写入齿轮），但**没解决"能改"**——当新对话产生的事实与旧 fact 矛盾时（e.g. 用户前后说"我用 Tailwind" → "我换 Bootstrap 了"），agent 当前会**叠加**两条 fact 进库（甚至两条都 prefetch 进 `<memory-context>` 互相打架），不会去 update / 标 contradicts / 删旧的。这一步补上"维护齿轮"，让自我学习闭环真正成环。
+
+**架构合规**:
+- 不改 R-AGENT-016 抽取流程、不改 MemoryRepository API、不改任何工具实现——只动**两段 prompt 文本**（`SystemPromptConfig.GATEWAY_AWARENESS_EN` / `GATEWAY_AWARENESS_CN` 的 `MEMORY USAGE GUIDANCE` 区块）。
+- **关键约束（呼应用户决策）**: 告诉 agent "能力 + 责任"，不告诉 agent "机制"。
+  - ✅ 该说："你的记忆库里旧 fact 可能过时或与新信息矛盾，你应当主动用 `update_memory` 修正 / 用 `link_memories` 建 `contradicts` 关系 / 用 `delete_memory` 删过时的"
+  - ❌ 不该说："系统会自动从你的 bullet 抽 fact"（R-AGENT-016 机制泄漏 → prompt 污染：agent 会故意多输出 bullet 想"教育"系统 / 回避具体表述怕被错抽 / 把自己的幻觉当 fact 递归引用）
+  - ❌ 不该说："auto-extracted 的 fact 可能不准"（会让 agent 预先质疑所有自动抽出来的内容，对正常 fact 也举棋不定）
+- 老句子"automatically updated by a background system ... you do not need to save memories manually" / 中文「由后台系统自动提取和更新，无需你手动保存」**必须删/替换**——这是堵路的元凶。改成中性的"日常 fact 抽取由后台兜底，但**矛盾发现 + 一致性维护是你的职责**"。
+
+**行为**:
+- 在 `SystemPromptConfig.GATEWAY_AWARENESS_EN`（约 L58-66 `MEMORY USAGE GUIDANCE:` 区块）和 `GATEWAY_AWARENESS_CN`（约 L83-91「记忆库使用指导：」区块）各追加 2 条 bullet（删/替换老的"无需手动保存"那一条）：
+  1. **矛盾发现职责**（EN / CN 各一句）：
+     - EN: `- When you notice the memory library contains an outdated fact, or a fact that contradicts what the user just told you, take action: use update_memory to correct the old entry, or link_memories with link_type="contradicts" to flag the disagreement, or delete_memory if it is obsolete. Do NOT silently add a new memory while leaving a wrong old one in place — that creates conflicting facts in future prefetches.`
+     - CN: `- 当你发现记忆库里的旧 fact 已过时，或与用户刚说的话矛盾时，请采取行动：用 update_memory 修正旧记录、或用 link_memories 以 link_type="contradicts" 标记冲突、或用 delete_memory 删掉过时的。不要默默写一条新记忆而留着旧的错的——那会让将来 prefetch 时同时拿到两条互相矛盾的事实。`
+  2. **资产 / 责任语义**（EN / CN 各一句）：
+     - EN: `- The memory library is your long-term asset — keeping it accurate is part of your job, not a separate system's. Routine fact extraction runs in the background, but conflict resolution and consistency maintenance belong to you.`
+     - CN: `- 记忆库是你的长期资产——保持它准确是你的职责的一部分，不是另一个系统的事。日常 fact 抽取由后台兜底，但矛盾解决和一致性维护归你管。`
+- 老句子的处理：
+  - EN L60 `"The memory library is automatically updated by a background system after each conversation turn — you do not need to save memories manually. But proactively query when it would help you answer better."` → 改成 `"Routine fact extraction runs in the background after each turn, but proactively query when it helps answer better, and proactively maintain (update/delete/link) when you notice stale or conflicting entries."`
+  - CN L86「记忆库会在每轮对话结束后由后台系统自动提取和更新，无需你手动保存。但如果记忆查询能帮助你更好地回答，就主动查询。」→ 改成「日常 fact 抽取由后台在每轮结束后兜底；但如果查询能帮你更好回答就主动查，发现过时或矛盾的条目就主动维护（update / delete / link）。」
+- **不动**的：`MEMORY USAGE GUIDANCE` 段头本身、persistent_instruction 那条 bullet（R-AGENT-009/245）、AUTO-SUMMARY MEMORIES 那条 bullet、query_memory 关键词搜索那条 bullet、WORKSPACE MEMORY FILES 段。
+
+**验收**:
+- `SystemPromptConfig.kt` 英文常量 `GATEWAY_AWARENESS_EN` 同时包含以下关键字面字符串（源码字符串扫描守 wiring）：
+  - `update_memory` + `link_memories` + `delete_memory` 三个工具名同时出现在 `MEMORY USAGE GUIDANCE` 段附近
+  - `contradicts` 字面值（鼓励 link_type="contradicts" 的 hint）
+  - `conflict resolution` 或 `consistency maintenance` 任一字面值（"维护责任"语义）
+  - **不再包含** `"you do not need to save memories manually"` 这句（堵路的老句子已删）
+- `SystemPromptConfig.kt` 中文常量 `GATEWAY_AWARENESS_CN` 同时包含：
+  - `update_memory` + `link_memories` + `delete_memory` 三个工具名
+  - `contradicts` 字面值（中英 link_type 字面值保留英文）
+  - `矛盾` + （`维护` 或 `职责`）任一字面值
+  - **不再包含**「无需你手动保存」这句
+- 既有测试类不破坏：`MessageCoordinationDelegateAutoSummaryMemoryWiringTest` / `MessageCoordinationDelegateSummaryStripWiringTest` / `MessageCoordinationDelegateFactExtractionWiringTest` / `EnhancedAIServiceMemoryContextInjectionWiringTest` / `PersistentInstructionAgentHintTest` / `QueryMemoryToolPromptsTagsWiringTest` 全部维持绿——本需求只动 prompt 文本，不改任何工具/数据/coordination 逻辑。
+- **手测验收**: APP 安装后，在 chat A 说"我喜欢 Tailwind CSS"，触发 auto-summary 让 R-AGENT-016 抽 fact 落库；新建 chat B 说"我从 Tailwind 换到 Bootstrap 了"，观察 agent 是否主动调 `query_memory` 找出旧 Tailwind fact → 用 `update_memory` 改成 Bootstrap（或 `link_memories` 标 contradicts）。如果 agent 默默写一条新 Bootstrap fact 而不动旧的，prompt 调整失败（手测兜底，运行时正确性靠模型）。
+- §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（本需求 0 行代码改动，仅改 prompt 字符串）。
+
+---
+
 ## 域 ACP — Agent Client Protocol
 
 HermesApp 支持 ACP 双向：作为 **server** 暴露自身 agent 给外部 client（Zed / CLI）；作为 **client** 连到外部 ACP server（如 GitHub Copilot）。Python 源：`reference/hermes-agent/acp_adapter/` + `acp_registry/` + `agent/copilot_acp_client.py`。
