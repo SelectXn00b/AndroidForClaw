@@ -496,6 +496,28 @@ R-AGENT-012 是 R-AGENT-011 的 UI 兜底：R-011 已把 `#gateway:<platform>` t
 
 ---
 
+### R-AGENT-016: APP 内自动摘要时一并把【关键事实】拆成独立 memory 节点（事实自我学习）（2026-06-08）
+
+测试类: `app/src/test/java/com/ai/assistance/operit/services/core/MessageCoordinationDelegateFactExtractionWiringTest.kt`（新增）
+
+**背景**: R-AGENT-013 让 APP 内自动摘要强行落库 `#auto_summary` 整段。R-AGENT-014 让 agent 能按 tag 查。R-AGENT-015 让 agent 调 LLM 前自动 prefetch 召回 fence。三者构成"读"侧闭环。但**写**侧整段摘要颗粒度过粗（用户 5 条偏好揉进一段 1500 字摘要），跨 chat 召回时 fence 噪声大、用户编辑成本高。R-AGENT-016 在 `forcePersistSummaryToMemory` 落 `#auto_summary` 整段之后追加一步：**复用既有 SUMMARY_PROMPT 已经稳定输出的 `【关键事实】 / [Key Facts]` bullet 段**（不改 prompt、不调新 LLM、零额外 token），按行解析 bullet line，逐条 take(800) → 独立落库 → 打 `#auto_extracted` + `#chat:$chatId` + `#auto_summary_id:$parentMemoryId`。Python 上游的等价路径是 Mem0/Hindsight 通过 `MemoryProvider.sync_turn` 远端做 fact extraction，Android 侧无 plugin 落地，本需求是 LLM-free 平替——直接复用 R-AGENT-013 已经调过的 summary 输出。
+
+| TC ID | R-ID | 输入 / 触发 | 期望 | 测试类型 | 实现 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-016-a | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | `forcePersistSummaryToMemory` 函数体末尾必须含对 fact 抽取/落库新方法的调用（如 `extractAndPersistFacts(` 或同义 `extractFacts*` / `*ExtractedFacts*`）—— 否则 R-AGENT-016 整条链路完全没接通。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-a forcePersistSummaryToMemory invokes fact extractor at end` 🟢 |
+| TC-AGENT-016-b | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | 文件内必须存在新增的 private suspend 函数体，函数体内含：(a) `SUMMARY_SECTION_KEY_INFO_CN`（`【关键事实】`）或 `SUMMARY_SECTION_KEY_INFO_EN`（`[Key Facts]`）字面引用；(b) bullet 切分（`startsWith("- ")` 或 `Regex` 匹配 `- ` / `* ` / `• ` 之一）。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-b fact extractor parses key facts section bullet lines` 🟢 |
+| TC-AGENT-016-c | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | 抽取出的每条 fact 必须独立落库 + 打 `#auto_extracted` tag —— 源码必须含 `"#auto_extracted"` 字面字符串 + `repository.saveMemory(` 调用 + `repository.addTagToMemory(` 调用。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-c each fact saved separately with auto_extracted tag` 🟢 |
+| TC-AGENT-016-d | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | 单条 fact content 必须 800 字符截断（防超长 LLM 输出爆 ObjectBox）—— 源码 fact 抽取块内含 `take(800)` 调用或同名 `MAX_FACT_*_CHARS` / `FACT_CONTENT_LIMIT` = `800` 常量。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-d fact content truncated at 800 chars` 🟢 |
+| TC-AGENT-016-e | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | 单次抽取最多 20 条 fact（防 LLM 失控塞 200 行）—— 源码 fact 抽取块内含 `take(20)` / `coerceAtMost(20)` / 同名 `MAX_FACT_COUNT` = `20` 常量。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-e fact count capped at 20` 🟢 |
+| TC-AGENT-016-f | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | 必须打 `#chat:` 来源 tag + `#auto_summary_id:` 父节点引用 tag —— 源码 fact 抽取块内含 `"#chat:"` 字面字符串 + `"#auto_summary_id:"` 或等价 parent tag 字面字符串。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-f facts get chat tag and parent summary id tag` 🟢 |
+| TC-AGENT-016-g | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | 去重防御：抽取流程必须先查 `searchMemories(...)` 用 `tags=listOf("#auto_extracted")` 过滤已有节点 —— 源码 fact 抽取块内含 `searchMemories(` 调用且 `tags` 参数中含 `"#auto_extracted"` 字面值，或等价的 dedup 路径。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-g fact extractor dedupes against existing auto_extracted nodes` 🟢 |
+| TC-AGENT-016-h | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | 失败容忍：fact 抽取整段必须 try-catch 包围（解析异常 / 单条 saveMemory 异常都不能拖垮父 `#auto_summary` 落库）—— fact 抽取函数体含 `try {` + 对应 `catch (`。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-h fact extractor wrapped in try catch` 🟢 |
+| TC-AGENT-016-i | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | i18n 完整性：fact 抽取函数必须能根据 `useEnglish` 选 `SUMMARY_SECTION_KEY_INFO_EN` 或 `..._CN` 段头 —— 函数签名含 `useEnglish` 形参 / 函数体同时引用 `SUMMARY_SECTION_KEY_INFO_CN` 和 `SUMMARY_SECTION_KEY_INFO_EN`。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-i fact extractor handles both languages` 🟢 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — Memory Dedup (R-AGENT-003 bugfix)
 
 测试类: `app/src/test/java/com/ai/assistance/operit/data/repository/MemoryDedupTest.kt`

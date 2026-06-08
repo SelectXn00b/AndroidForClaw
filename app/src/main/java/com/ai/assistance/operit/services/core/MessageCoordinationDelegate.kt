@@ -1573,9 +1573,12 @@ class MessageCoordinationDelegate(
                     val enableMemoryQuery = ApiPreferences.getInstance(context)
                         .enableMemoryQueryFlow.first()
                     if (enableMemoryQuery) {
+                        val useEnglish = LocaleUtils.getCurrentLanguage(context)
+                            .lowercase().startsWith("en")
                         forcePersistSummaryToMemory(
                             summaryText = summaryMessage.content,
-                            chatId = originalChatId
+                            chatId = originalChatId,
+                            useEnglish = useEnglish
                         )
                     } else {
                         AppLogger.d(TAG, "R-AGENT-013: enableMemoryQuery=false — 摘要不写入长期记忆")
@@ -1687,9 +1690,12 @@ class MessageCoordinationDelegate(
                     val enableMemoryQuery = ApiPreferences.getInstance(context)
                         .enableMemoryQueryFlow.first()
                     if (enableMemoryQuery && currentChatId != null) {
+                        val useEnglish = LocaleUtils.getCurrentLanguage(context)
+                            .lowercase().startsWith("en")
                         forcePersistSummaryToMemory(
                             summaryText = summaryMessage.content,
-                            chatId = currentChatId
+                            chatId = currentChatId,
+                            useEnglish = useEnglish
                         )
                     } else {
                         AppLogger.d(TAG, "R-AGENT-013: enableMemoryQuery=$enableMemoryQuery / chatId=$currentChatId — 摘要不写入长期记忆")
@@ -1812,7 +1818,11 @@ class MessageCoordinationDelegate(
      * 失败容忍：任何 ObjectBox / embedding / 网络异常都不能影响 `addSummaryMessage` /
      * `refreshStableContextWindow`，这里只 try-catch 并打日志。
      */
-    private suspend fun forcePersistSummaryToMemory(summaryText: String, chatId: String) {
+    private suspend fun forcePersistSummaryToMemory(
+        summaryText: String,
+        chatId: String,
+        useEnglish: Boolean
+    ) {
         if (summaryText.isBlank()) {
             AppLogger.d(TAG, "R-AGENT-013: 摘要内容为空，跳过长期记忆写入")
             return
@@ -1874,5 +1884,161 @@ class MessageCoordinationDelegate(
         // 打 tag —— addTagToMemory 内部会 memoryBox.put(memory) 持久化关系
         repository.addTagToMemory(memory, "#auto_summary")
         repository.addTagToMemory(memory, "#chat:$chatId")
+
+        // R-AGENT-016 (2026-06-08)：在父 #auto_summary 整段落库之后，把 SUMMARY_PROMPT 已经
+        // 稳定输出的 【关键事实】 / [Key Facts] bullet 段每行解析成独立 fact 节点，
+        // 逐条 take(800) → saveMemory → 打 #auto_extracted + #chat:<chatId>
+        // + #auto_summary_id:<parentId>。零额外 LLM 调用、零额外 token 成本。
+        extractAndPersistFacts(
+            summaryText = strippedSummary,
+            chatId = chatId,
+            parentMemoryId = id,
+            useEnglish = useEnglish,
+            repository = repository
+        )
+    }
+
+    /**
+     * R-AGENT-016 (2026-06-08)：解析 SUMMARY_PROMPT 已经输出的 【关键事实】 / [Key Facts] bullet 段，
+     * 每行剥前缀后 take(800)、独立落库、打 #auto_extracted + #chat:<chatId> + #auto_summary_id:<parentId>
+     * 三 tag。失败容忍：解析异常 / 单条 saveMemory 异常都 try-catch 隔离，不影响父 #auto_summary 落库。
+     *
+     * Python 上游对应路径：MemoryProvider.sync_turn → 远端 Mem0/Hindsight 做 fact extraction
+     * (reference/hermes-agent/agent/memory_provider.py:114 + agent/memory_manager.py:210)。
+     * Android 侧无 plugin 落地，本方法是 LLM-free 平替——直接复用 R-AGENT-013 已经调过的
+     * summary LLM 输出，避免再花一次 token。
+     */
+    private suspend fun extractAndPersistFacts(
+        summaryText: String,
+        chatId: String,
+        parentMemoryId: Long,
+        useEnglish: Boolean,
+        repository: MemoryRepository
+    ) {
+        try {
+            // (1) 选段头：根据 useEnglish 选 SUMMARY_SECTION_KEY_INFO_EN ([Key Facts]) 还是
+            //     SUMMARY_SECTION_KEY_INFO_CN (【关键事实】)
+            val sectionHeader = if (useEnglish) {
+                FunctionalPrompts.SUMMARY_SECTION_KEY_INFO_EN
+            } else {
+                FunctionalPrompts.SUMMARY_SECTION_KEY_INFO_CN
+            }
+
+            val lines = summaryText.lines()
+            val headerIdx = lines.indexOfFirst { it.trim() == sectionHeader }
+            if (headerIdx < 0) {
+                AppLogger.d(TAG, "R-AGENT-016: 找不到段头 '$sectionHeader'，跳过 fact 抽取（chatId=$chatId）")
+                return
+            }
+
+            // (2) 从 headerIdx + 1 开始遍历，遇到分隔线 '=' 起头 / 下个 section header [/【 起头 /
+            //     连续两个空行 → 停止
+            val factLines = mutableListOf<String>()
+            var consecutiveEmpty = 0
+            for (idx in (headerIdx + 1) until lines.size) {
+                val raw = lines[idx]
+                val trimmed = raw.trim()
+                if (trimmed.isEmpty()) {
+                    consecutiveEmpty++
+                    if (consecutiveEmpty >= 2) break
+                    continue
+                }
+                consecutiveEmpty = 0
+                // 段尾分隔线（==== 或 ----）
+                if (trimmed.startsWith("=") || trimmed.startsWith("---")) break
+                // 下一个 section header
+                if (trimmed.startsWith("【") || trimmed.startsWith("[")) break
+                factLines += trimmed
+            }
+
+            // (3) 仅保留 bullet 行（- / * / • / · 任一前缀）
+            val bullets = factLines.filter { line ->
+                line.startsWith("- ") ||
+                    line.startsWith("* ") ||
+                    line.startsWith("• ") ||
+                    line.startsWith("· ")
+            }
+            if (bullets.isEmpty()) {
+                AppLogger.d(TAG, "R-AGENT-016: 关键事实段无 bullet 行，跳过 fact 抽取（chatId=$chatId）")
+                return
+            }
+
+            // (4) 剥前缀 + take(800) + 过滤短/空 + 限 20 条上限
+            val MAX_FACT_CONTENT_CHARS = 800
+            val MAX_FACT_COUNT = 20
+            val MIN_FACT_CHARS = 5
+            val facts = bullets
+                .map { line ->
+                    val stripped = when {
+                        line.startsWith("- ") -> line.removePrefix("- ")
+                        line.startsWith("* ") -> line.removePrefix("* ")
+                        line.startsWith("• ") -> line.removePrefix("• ")
+                        line.startsWith("· ") -> line.removePrefix("· ")
+                        else -> line
+                    }
+                    stripped.trim().take(MAX_FACT_CONTENT_CHARS)
+                }
+                .filter { it.length >= MIN_FACT_CHARS }
+                .take(MAX_FACT_COUNT)
+
+            if (facts.isEmpty()) {
+                AppLogger.d(TAG, "R-AGENT-016: 剥前缀后无有效 fact，跳过（chatId=$chatId）")
+                return
+            }
+
+            // (5) 去重前置查询：取出当前 profile 已有 #auto_extracted 节点的 content（小写比对）
+            val existingFactContents: Set<String> = try {
+                val existingHits = repository.searchMemories(
+                    query = "",
+                    tags = listOf("#auto_extracted")
+                )
+                existingHits.take(200).map { it.content.trim().lowercase() }.toSet()
+            } catch (t: Throwable) {
+                AppLogger.w(TAG, "R-AGENT-016: dedup 前置查询失败，按零去重处理: ${t.message}")
+                emptySet()
+            }
+
+            // (6) 逐条落库，单条失败不影响其它
+            var savedCount = 0
+            var dedupedCount = 0
+            for (fact in facts) {
+                try {
+                    val factKey = fact.trim().lowercase()
+                    if (factKey in existingFactContents) {
+                        dedupedCount++
+                        continue
+                    }
+                    val factTitle = fact.lineSequence()
+                        .firstOrNull { it.isNotBlank() }
+                        ?.trim()
+                        ?.take(60)
+                        .orEmpty()
+                        .ifEmpty { "auto-extracted fact" }
+                    val factMemory = Memory(
+                        title = factTitle,
+                        content = fact,
+                        contentType = "text/plain",
+                        source = "auto_extracted",
+                        credibility = 0.85f,
+                        importance = 0.5f,
+                        folderPath = null
+                    )
+                    repository.saveMemory(factMemory)
+                    repository.addTagToMemory(factMemory, "#auto_extracted")
+                    repository.addTagToMemory(factMemory, "#chat:$chatId")
+                    repository.addTagToMemory(factMemory, "#auto_summary_id:$parentMemoryId")
+                    savedCount++
+                } catch (t: Throwable) {
+                    AppLogger.w(TAG, "R-AGENT-016: 单条 fact 落库失败（继续下一条）: ${t.message}")
+                }
+            }
+            AppLogger.d(
+                TAG,
+                "R-AGENT-016: fact 抽取完成 chatId=$chatId parent=$parentMemoryId " +
+                    "saved=$savedCount deduped=$dedupedCount total_bullets=${bullets.size}"
+            )
+        } catch (t: Throwable) {
+            AppLogger.w(TAG, "R-AGENT-016: fact extraction failed: ${t.message}", t)
+        }
     }
 }

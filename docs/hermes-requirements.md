@@ -366,6 +366,72 @@ Hermes Android 翻译已半成品：`hermes-android/.../MemoryManager.kt:339-362
 
 ---
 
+### R-AGENT-016: APP 内自动摘要时一并把【关键事实】拆成独立 memory 节点（事实自我学习）
+**来源**: 无 Python 直接上游（Python Hermes 通过 `MemoryProvider.sync_turn` 把每轮 user/assistant 委托给云端插件 Honcho/Mem0/Hindsight 做 fact extraction，本身不内嵌抽取逻辑——见 `reference/hermes-agent/agent/memory_provider.py:114` + `agent/memory_manager.py:210`。Android 侧目前没有任何 MemoryProvider 插件落地——hermes-android 的 `MemoryProvider` 接口翻译都没做，更没有 Honcho/Mem0 平替。R-AGENT-016 是 Android 平台 fallback：复用 R-AGENT-013 既已存在的"自动摘要 LLM"输出，把 LLM 早就写好的 `【关键事实】 / [Key Facts]` 段每行拆成一条独立 memory 节点，打 `#auto_extracted` tag，让用户的偏好/事实独立可查、独立可改、独立可删——比 `#auto_summary` 整段摘要的颗粒度细一档）
+
+**背景**: R-AGENT-013 让 APP 内每次自动摘要强行写入 ObjectBox 一条带 `#auto_summary` tag 的整段记忆。R-AGENT-014 让 agent 知道该 tag 存在并能按 tag 查。R-AGENT-015 让 agent 调 LLM 前自动 prefetch 召回 fence 拼到 user message。三者构成"读"侧闭环。但**写**侧仍有断层：
+1. **整段摘要颗粒度过粗** —— 用户说"我喜欢用 Tailwind CSS"，会被 R-AGENT-013 揉进一整段 `==========对话摘要==========` 摘要节点。下次跨 chat 问"我喜欢什么 CSS 框架"时，prefetch 召回的是整段摘要（包含核心任务状态 / 多条事实），fence 里夹了大量噪声 token。
+2. **用户编辑成本高** —— 用户在 `MemoryScreen` 编辑摘要节点要面对 500-2000 字的整块文本，细颗粒度的事实改不动 / 删不动，只能整段编辑。
+3. **跨 chat 复用度低** —— `#chat:<chatId>` tag 让摘要绑定具体 chat，跨 chat 召回时摘要里的"核心任务状态"成为干扰项，模型容易被无关任务引导。
+4. **Python 上游对应**：Mem0 的 fact extraction 路径（POST 一段对话 → Mem0 返回 N 条 atomic fact 字符串 → 各自落库）；本需求是 Android 内嵌 LLM-free 平替——不再调一次 LLM，**直接复用** R-AGENT-013 已经调过的 summary LLM 的输出，零额外 token 成本。
+
+修复策略：在 `MessageCoordinationDelegate.forcePersistSummaryToMemory` 落 `#auto_summary` 整段摘要**之后**（line 1815-1880），追加一个 `extractAndPersistFacts(summaryText, chatId, parentMemoryId, useEnglish)` 步骤——
+- 用 `FunctionalPrompts.SUMMARY_SECTION_KEY_INFO_CN/EN` 段头定位 `【关键事实】 / [Key Facts]` 节
+- 用 `SUMMARY_MARKER_*` 结尾分隔线（或下个 `=` 起头行）定位段尾
+- 对节内每行 `trim()` 之后保留以 `- ` / `* ` / `• ` 开头的 bullet line（容错三种 marker）
+- 剥掉 bullet 前缀后取首句（或 `take(800)` 防超长），一行一条 fact
+- 每条 fact 独立调 `memoryRepository.saveMemory(Memory(...))` 落库 + 打 `#auto_extracted` + `#chat:$chatId` + `#auto_summary_id:$parentMemoryId`
+
+**架构合规（§6 红线）**：
+- **不**改 `SUMMARY_PROMPT` / `SUMMARY_PROMPT_EN` ——既有 prompt 已经稳定输出 `【关键事实】 / [Key Facts]` bullet 段，零 prompt 风险，纯下游解析。
+- **不**新调一次 LLM——复用 R-AGENT-013 已经调过的 summary 结果，token 成本 0。
+- **不**改 `forcePersistSummaryToMemory` 既有主体（line 1815-1877 全部保留：sanitize / saveMemory `#auto_summary` 整段 / addTagToMemory）；只在它末尾追加一个 `extractAndPersistFacts(...)` 调用。
+- **不**改 `MemoryRepository` API 表面（用既有 `saveMemory` + `addTagToMemory`）。
+- **不**改 R-AGENT-014 `query_memory` tag filter 流程——`#auto_extracted` 自动 piggyback 上车（`tags=#auto_extracted` 已经能用）。
+- **不**改 R-AGENT-015 prefetch 流程——`searchMemories` 拿到的 hit 里同时包含 `#auto_summary` 整段 + `#auto_extracted` 单条事实，由相关性打分自然排序，模型读到的 fence 反而更精炼（命中具体事实而不是整段摘要）。
+- **不**碰 hermes-android 模块（解析 + 落库都在 app 模块）。
+
+**行为**:
+- **入口**: `MessageCoordinationDelegate.forcePersistSummaryToMemory(summaryText, chatId)` 函数体末尾、`addTagToMemory(memory, "#chat:$chatId")`（line 1876）**之后**追加调用 `extractAndPersistFacts(summaryText, chatId, parentMemoryId = id, useEnglish = ...)`。
+- **`extractAndPersistFacts` 新方法签名**: `private suspend fun extractAndPersistFacts(summaryText: String, chatId: String, parentMemoryId: Long, useEnglish: Boolean)`，置于 `forcePersistSummaryToMemory` 紧邻位置（同 class）。
+- **`useEnglish` 来源**: `MessageCoordinationDelegate` 内调 `forcePersistSummaryToMemory` 的两条路径（`launchAsyncSummaryForSend` line 1507, `summarizeHistory` line 1629）都已经持有 `useEnglish` boolean（决定调英文还是中文 SUMMARY_PROMPT），把它一并透传到 `forcePersistSummaryToMemory(summaryText, chatId, useEnglish)`，再透传到 `extractAndPersistFacts`。
+- **解析逻辑（核心）**:
+  - `val sectionHeader = if (useEnglish) FunctionalPrompts.SUMMARY_SECTION_KEY_INFO_EN else FunctionalPrompts.SUMMARY_SECTION_KEY_INFO_CN`
+  - 调 `sanitizeContext(summaryText)`（防御）→ `lines()` → 找到 `trim() == sectionHeader` 那一行的 index `headerIdx`；找不到 → 直接 return（容错，无事实可抽）
+  - 从 `headerIdx + 1` 开始遍历，**遇到下面任一即停**：(a) 行 `trim()` 以 `=` 起头（即下一段分隔线 `============================` / `=======================================`）（b) 行 `trim()` 以 `【` / `[` 起头（下一个 section header）（c) 列表结束（连续 ≥ 2 个空行）
+  - 每行 `trim()` 满足以下任一即视为 bullet：以 `- ` / `* ` / `• ` / `· ` 起头
+  - 剥前缀后 `take(800)` + `trim()`；空字符串跳过；长度 < 5（极短/噪声）跳过
+  - 整段最多抽 **20 条**（防 LLM 输出失控塞 200 行 fact 把 ObjectBox 撑爆）
+- **每条 fact 落库**:
+  - `val factMemory = Memory(title = <fact 首句最多 60 字符 + "…">, content = <fact 全文>, contentType = "text/plain", source = "auto_extracted", credibility = 0.85f, importance = 0.5f, folderPath = <继承父 memory 的 folderPath，或 "自动摘要">)`
+  - `val factId = repository.saveMemory(factMemory)`
+  - `repository.addTagToMemory(factMemory, "#auto_extracted")`
+  - `repository.addTagToMemory(factMemory, "#chat:$chatId")`
+  - `repository.addTagToMemory(factMemory, "#auto_summary_id:$parentMemoryId")` —— 用于关联回父 `#auto_summary` 整段摘要，方便用户在 MemoryScreen 反查"这条事实是从哪段摘要来的"
+- **去重（最小防御）**:
+  - 落库前调 `repository.searchMemories(query = factContent, limit = 3, tags = listOf("#auto_extracted"))`，命中已有 `#auto_extracted` 节点且其 `content` `equals(factContent, ignoreCase = true)` → 跳过本次落库（避免同一条事实在多次自动摘要里重复积累——R-AGENT-013 每次自动摘要都会重跑全段抽取，没有去重就会爆 N 倍冗余）。
+  - 严格相等比对（不做语义去重）—— LLM 输出同一事实通常字面一致；语义级去重（"我喜欢 Tailwind" vs "我用 Tailwind 写样式"）由用户在 MemoryScreen 手动合并兜底。
+- **失败容忍**:
+  - 解析阶段（找不到段头 / bullet 全为空 / parse 异常）：catch 所有 Throwable，仅打日志 `AppLogger.w(TAG, "R-AGENT-016 fact extraction failed: ${t.message}")`，不影响父 `#auto_summary` 落库（已在前面完成）。
+  - 单条 fact saveMemory 失败：try-catch 单条，记录日志后继续下一条（部分成功优于全失败）。
+- **enableMemoryQuery 开关**: 复用 R-AGENT-013 既有 gate —— `forcePersistSummaryToMemory` 已经在 `enableMemoryQuery == true` 路径里调用，`extractAndPersistFacts` 自动继承同一开关，无需新增。
+- **i18n**: 解析逻辑同时支持中英文 SUMMARY_PROMPT 输出（`useEnglish` 透传到 `extractAndPersistFacts`，按 `useEnglish` 选 `SUMMARY_SECTION_KEY_INFO_EN` 或 `..._CN` 段头）。bullet marker 三种（`- ` / `* ` / `• ` / `· `）兼容中英文 LLM 常见输出风格。无 `res/values` 字符串改动（用户不可见，纯解析）。
+- **测试策略**: `MessageCoordinationDelegate` 重度依赖 ObjectBox / Hermes / Android Context，JVM mock ROI 极低，与 R-AGENT-013/014/015 同策略走源码字符串扫描守 wiring。运行时正确性由手测兜底：发"我喜欢 Tailwind CSS / 我用 IntelliJ IDEA / 我的服务器在东京"等多条偏好，触发自动摘要（约 30 条消息后），等 `MemoryScreen` 出现 `#auto_extracted` tag 节点 N 条（每条独立）、内容确为单条事实。
+
+**验收**:
+- `MessageCoordinationDelegate.kt` 的 `forcePersistSummaryToMemory` 函数体末尾必须含对 `extractAndPersistFacts` 或等价名（`extract*Facts*` / `*ExtractedFacts*`）的调用（源码扫描确认）。
+- `MessageCoordinationDelegate.kt` 必须新增一个 private suspend 函数体含：(a) `SUMMARY_SECTION_KEY_INFO_CN` 或 `SUMMARY_SECTION_KEY_INFO_EN` 字面引用、(b) bullet 切分（`startsWith("- ")` 或 `Regex` 含 `-` `*` `•` 之一）、(c) `"#auto_extracted"` tag 字面字符串、(d) `repository.saveMemory(...)` 调用、(e) `repository.addTagToMemory(...)` 调用。
+- 单条 fact content 必须按 800 字符上限截断（源码内含 `take(800)` 或同名常量）。
+- 单次抽取 fact 数量上限 20 条（源码内含 `take(20)` / `coerceAtMost(20)` / 同名常量）。
+- 去重逻辑：源码内含对 `searchMemories` 调用且 `tags` 参数含 `"#auto_extracted"` 字面值，或等价的 dedup 路径（如先查 `#auto_extracted` tag 子集再 `equals` 比对）。
+- `useEnglish` 形参必须从 `launchAsyncSummaryForSend` / `summarizeHistory` 透传到 `forcePersistSummaryToMemory` 再透传到 `extractAndPersistFacts`（源码扫描确认 3 处签名）。
+- 整个 fact extraction 流程必须 try-catch 包裹（catch Throwable / Exception），不得让父 `#auto_summary` 落库被回滚。
+- 既有测试类不破坏：`MessageCoordinationDelegateAutoSummaryMemoryWiringTest` / `MessageCoordinationDelegateSummaryStripWiringTest` / `EnhancedAIServiceMemoryContextInjectionWiringTest` / `PersistentInstructionAgentHintTest` / `QueryMemoryToolPromptsTagsWiringTest` 全部维持绿。
+- **手测验收**: APP 安装后，在一个 chat 里依次说"我喜欢用 Tailwind CSS"、"我用 IntelliJ IDEA 写代码"、"我的服务器在东京"，触发自动摘要（连发 N 条让 `shouldGenerateSummary` 返回 true）；等摘要 LLM 完成；打开 `MemoryScreen` 应看到 ≥3 个新节点带 `#auto_extracted` tag，每个节点内容确为单条事实（不是整段摘要）；新建一个 chat 问"你还记得我喜欢什么 CSS 框架吗？"，agent prefetch 命中 Tailwind fact 后正确回答。
+- §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增；本需求纯新增胶水代码，不消除已有 stub，但也不引入新 stub —— 解析 + 落库都是真实实现，非 stub）。
+
+---
+
 ## 域 ACP — Agent Client Protocol
 
 HermesApp 支持 ACP 双向：作为 **server** 暴露自身 agent 给外部 client（Zed / CLI）；作为 **client** 连到外部 ACP server（如 GitHub Copilot）。Python 源：`reference/hermes-agent/acp_adapter/` + `acp_registry/` + `agent/copilot_acp_client.py`。
