@@ -76,6 +76,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import com.ai.assistance.operit.data.repository.CustomEmojiRepository
+import com.ai.assistance.operit.data.preferences.preferencesManager
+import com.ai.assistance.operit.data.repository.MemoryRepository
+import com.xiaomo.hermes.hermes.agent.buildMemoryContextBlock
 import com.ai.assistance.operit.data.preferences.CharacterCardManager
 import com.ai.assistance.operit.data.preferences.CharacterCardToolAccessResolver
 import com.ai.assistance.operit.data.preferences.UserPreferencesManager
@@ -1062,6 +1065,62 @@ class EnhancedAIService private constructor(private val context: Context) {
         val dispatcher = OperitToolDispatcher(this@EnhancedAIService.context)
 
         val openAiMessages = requestHistory.toOpenAiMessages().toMutableList()
+
+        // R-AGENT-015 (2026-06-08)：在首次发请求之前给末尾 user message 拼一段 `<memory-context>`
+        // 围栏。这是 Python `run_agent.py:9087-9107` 的 1:1 翻译——让 agent 自动"用上"过去的
+        // #auto_summary / 用户记录，无需依赖 agent 主动调 query_memory。
+        //
+        // 防死循环三层：
+        //   (1) `enableMemoryQuery=false` 时彻底跳过（用户开关）
+        //   (2) prefetch 限定 `coerceAtMost(5)` 条 + 单条 content `take(800)` 字符
+        //   (3) 排除 `#persistent_instruction` tag（已被 R-AGENT-009/245 注入到 system prompt）
+        //
+        // 不动持久化层：fence 只拼到 `openAiMessages` 这个**局部** MutableList 上，不写回
+        // chatHistoryDelegate / ChatMessage / ObjectBox。整块 try-catch 包围，prefetch 异常
+        // 不能拖垮 agent loop。
+        if (enableMemoryQuery) {
+            try {
+                val lastUserIdx = openAiMessages.indexOfLast { it["role"] == "user" }
+                if (lastUserIdx >= 0) {
+                    val lastUserContent = (openAiMessages[lastUserIdx]["content"] as? String).orEmpty()
+                    val queryText = lastUserContent.trim()
+                    if (queryText.isNotBlank()) {
+                        val profileId = preferencesManager.activeProfileIdFlow.first()
+                        val memoryRepository = MemoryRepository(this@EnhancedAIService.context, profileId)
+                        val rawHits = memoryRepository.searchMemories(query = queryText)
+                        val capped = rawHits.take(rawHits.size.coerceAtMost(5))
+                        val filtered = capped.filterNot { mem ->
+                            mem.tags.any { it.name == "#persistent_instruction" }
+                        }
+                        if (filtered.isNotEmpty()) {
+                            val rawContext = filtered.joinToString(separator = "\n\n") { mem ->
+                                val title = mem.title.ifBlank { "(untitled)" }
+                                val tagPart = mem.tags
+                                    .joinToString(separator = " ") { it.name }
+                                    .ifBlank { "" }
+                                val body = mem.content.take(800)
+                                if (tagPart.isNotEmpty()) "[$title] $tagPart\n$body"
+                                else "[$title]\n$body"
+                            }
+                            val fence = buildMemoryContextBlock(rawContext)
+                            val original = openAiMessages[lastUserIdx]
+                            val patched = original.toMutableMap()
+                            patched["content"] = "$lastUserContent\n\n$fence"
+                            openAiMessages[lastUserIdx] = patched.toMap()
+                            AppLogger.d(
+                                TAG,
+                                "R-AGENT-015: prefetched ${filtered.size} memory node(s) into <memory-context> fence (raw=${rawHits.size})"
+                            )
+                        }
+                    }
+                }
+            } catch (t: Throwable) {
+                AppLogger.w(
+                    TAG,
+                    "R-AGENT-015: memory prefetch failed, skipping fence injection: ${t.message}"
+                )
+            }
+        }
 
         suspend fun emitChunk(piece: String) {
             if (piece.isEmpty()) return

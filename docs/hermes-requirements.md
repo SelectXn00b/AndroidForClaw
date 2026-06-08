@@ -316,6 +316,56 @@ HermesApp 必须提供与 Python Hermes 等价的 agent turn-loop 内核。Pytho
 
 ---
 
+### R-AGENT-015: 调 LLM 前自动注入 `<memory-context>` 召回围栏到当前轮 user message
+**来源**: `reference/hermes-agent/run_agent.py:8948-8969, 9087-9107, 11857-11860` + `reference/hermes-agent/agent/memory_manager.py:65-80, 178-195`（Python 上游每轮 `prefetch_all` → `build_memory_context_block` → 拼到当轮 user message → 仅 API 调用时拼，不污染持久化历史；用户 2026-06-08 反馈"AI 完全不记得之前聊过的事，每次都要我重新解释"）
+
+**背景**: R-AGENT-013 让 APP 内 chat 自动摘要强行打 `#auto_summary` tag 落库。R-AGENT-014 让 agent 知道这个 tag 存在并能用 `query_memory` 主动查（lazy 路径）。但 lazy 路径依赖 agent 自己意识到"我应该查一下"，不可靠——很多用户场景下模型直接回"我不记得我们之前聊过这个"，把已经在 ObjectBox 里的相关摘要白白晾着。Python Hermes 的 `run_agent.py:9087-9107` 的做法是 eager prefetch：每轮调 LLM 之前后台用 `original_user_message` 当 query 调 `prefetch_all`，结果拼到当轮 user message 末尾用 `<memory-context>` fence 包起来，直接喂给模型——模型读了 fence 内容就能"自然"用上记忆，不需要主动调 query_memory。
+
+Hermes Android 翻译已半成品：`hermes-android/.../MemoryManager.kt:339-362` 的 `_INTERNAL_CONTEXT_RE` / `sanitizeContext` / `buildMemoryContextBlock` 全部 1:1 翻译完毕，但 agent loop 里**无人调用** `buildMemoryContextBlock`——完全没有把 ObjectBox `MemoryRepository` 接进来当 prefetch source。R-AGENT-015 就是把这个空挡补上：让 `EnhancedAIService.runAgentLoopViaHermes` 在 `openAiMessages = requestHistory.toOpenAiMessages()`（行 1064）之后、首次发请求之前，对末尾 user 那条 OpenAI message 原地拼接 `buildMemoryContextBlock(prefetchedContext)`，prefetch source 就走 `MemoryRepository.searchMemories(query=originalUserMessage, ...)`。
+
+架构红线（§6）：本需求**只补 Python 上游已有但 Kotlin 漏译的功能**，**不**新增任何 Python 上游没有的设计；**不**新增专属开关、**不**改 ChatMessage 持久化层、**不**改 ChatHistoryDelegate、**不**触碰 hermes-android 模块（注入点放 app 模块的 `EnhancedAIService` 内最小侵入；hermes-android 内桥接 `MemoryProvider` 接口为 P1 留给以后单独评估）。
+
+**行为**:
+- **注入点**: `EnhancedAIService.runAgentLoopViaHermes`（`app/src/main/java/com/ai/assistance/operit/api/chat/EnhancedAIService.kt`）内 `openAiMessages = requestHistory.toOpenAiMessages().toMutableList()` 之后、首次发请求之前。仅修改 `openAiMessages`，**绝不**修改 `requestHistory`（PromptTurn 列表）。
+- **触发开关**: 复用 `runAgentLoopViaHermes` 已有的 `enableMemoryQuery: Boolean` 形参（与 R-AGENT-010 / R-AGENT-013 / `MemoryQueryToolExecutor` 同一开关）。`enableMemoryQuery == false` → 跳过整个注入流程；不新增任何专属开关。
+- **prefetch query**: 用 `requestHistory` 末尾 user PromptTurn 的 content，与 Python `original_user_message` 对齐。如果末尾不是 user role，跳过注入（容错，不报错）。
+- **prefetch 调用**: 调 `MemoryRepository.searchMemories(query=originalUserMessage, limit=N, tags=null, ...)`，其中：
+  - `limit` 从 `memorySearchSettingsPreferences.load()` 读，但**强制上限 5**（防 token 爆炸）。如果用户偏好超过 5 取 5。
+  - `tags = null`（不限制 tag —— 让 #auto_summary / 用户 create_memory 节点 / R-AGENT-009 #persistent_instruction 等都能命中）。
+  - 其他 weight / threshold 沿用 `memorySearchSettingsPreferences.load()` 的用户配置（与 `MemoryQueryToolExecutor` 一致）。
+- **黑名单排除**: prefetch 结果里 `mem.tags.any { it.name == "#persistent_instruction" }` 的节点必须过滤掉——R-AGENT-009/245 已经把持久指令注入到 system prompt 末尾（`ConversationService.buildPersistentInstructionsText`），再注一次浪费 token 且语义重复。
+- **每条 content 截断**: 单条 memory content 超过 800 字符必须 `take(800) + "…"`，防超长摘要把 user message 撑爆。
+- **拼接**: 调 `MemoryManager.buildMemoryContextBlock(rawContext)` 包 `<memory-context>` fence。`rawContext` 格式：每条 memory 一行，"[<title> #<tag1> #<tag2>] <content_truncated>"（title 缺省时用 "memory"）。空结果 → buildMemoryContextBlock 返回空串 → 不拼。
+- **写回 user message**: 末尾 user OpenAI message 的 content 改成 `originalContent + "\n\n" + fence`。仅一次，不在多 turn 里重复注入。
+- **死循环防御（关键）**:
+  1. **`forcePersistSummaryToMemory` 落库前 sanitize**: `MessageCoordinationDelegate.forcePersistSummaryToMemory(summaryText, chatId)` 在调 `memoryRepository.saveMemory(...)` 之前，对 `summaryText` 调一次 `MemoryManager.sanitizeContext(...)`（hermes-android 已有），剥掉任何残留的 `<memory-context>` fence + System note + fence 标签。理论上 summarizeMemory 拿的是 `List<ChatMessage>`（持久化层不带 fence）所以剥不到东西，但作为防御性代码——一旦未来路径变化 fence 漏进 ChatMessage 也不会扩散到 ObjectBox。
+  2. **prefetch 限 limit ≤ 5**: 见上文。
+  3. **每条 content 截断 800 字符**: 见上文。
+- **不污染聊天历史 / 持久化层**:
+  - 仅修改 `openAiMessages`（in-memory MutableList，单次 sendMessage 生命周期），不改 `requestHistory`、不改 `execContext.conversationHistory` 的入口（line 928）、不改 `ChatHistoryDelegate.saveCurrentChat` 的 ChatMessage、不改 ObjectBox。
+  - 用户在 ChatScreen 回看消息时**看不到** `<memory-context>` fence（因为 ChatHistoryDelegate 写的是 ChatMessage，根本不是 PromptTurn / OpenAI message 链路）。
+  - line 1140-1141 / 1217-1218 的 `openAiMessages.toPromptTurnsForHistory()` 会把带 fence 的 user message 写回 `execContext.conversationHistory`——可接受，因为 ExecContext 是单次 sendMessage 临时副本（每次 sendMessage 新建 `MessageExecutionContext`），fence 不会跨 sendMessage 持久化。这与 Python 上游 `run_agent.py:9087-9107` 的 `api_messages` 行为一致（fence 在多 turn agent loop 内一直存在，跨 sendMessage 不存在）。
+- **架构合规（§6 红线）**:
+  - **不**改 hermes-android 模块（`buildMemoryContextBlock` 已有 1:1 翻译；本需求只在 app 模块调用它）。P1 严格按 Python 在 hermes-android 内引入 `MemoryProvider` 接口让 app 注入委托给 `MemoryRepository` 的实现——独立评估，不在本需求范围。
+  - **不**改 R-AGENT-014a 的 `#auto_summary` system prompt 引导段（lazy + eager 共存：lazy 是兜底，eager 是默认）。
+  - **不**改 R-AGENT-009/245 持久指令的 system prompt 注入路径（黑名单排除避免重复）。
+  - **不**改 R-AGENT-013 的 `forcePersistSummaryToMemory` 主体逻辑（仅在落库前加一行 `sanitizeContext` 防御）。
+  - **不**新增专属开关（一个 `enableMemoryQuery` 管所有记忆功能）。
+- **i18n 完整性**: 本需求面向 agent / API payload，不涉及用户可见 UI 文案。`buildMemoryContextBlock` fence 字面值（`<memory-context>` / `[System note: ...]`）与 Python 上游一致英文，不需要 i18n 分支。
+- **测试策略**: 与 R-AGENT-013 / R-AGENT-014 同策略——`EnhancedAIService` 重度依赖 Android Context / OkHttp / Hermes agent loop / ObjectBox，JVM mock ROI 极低，走源码字符串扫描守 wiring。运行时正确性由手测 + §3 E2E 兜底（agent-level TOKEN 回显验收）。
+
+**验收**:
+- `EnhancedAIService.kt` 的 `runAgentLoopViaHermes` 函数体内必须含：(a) `enableMemoryQuery` gate（`if (enableMemoryQuery)` 或等价）、(b) 对 `MemoryRepository.searchMemories` 的调用、(c) 对 `MemoryManager.buildMemoryContextBlock(...)`（或同名 hermes-android helper）的调用、(d) 修改 `openAiMessages` 末尾 user message 的代码（源码扫描确认）。
+- `MessageCoordinationDelegate.forcePersistSummaryToMemory` 函数体内必须在 `memoryRepository.saveMemory(...)` 调用之前对 `summaryText` 调一次 `sanitizeContext` 或等价 fence 剥离（源码扫描确认）。
+- prefetch 结果包含 `#persistent_instruction` tag 的节点必须被过滤掉（源码内必须含对该 tag 字面字符串的引用 + filter 调用）。
+- 单条 memory content 必须按 800 字符上限截断（源码内必须含 `take(800)` 或 `800` 字面值或等价常量定义）。
+- limit 必须强制 ≤ 5（源码内必须含 `coerceAtMost(5)` 或 `5` 字面值或等价常量定义）。
+- 既有测试类不破坏：`MessageCoordinationDelegateAutoSummaryMemoryWiringTest` / `MessageCoordinationDelegateSummaryStripWiringTest` / `PersistentInstructionAgentHintTest` / `QueryMemoryToolPromptsTagsWiringTest` / `MemoryQueryToolExecutorTagsWiringTest` / `MemoryRepositorySearchTagsFilterWiringTest` 全部维持绿。
+- **手测验收**：APP 安装后，先发"我喜欢用 Tailwind CSS"等带明显偏好/事实的 chat、等其触发自动摘要落 `#auto_summary` 节点；新建/换一个 chat 问"你还记得我喜欢什么 CSS 框架吗？"——agent 回答必须能命中 Tailwind（即 prefetch 注入了相关摘要）。
+- §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增；本需求不消除任何已有 functional stub，仅新增胶水代码）。
+
+---
+
 ## 域 ACP — Agent Client Protocol
 
 HermesApp 支持 ACP 双向：作为 **server** 暴露自身 agent 给外部 client（Zed / CLI）；作为 **client** 连到外部 ACP server（如 GitHub Copilot）。Python 源：`reference/hermes-agent/acp_adapter/` + `acp_registry/` + `agent/copilot_acp_client.py`。

@@ -473,6 +473,29 @@ R-AGENT-012 是 R-AGENT-011 的 UI 兜底：R-011 已把 `#gateway:<platform>` t
 
 ---
 
+### R-AGENT-015: 调 LLM 前自动注入 `<memory-context>` 围栏到当前轮 user message（2026-06-08）
+
+测试类: `app/src/test/java/com/ai/assistance/operit/api/chat/EnhancedAIServiceMemoryContextInjectionWiringTest.kt`（新增）+ `app/src/test/java/com/ai/assistance/operit/services/core/MessageCoordinationDelegateSummaryStripWiringTest.kt`（扩展，加 TC-AGENT-015-g）
+
+**背景**: R-AGENT-014 让 agent **可以**主动用 `query_memory tags=#auto_summary` 查日记，但依赖 agent 自己想到要查（lazy 路径）。Python Hermes 的 `run_agent.py:9087-9107` 的做法是 eager prefetch：每轮在调 LLM 之前后台用 `original_user_message` 当 query 跑 `prefetch_all`，结果用 `<memory-context>` fence 包好直接拼到当轮 user message 末尾喂给模型——模型读了 fence 内容就能"自然"用上记忆，无需主动调工具。Kotlin 侧 `hermes-android/.../MemoryManager.kt:339-362` 已 1:1 翻译完 `_INTERNAL_CONTEXT_RE` / `sanitizeContext` / `buildMemoryContextBlock` 三个 helper，但 agent loop 里**无人调用**——本需求把空挡补上：在 `EnhancedAIService.runAgentLoopViaHermes` 内 `openAiMessages = requestHistory.toOpenAiMessages()`（行 1064）之后、首次发请求之前，对末尾 user OpenAI message 原地拼 `buildMemoryContextBlock(...)`。
+
+死循环防御：`forcePersistSummaryToMemory` 落库前必须 `sanitizeContext` 剥 fence（防御性代码，理论上 summarizeMemory 用 ChatMessage 不带 fence 但作为兜底）+ prefetch 强制 `limit ≤ 5` + 单条 content `take(800)` 截断。
+
+| TC ID | R-ID | 输入 / 触发 | 期望 | 测试类型 | 实现 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-015-a | R-AGENT-015 | 源码扫描：`EnhancedAIService.kt` | `runAgentLoopViaHermes` 函数体必须含 `enableMemoryQuery` gate（`if (enableMemoryQuery)` 或等价）+ 对 `MemoryRepository(...)` 实例化或 `memoryRepository` field 引用 + 对 `searchMemories(...)` 调用 + 对 `buildMemoryContextBlock(` 调用——否则 prefetch 注入完全没接通。 | unit-scan | `EnhancedAIServiceMemoryContextInjectionWiringTest#TC-AGENT-015-a runAgentLoopViaHermes wires prefetch and fence` 🔴 |
+| TC-AGENT-015-b | R-AGENT-015 | 源码扫描：`EnhancedAIService.kt` | `runAgentLoopViaHermes` 函数体必须修改 `openAiMessages` 末尾 user message 的 content（拼上 fence）—— 源码含对 `openAiMessages` 的索引赋值 / `set(` / `replaceAll {` / `add(` 末尾追加之类操作，且操作位置在对 `buildMemoryContextBlock(` 调用之后。 | unit-scan | `EnhancedAIServiceMemoryContextInjectionWiringTest#TC-AGENT-015-b openAiMessages last user message gets fence appended` 🔴 |
+| TC-AGENT-015-c | R-AGENT-015 | 源码扫描：`EnhancedAIService.kt` | prefetch 必须强制 `limit ≤ 5`（防 token 爆炸）—— 源码 prefetch 块内含 `coerceAtMost(5)` 或 `minOf(..., 5)` 或字面值 `5` 作为 limit 上限。 | unit-scan | `EnhancedAIServiceMemoryContextInjectionWiringTest#TC-AGENT-015-c prefetch caps limit at 5` 🔴 |
+| TC-AGENT-015-d | R-AGENT-015 | 源码扫描：`EnhancedAIService.kt` | 单条 memory content 必须按 800 字符截断防止长摘要把 user message 撑爆—— 源码 prefetch 块内含 `take(800)` 字面调用或等价常量定义。 | unit-scan | `EnhancedAIServiceMemoryContextInjectionWiringTest#TC-AGENT-015-d prefetch truncates content at 800 chars` 🔴 |
+| TC-AGENT-015-e | R-AGENT-015 | 源码扫描：`EnhancedAIService.kt` | `#persistent_instruction` 节点必须从 prefetch 结果剔除（已通过 R-AGENT-009/245 system prompt 注入，避免 token 重复）—— 源码含 `"#persistent_instruction"` 字面字符串 + `filter` / `filterNot` 调用引用该 tag。 | unit-scan | `EnhancedAIServiceMemoryContextInjectionWiringTest#TC-AGENT-015-e prefetch excludes persistent_instruction tag` 🔴 |
+| TC-AGENT-015-f | R-AGENT-015 | 源码扫描：`EnhancedAIService.kt` | `runAgentLoopViaHermes` 函数体内不得修改 `requestHistory` / `chatHistoryDelegate` / `ChatMessage`——只在 `openAiMessages` 上原地拼接，确保聊天历史持久化层不被污染。源码 prefetch 块附近不出现 `chatHistoryDelegate` / `saveCurrentChat` / `addMessage`（这些字面字符串若在 prefetch 块的同 50 行内出现即 fail）。 | unit-scan | `EnhancedAIServiceMemoryContextInjectionWiringTest#TC-AGENT-015-f prefetch never touches persisted chat history` 🔴 |
+| TC-AGENT-015-g | R-AGENT-015 | 源码扫描：`MessageCoordinationDelegate.kt` | **死循环防御**：`forcePersistSummaryToMemory` 函数体在 `memoryRepository.saveMemory(` 调用之前必须对 `summaryText` 调用一次 `sanitizeContext` 或等价 fence 剥离（剥 `<memory-context>` / `[System note: ...]` / fence tag）—— 防止未来路径变化让 fence 漏进 ChatMessage 后被无差别落库扩散。 | unit-scan | `MessageCoordinationDelegateSummaryStripWiringTest#TC-AGENT-015-g forcePersistSummaryToMemory sanitizes memory context before save` 🔴 |
+| TC-AGENT-015-h | R-AGENT-015 | 源码扫描：`EnhancedAIService.kt` | prefetch 流程必须用 try-catch 包围（ObjectBox / embedding 异常不能拖垮 agent loop）—— 源码 prefetch 块外侧有 `try {` + 对应 `catch`。 | unit-scan | `EnhancedAIServiceMemoryContextInjectionWiringTest#TC-AGENT-015-h prefetch wrapped in try catch` 🔴 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — Memory Dedup (R-AGENT-003 bugfix)
 
 测试类: `app/src/test/java/com/ai/assistance/operit/data/repository/MemoryDedupTest.kt`

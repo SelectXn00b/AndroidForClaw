@@ -1817,6 +1817,14 @@ class MessageCoordinationDelegate(
             AppLogger.d(TAG, "R-AGENT-013: 摘要内容为空，跳过长期记忆写入")
             return
         }
+        // R-AGENT-015 死循环防御 (2026-06-08)：在落库前剥掉所有 `<memory-context>...</memory-context>`
+        // fence + `[System note: ...]` preamble + fence tag。理论上 summarizeMemory 拿的是
+        // `List<ChatMessage>`（持久化层不带 fence），剥不到东西；但作为兜底——一旦未来路径变化
+        // 让 fence 漏进 ChatMessage（例如直接保存被 R-AGENT-015 注入过的 OpenAI message 内容），
+        // `#auto_summary` 节点就会带 fence 落库，下轮 prefetch 又把它召回拼回 user message ——
+        // 形成"注入 → 摘要 → 落库 → 召回 → 再注入"雪球。在落库前剥一次是 cheap 兜底。
+        val sanitizedSummaryText =
+            com.xiaomo.hermes.hermes.agent.sanitizeContext(summaryText)
         // R-AGENT-013 bugfix (2026-06-08)：AIMessageManager.summarizeMemory 在 AI 摘要正文
         // 之后**额外拼接**了两段尾部块：
         //   - "对话回顾" / "Dialogue review"  —— 每条消息原文截头去尾粘一遍，给下一轮 agent
@@ -1832,14 +1840,14 @@ class MessageCoordinationDelegate(
             "【工具包预热】",
             "[Package Warmup]"
         )
-        var summaryCutIdx = summaryText.length
+        var summaryCutIdx = sanitizedSummaryText.length
         for (delimiter in summaryDelimiters) {
-            val idx = summaryText.indexOf(delimiter)
+            val idx = sanitizedSummaryText.indexOf(delimiter)
             if (idx >= 0 && idx < summaryCutIdx) {
                 summaryCutIdx = idx
             }
         }
-        val strippedSummary = summaryText.substring(0, summaryCutIdx).trimEnd()
+        val strippedSummary = sanitizedSummaryText.substring(0, summaryCutIdx).trimEnd()
         if (strippedSummary.isBlank()) {
             AppLogger.d(TAG, "R-AGENT-013: 裁剪后摘要内容为空，跳过长期记忆写入")
             return

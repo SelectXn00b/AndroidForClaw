@@ -58,6 +58,48 @@ class MessageCoordinationDelegateSummaryStripWiringTest {
         )
     }
 
+    /**
+     * TC-AGENT-015-g (R-AGENT-015 死循环防御, 2026-06-08)：`forcePersistSummaryToMemory` 在调
+     * `memoryRepository.saveMemory(...)` 之前必须对 `summaryText` 做一次 `<memory-context>` fence
+     * 剥离（调 `sanitizeContext` 或等价正则替换 `<memory-context>...</memory-context>` 整段）。
+     *
+     * 防御性代码：理论上 `summarizeMemory` 拿的是 `List<ChatMessage>`（持久化层不带 fence），
+     * 剥不到东西；但一旦未来路径变化让 fence 漏进 ChatMessage（例如直接保存被 R-AGENT-015 注入
+     * 过的 OpenAI message 内容），`#auto_summary` 节点就会带 fence 落库，下轮 prefetch 又把它
+     * 召回拼回 user message —— 形成"注入 → 摘要 → 落库 → 召回 → 再注入"雪球。在落库前剥一次
+     * 是 cheap 兜底。
+     */
+    @Test
+    fun `TC-AGENT-015-g forcePersistSummaryToMemory sanitizes memory context before save`() {
+        val block = extractFunctionBlock(source, "forcePersistSummaryToMemory")
+
+        // 找 saveMemory 调用位置（落库点）
+        val saveIdx = Regex("""\bsaveMemory\s*\(""").find(block)?.range?.first ?: -1
+        assertTrue(
+            "找不到 saveMemory(...) 调用 —— 先满足 R-AGENT-013-a/b 的 wiring。",
+            saveIdx >= 0
+        )
+
+        val before = block.substring(0, saveIdx)
+
+        // 接受多种 sanitize 形式：
+        //  a) 直接调 sanitizeContext(...)（hermes-android MemoryManager.kt:345 已现成）
+        //  b) inline 正则替换 `<memory-context>...</memory-context>` 整段
+        //  c) 引用 _INTERNAL_CONTEXT_RE / MEMORY_CONTEXT_RE / fence 黑名单常量
+        val hasSanitize =
+            Regex("""\bsanitizeContext\s*\(""").containsMatchIn(before) ||
+                Regex("""<\s*memory-context\s*>""").containsMatchIn(before) ||
+                Regex("""\b_?INTERNAL_CONTEXT_RE\b""").containsMatchIn(before) ||
+                Regex("""\bMEMORY_CONTEXT_RE\b""").containsMatchIn(before) ||
+                Regex("""\bMEMORY_CONTEXT_FENCE\b""").containsMatchIn(before)
+        assertTrue(
+            "forcePersistSummaryToMemory 必须在 saveMemory 调用之前剥 `<memory-context>` fence —— " +
+                "调 sanitizeContext(summaryText) 或 inline 正则替换 `<memory-context>...</memory-context>` " +
+                "整段（防 R-AGENT-015 注入路径反向污染长期记忆雪球）。\n实际 saveMemory 之前的代码:\n$before",
+            hasSanitize
+        )
+    }
+
     // ----- helpers -----
 
     private fun extractFunctionBlock(src: String, name: String): String {
