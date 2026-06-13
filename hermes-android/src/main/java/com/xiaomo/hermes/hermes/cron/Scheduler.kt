@@ -1,4 +1,11 @@
-/** 1:1 对齐 hermes/cron/scheduler.py */
+/** 1:1 对齐 hermes/cron/scheduler.py
+ *
+ * NOTE (R-AGENT-031): On Android the real execution loop lives in the **app module**
+ * (`com.ai.assistance.operit.cron.CronTickWorker` + `CronAgentRunner`), driven by
+ * **WorkManager** every 15 minutes. CronTickWorker calls `Jobs.getDueJobs()`
+ * directly and dispatches to the agent runtime there, bypassing this file's
+ * `runJob` / `deliverResult` (kept here for 1:1 Python parity only).
+ */
 package com.xiaomo.hermes.hermes.cron
 
 import com.xiaomo.hermes.hermes.getHermesHome

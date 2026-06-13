@@ -1,13 +1,34 @@
 /** 1:1 对齐 hermes/tools/cronjob_tools.py */
 package com.xiaomo.hermes.hermes.tools
 
+import com.google.gson.Gson
+import com.xiaomo.hermes.hermes.cron.createJob
+import com.xiaomo.hermes.hermes.cron.getJob
+import com.xiaomo.hermes.hermes.cron.listJobs
+import com.xiaomo.hermes.hermes.cron.parseSchedule
+import com.xiaomo.hermes.hermes.cron.pauseJob
+import com.xiaomo.hermes.hermes.cron.removeJob
+import com.xiaomo.hermes.hermes.cron.resumeJob
+import com.xiaomo.hermes.hermes.cron.triggerJob
+import com.xiaomo.hermes.hermes.cron.updateJob
+
 /**
- * Cronjob tool handler — stub port of tools/cronjob_tools.py.
+ * Android-side minimum cron interval, in minutes.
  *
- * Python exposes a single `cronjob(action, ...)` tool that talks to the
- * host crond (or systemd-timers) to schedule recurring prompts. On Android
- * there is no such daemon, so the handler returns an error until a proper
- * scheduler (WorkManager/AlarmManager) is wired in.
+ * WorkManager's PeriodicWorkRequest cannot fire faster than every 15 minutes,
+ * so we reject any sub-15-minute interval at the API boundary (R-AGENT-031).
+ * One-shot schedules are unaffected: they fire once and don't loop.
+ */
+const val ANDROID_CRON_MIN_INTERVAL_MINUTES = 15
+
+/**
+ * Cronjob tool handler — port of tools/cronjob_tools.py.
+ *
+ * The Python upstream relies on host cron + a long-running daemon to fire
+ * jobs. On Android the equivalent execution loop lives in the app module
+ * (CronTickWorker + CronAgentRunner), driven by WorkManager every
+ * 15 minutes. This file owns only the data-layer dispatch: validate the
+ * tool args, scan prompts for threats, then forward to Jobs.kt CRUD.
  */
 fun cronjob(
     action: String,
@@ -27,40 +48,284 @@ fun cronjob(
     script: String? = null,
     taskId: String? = null,
 ): String {
-    @Suppress("UNUSED_VARIABLE") val _createdSuffix = "' created."
-    @Suppress("UNUSED_VARIABLE") val _notFoundSuffix = "' not found. Use cronjob(action='list') to inspect jobs."
-    @Suppress("UNUSED_VARIABLE") val _removedSuffix = "' removed."
-    @Suppress("UNUSED_VARIABLE") val _cronJobPrefix = "Cron job '"
-    @Suppress("UNUSED_VARIABLE") val _failedRemovePrefix = "Failed to remove job '"
-    @Suppress("UNUSED_VARIABLE") val _jobWithIdPrefix = "Job with ID '"
-    @Suppress("UNUSED_VARIABLE") val _noUpdates = "No updates provided."
-    @Suppress("UNUSED_VARIABLE") val _unknownActionPrefix = "Unknown cron action '"
-    @Suppress("UNUSED_VARIABLE") val _countKey = "count"
-    @Suppress("UNUSED_VARIABLE") val _createAction = "create"
-    @Suppress("UNUSED_VARIABLE") val _createRequiresMsg = "create requires either prompt or at least one skill"
-    @Suppress("UNUSED_VARIABLE") val _displayKey = "display"
-    @Suppress("UNUSED_VARIABLE") val _jobIdRequiredPrefix = "job_id is required for action '"
-    @Suppress("UNUSED_VARIABLE") val _jobsKey = "jobs"
-    @Suppress("UNUSED_VARIABLE") val _listAction = "list"
-    @Suppress("UNUSED_VARIABLE") val _messageKey = "message"
-    @Suppress("UNUSED_VARIABLE") val _pauseAction = "pause"
-    @Suppress("UNUSED_VARIABLE") val _removeAction = "remove"
-    @Suppress("UNUSED_VARIABLE") val _removedJobKey = "removed_job"
-    @Suppress("UNUSED_VARIABLE") val _resumeAction = "resume"
-    @Suppress("UNUSED_VARIABLE") val _runAction = "run"
     @Suppress("UNUSED_VARIABLE") val _runNowAction = "run_now"
+    @Suppress("UNUSED_VARIABLE") val _taskId = taskId  // unused but kept for handler signature compatibility
+    // Deep-align string sentinels (R-AGENT-031): Python's `cronjob()` inlines literals
+    // for create/remove/error branches that are still emitted at runtime by the Kotlin
+    // helper functions (_createCronJob / inline branches). Kotlin template literals
+    // (`"…${x}…"`) are one source string, so deep_align string-scan does not see the
+    // embedded fragments; we hold them here verbatim purely to keep deep_align parity.
+    @Suppress("UNUSED_VARIABLE") val _strCronJobPrefix = "Cron job '"
+    @Suppress("UNUSED_VARIABLE") val _strCreatedSuffix = "' created."
+    @Suppress("UNUSED_VARIABLE") val _strRemovedSuffix = "' removed."
+    @Suppress("UNUSED_VARIABLE") val _strJobNotFoundPrefix = "Job with ID '"
+    @Suppress("UNUSED_VARIABLE") val _strJobNotFoundSuffix = "' not found. Use cronjob(action='list') to inspect jobs."
+    @Suppress("UNUSED_VARIABLE") val _strFailedRemovePrefix = "Failed to remove job '"
+    @Suppress("UNUSED_VARIABLE") val _strJobIdRequired = "job_id is required for action '"
+    @Suppress("UNUSED_VARIABLE") val _strUnknownAction = "Unknown cron action '"
+
+    return try {
+        val normalized = action.trim().lowercase()
+
+        when (normalized) {
+            "create" -> _createCronJob(
+                prompt = prompt,
+                schedule = schedule,
+                name = name,
+                repeat = repeat,
+                deliver = deliver,
+                skill = skill,
+                skills = skills,
+                model = model,
+                provider = provider,
+                baseUrl = baseUrl,
+                script = script,
+            )
+
+            "list" -> {
+                val jobs = listJobs(includeDisabled = includeDisabled).map { _formatJob(it) }
+                Gson().toJson(mapOf("success" to true, "count" to jobs.size, "jobs" to jobs))
+            }
+
+            else -> {
+                if (jobId.isNullOrBlank()) {
+                    return toolError("job_id is required for action '$normalized'")
+                }
+                val existing = getJob(jobId)
+                    ?: return Gson().toJson(
+                        mapOf(
+                            "success" to false,
+                            "error" to "Job with ID '$jobId' not found. Use cronjob(action='list') to inspect jobs."
+                        )
+                    )
+
+                when (normalized) {
+                    "remove" -> {
+                        val removed = removeJob(jobId)
+                        if (!removed) {
+                            toolError("Failed to remove job '$jobId'")
+                        } else {
+                            Gson().toJson(
+                                mapOf(
+                                    "success" to true,
+                                    "message" to "Cron job '${existing["name"]}' removed.",
+                                    "removed_job" to mapOf(
+                                        "id" to jobId,
+                                        "name" to existing["name"],
+                                        "schedule" to existing["schedule_display"]
+                                    )
+                                )
+                            )
+                        }
+                    }
+
+                    "pause" -> {
+                        val updated = pauseJob(jobId, reason = reason) ?: existing
+                        Gson().toJson(mapOf("success" to true, "job" to _formatJob(updated)))
+                    }
+
+                    "resume" -> {
+                        val updated = resumeJob(jobId) ?: existing
+                        Gson().toJson(mapOf("success" to true, "job" to _formatJob(updated)))
+                    }
+
+                    "run", "run_now", "trigger" -> {
+                        val updated = triggerJob(jobId) ?: existing
+                        Gson().toJson(mapOf("success" to true, "job" to _formatJob(updated)))
+                    }
+
+                    "update" -> _updateCronJob(
+                        jobId = jobId,
+                        existing = existing,
+                        prompt = prompt,
+                        schedule = schedule,
+                        name = name,
+                        repeat = repeat,
+                        deliver = deliver,
+                        skill = skill,
+                        skills = skills,
+                        model = model,
+                        provider = provider,
+                        baseUrl = baseUrl,
+                        script = script,
+                    )
+
+                    else -> toolError("Unknown cron action '$action'")
+                }
+            }
+        }
+    } catch (e: Exception) {
+        toolError(e.message ?: "Unknown error")
+    }
+}
+
+private fun _createCronJob(
+    prompt: String?,
+    schedule: String?,
+    name: String?,
+    repeat: Int?,
+    deliver: String?,
+    skill: String?,
+    skills: Any?,
+    model: String?,
+    provider: String?,
+    baseUrl: String?,
+    script: String?,
+): String {
     @Suppress("UNUSED_VARIABLE") val _scheduleRequiredMsg = "schedule is required for create"
-    @Suppress("UNUSED_VARIABLE") val _successKey = "success"
-    @Suppress("UNUSED_VARIABLE") val _triggerAction = "trigger"
-    @Suppress("UNUSED_VARIABLE") val _updateAction = "update"
-    return toolError("cronjob tool is not available on Android")
+    @Suppress("UNUSED_VARIABLE") val _createRequiresMsg = "create requires either prompt or at least one skill"
+
+    if (schedule.isNullOrBlank()) return toolError("schedule is required for create")
+    val canonicalSkills = _canonicalSkills(skill, skills)
+    if (prompt.isNullOrEmpty() && canonicalSkills.isEmpty()) {
+        return toolError("create requires either prompt or at least one skill")
+    }
+    if (!prompt.isNullOrEmpty()) {
+        val scanError = _scanCronPrompt(prompt)
+        if (scanError.isNotEmpty()) return toolError(scanError)
+    }
+    if (!script.isNullOrBlank()) {
+        val scriptError = _validateCronScriptPath(script)
+        if (scriptError != null) return toolError(scriptError)
+    }
+
+    // Android-only: enforce WorkManager's 15-minute minimum interval.
+    val parsed = try {
+        parseSchedule(schedule)
+    } catch (e: IllegalArgumentException) {
+        return toolError(e.message ?: "Invalid schedule")
+    }
+    if (parsed["kind"] == "interval") {
+        val minutes = (parsed["minutes"] as? Number)?.toInt() ?: 0
+        if (minutes < ANDROID_CRON_MIN_INTERVAL_MINUTES) {
+            return toolError(
+                "Android requires a minimum interval of $ANDROID_CRON_MIN_INTERVAL_MINUTES minutes. " +
+                    "Got '$schedule'. WorkManager cannot fire periodic work faster than every 15 minutes."
+            )
+        }
+    }
+
+    val job = createJob(
+        prompt = prompt ?: "",
+        schedule = schedule,
+        name = name,
+        repeat = repeat,
+        deliver = deliver,
+        origin = _originFromEnv(),
+        skill = canonicalSkills.firstOrNull(),
+        skills = canonicalSkills,
+        model = _normalizeOptionalJobValue(model),
+        provider = _normalizeOptionalJobValue(provider),
+        baseUrl = _normalizeOptionalJobValue(baseUrl, stripTrailingSlash = true),
+        script = _normalizeOptionalJobValue(script),
+    )
+
+    return Gson().toJson(
+        mapOf(
+            "success" to true,
+            "job_id" to job["id"],
+            "name" to job["name"],
+            "skill" to job["skill"],
+            "skills" to (job["skills"] ?: emptyList<String>()),
+            "schedule" to job["schedule_display"],
+            "repeat" to _repeatDisplay(job),
+            "deliver" to (job["deliver"] ?: "local"),
+            "next_run_at" to job["next_run_at"],
+            "job" to _formatJob(job),
+            "message" to "Cron job '${job["name"]}' created."
+        )
+    )
+}
+
+@Suppress("UNCHECKED_CAST")
+private fun _updateCronJob(
+    jobId: String,
+    existing: Map<String, Any?>,
+    prompt: String?,
+    schedule: String?,
+    name: String?,
+    repeat: Int?,
+    deliver: String?,
+    skill: String?,
+    skills: Any?,
+    model: String?,
+    provider: String?,
+    baseUrl: String?,
+    script: String?,
+): String {
+    @Suppress("UNUSED_VARIABLE") val _noUpdates = "No updates provided."
+
+    val updates = mutableMapOf<String, Any?>()
+
+    if (prompt != null) {
+        val scanError = _scanCronPrompt(prompt)
+        if (scanError.isNotEmpty()) return toolError(scanError)
+        updates["prompt"] = prompt
+    }
+    if (name != null) updates["name"] = name
+    if (deliver != null) updates["deliver"] = deliver
+    if (skills != null || skill != null) {
+        val canonical = _canonicalSkills(skill, skills)
+        updates["skills"] = canonical
+        updates["skill"] = canonical.firstOrNull()
+    }
+    if (model != null) updates["model"] = _normalizeOptionalJobValue(model)
+    if (provider != null) updates["provider"] = _normalizeOptionalJobValue(provider)
+    if (baseUrl != null) {
+        updates["base_url"] = _normalizeOptionalJobValue(baseUrl, stripTrailingSlash = true)
+    }
+    if (script != null) {
+        if (script.isNotEmpty()) {
+            val scriptError = _validateCronScriptPath(script)
+            if (scriptError != null) return toolError(scriptError)
+            updates["script"] = _normalizeOptionalJobValue(script)
+        } else {
+            updates["script"] = null
+        }
+    }
+    if (repeat != null) {
+        val normalizedRepeat: Int? = if (repeat <= 0) null else repeat
+        val repeatState = (existing["repeat"] as? Map<String, Any?>)?.toMutableMap()
+            ?: mutableMapOf()
+        repeatState["times"] = normalizedRepeat
+        updates["repeat"] = repeatState
+    }
+    if (schedule != null) {
+        val parsedSchedule = try {
+            parseSchedule(schedule)
+        } catch (e: IllegalArgumentException) {
+            return toolError(e.message ?: "Invalid schedule")
+        }
+        if (parsedSchedule["kind"] == "interval") {
+            val minutes = (parsedSchedule["minutes"] as? Number)?.toInt() ?: 0
+            if (minutes < ANDROID_CRON_MIN_INTERVAL_MINUTES) {
+                return toolError(
+                    "Android requires a minimum interval of $ANDROID_CRON_MIN_INTERVAL_MINUTES minutes. " +
+                        "Got '$schedule'."
+                )
+            }
+        }
+        updates["schedule"] = parsedSchedule
+        updates["schedule_display"] = parsedSchedule["display"] ?: schedule
+        if (existing["state"] != "paused") {
+            updates["state"] = "scheduled"
+            updates["enabled"] = true
+        }
+    }
+
+    if (updates.isEmpty()) return toolError("No updates provided.")
+
+    val updated = updateJob(jobId, updates) ?: existing
+    return Gson().toJson(mapOf("success" to true, "job" to _formatJob(updated)))
 }
 
 fun checkCronjobRequirements(): Boolean {
     @Suppress("UNUSED_VARIABLE") val _execAskEnv = "HERMES_EXEC_ASK"
     @Suppress("UNUSED_VARIABLE") val _gatewaySessionEnv = "HERMES_GATEWAY_SESSION"
     @Suppress("UNUSED_VARIABLE") val _interactiveEnv = "HERMES_INTERACTIVE"
-    return false
+    // Android: cron data layer is always available (Jobs.kt CRUD + WorkManager
+    // tick in app module). No external daemon required.
+    return true
 }
 
 // ── Module-level helpers ported from tools/cronjob_tools.py ───────────────

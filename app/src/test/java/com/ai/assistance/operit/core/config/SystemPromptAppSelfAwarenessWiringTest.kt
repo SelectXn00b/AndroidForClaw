@@ -175,6 +175,48 @@ class SystemPromptAppSelfAwarenessWiringTest {
         )
     }
 
+    /**
+     * TC-AGENT-031-k: APP_SELF_AWARENESS 中英两段都必须 mention `cronjob` + `15` 分钟下限语义。
+     * 让 agent 知道自己有定时任务工具且懂 WorkManager 平台限制。
+     */
+    @Test
+    fun `TC-AGENT-031-k both prompt sections mention cronjob tool and 15-minute android limit`() {
+        // 英文：必须 mention `cronjob` + `15`（数字字面）+ `minutes` / `minimum` 任一
+        assertTrue(
+            "APP_SELF_AWARENESS_EN 必须 mention `cronjob` —— " +
+                "agent 不知道这个工具存在就不会主动给用户登记定时任务。\n" +
+                "实际块（前 1500 chars）:\n${selfAwarenessEn.take(1500)}",
+            selfAwarenessEn.contains("cronjob")
+        )
+        assertTrue(
+            "APP_SELF_AWARENESS_EN 必须含数字 `15` —— Android WorkManager 周期下限。",
+            selfAwarenessEn.contains("15")
+        )
+        assertTrue(
+            "APP_SELF_AWARENESS_EN 必须含 `minute` 或 `minimum` 字面值 —— 表达\"下限\"语义。",
+            selfAwarenessEn.contains("minute") || selfAwarenessEn.contains("minimum")
+        )
+
+        // 中文：必须 mention `cronjob` + `15` + 「分钟」+ 「计划任务」或「定时」任一
+        assertTrue(
+            "APP_SELF_AWARENESS_CN 必须 mention `cronjob` —— 中英文 prompt 一致。",
+            selfAwarenessCn.contains("cronjob")
+        )
+        assertTrue(
+            "APP_SELF_AWARENESS_CN 必须含数字 `15` —— Android WorkManager 周期下限。",
+            selfAwarenessCn.contains("15")
+        )
+        assertTrue(
+            "APP_SELF_AWARENESS_CN 必须含「分钟」字面字符。",
+            selfAwarenessCn.contains("分钟")
+        )
+        assertTrue(
+            "APP_SELF_AWARENESS_CN 必须含「计划任务」或「定时」字面字符 —— " +
+                "中文 locale 把\"cronjob 工具\"语义下沉到 prompt。",
+            selfAwarenessCn.contains("计划任务") || selfAwarenessCn.contains("定时")
+        )
+    }
+
     // ----- helpers -----
 
     /** 抽两个 marker 之间的内容（含 startMarker 那行） */

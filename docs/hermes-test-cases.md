@@ -509,7 +509,7 @@ R-AGENT-012 是 R-AGENT-011 的 UI 兜底：R-011 已把 `#gateway:<platform>` t
 | TC-AGENT-016-c | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | 抽取出的每条 fact 必须独立落库 + 打 `#auto_extracted` tag —— 源码必须含 `"#auto_extracted"` 字面字符串 + `repository.saveMemory(` 调用 + `repository.addTagToMemory(` 调用。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-c each fact saved separately with auto_extracted tag` 🟢 |
 | TC-AGENT-016-d | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | 单条 fact content 必须 800 字符截断（防超长 LLM 输出爆 ObjectBox）—— 源码 fact 抽取块内含 `take(800)` 调用或同名 `MAX_FACT_*_CHARS` / `FACT_CONTENT_LIMIT` = `800` 常量。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-d fact content truncated at 800 chars` 🟢 |
 | TC-AGENT-016-e | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | 单次抽取最多 20 条 fact（防 LLM 失控塞 200 行）—— 源码 fact 抽取块内含 `take(20)` / `coerceAtMost(20)` / 同名 `MAX_FACT_COUNT` = `20` 常量。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-e fact count capped at 20` 🟢 |
-| TC-AGENT-016-f | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | 必须打 `#chat:` 来源 tag + `#auto_summary_id:` 父节点引用 tag —— 源码 fact 抽取块内含 `"#chat:"` 字面字符串 + `"#auto_summary_id:"` 或等价 parent tag 字面字符串。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-f facts get chat tag and parent summary id tag` 🟢 |
+| TC-AGENT-016-f | R-AGENT-016 / R-AGENT-027 | 源码扫描：`MessageCoordinationDelegate.kt` | 必须打 `#chat:` 来源 tag —— 源码 fact 抽取块内含 `"#chat:"` 字面字符串。**R-AGENT-027 (2026-06-13)** 红线：函数体不得再写 `#auto_summary_id:` tag（已认定为设计冗余 + 孤儿污染源）。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-f facts get chat tag` 🟢 |
 | TC-AGENT-016-g | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | 去重防御：抽取流程必须先查 `searchMemories(...)` 用 `tags=listOf("#auto_extracted")` 过滤已有节点 —— 源码 fact 抽取块内含 `searchMemories(` 调用且 `tags` 参数中含 `"#auto_extracted"` 字面值，或等价的 dedup 路径。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-g fact extractor dedupes against existing auto_extracted nodes` 🟢 |
 | TC-AGENT-016-h | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | 失败容忍：fact 抽取整段必须 try-catch 包围（解析异常 / 单条 saveMemory 异常都不能拖垮父 `#auto_summary` 落库）—— fact 抽取函数体含 `try {` + 对应 `catch (`。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-h fact extractor wrapped in try catch` 🟢 |
 | TC-AGENT-016-i | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | i18n 完整性：fact 抽取函数必须能根据 `useEnglish` 选 `SUMMARY_SECTION_KEY_INFO_EN` 或 `..._CN` 段头 —— 函数签名含 `useEnglish` 形参 / 函数体同时引用 `SUMMARY_SECTION_KEY_INFO_CN` 和 `SUMMARY_SECTION_KEY_INFO_EN`。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-i fact extractor handles both languages` 🟢 |
@@ -1334,6 +1334,41 @@ inline `<think>` 提取仅作 fallback（兼容老历史）。
 | TC-CRON-011-a | R-CRON-001 | `addJob` 再读回 | 持久化 | integration | `JobsTest#persistence roundtrip` ✅ |
 | TC-CRON-012-a | R-CRON-001 | approve mode=`"no"` | 阻塞 | unit | `JobsTest#approval mode enforced` ✅ |
 | TC-CRON-013-a | R-CRON-001 | Android 启动 | daemon 不起 | integration | `JobsTest#parseSchedule cron-expression is rejected on Android` 🟢 |
+
+---
+
+## 域 AGENT — Cron Wiring (R-AGENT-031)
+
+R-AGENT-031 把 hermes-android 已存在的 cron 数据层（`Jobs.kt` CRUD / 状态机已 1:1 对齐 Python 上游）和 agent 执行链路接通，让 agent 真的能注册定时任务，每 15 分钟由 WorkManager tick 一次扫描到期任务，由 app 模块的 `CronAgentRunner` headlessly 调起 agent loop（复用 `ExternalChatRequestExecutor`），最终把回执写回原 chat（走 `ChatHistoryManager.addMessage` 持久化层 + 发 `GatewayChatEventBus.Event.ProcessingCompleted` 触发 UI 刷新）。
+
+**架构合规（按用户决策 1+3+4）**：
+- **路径 1**：hermes-android 模块只持有数据层，不引入 Python 上游没有的注入点（如 Scheduler 静态 lambda）。所有调度 / agent 调用 / 写回 chat 都在 app 模块（`cron/CronTickWorker.kt`、`cron/CronAgentRunner.kt`）。`Scheduler.runJob()` / `deliverResult()` 在 hermes-android 里**保持 stub**（带 KDoc 注明：Android 平台由 app 模块通过 WorkManager 接管，等价于 Python upstream daemon 的 platform-specific 替代品）。
+- **路径 3**：递归 cronjob 软防（prompt-injection）。CronAgentRunner 在调起 agent 前给 prompt 追加 `[CRON CONTEXT] / [CRON 上下文]` 前缀，告知 agent 这是被 cron 触发的回合、避免在此回合再注册 cronjob。
+- **路径 4**：写回路径走持久化层 `ChatHistoryManager.addMessage(chatId, ChatMessage)`（已被 `HermesGatewayController` / `WebChatHttpBridge` / `StandardChatManagerTool` 等 6+ 处 headless 调用方使用），不走 UI 绑定的 `ChatHistoryDelegate`。Worker 写完 DB 再 `GatewayChatEventBus.events.emit(Event.ProcessingCompleted(chatId))` 触发活动 chat 面板的 `reloadChatMessagesSmart`（`ChatHistoryDelegate.kt:225`）。
+
+测试策略：
+- **源码扫描**（unit-scan）覆盖 wiring 关键字面值：CronjobTools 的 action 分发分支、CronTickWorker 的 PeriodicWork 配置、CronAgentRunner 的 prompt 前缀 + ChatHistoryManager 路径、OperitApplication 的 enqueue 调用、SystemPromptConfig 的 cronjob 提及。
+- **行为单测**（unit）覆盖 CronjobTools 的 dispatch 路径：create / list / get / update / pause / resume / trigger / remove / run（同步触发）/ logs。Min-interval 15 分钟门禁守在 create 入口前。
+- 不做 WorkManager 集成测试（依赖 Robolectric workmanager fixture，成本高）；E2E 由手测兜底（用户在 chat 里 "每 15 分钟 ping 我一次" → 等 ≥15 分钟看是否真的发回 chat）。
+
+| TC ID | R-ID | 输入 / 触发 | 期望 | 测试类型 | 实现 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-031-a | R-AGENT-031 | 源码扫描：`hermes-android/.../tools/CronjobTools.kt` | `checkCronjobRequirements()` 函数体必须 `return true`（Android 现已有 cron 数据层 + app 模块 Worker 执行链路）。 | unit-scan | `CronjobToolsWiringTest#TC-AGENT-031-a checkCronjobRequirements returns true` 🔴 |
+| TC-AGENT-031-b | R-AGENT-031 | 源码扫描：`CronjobTools.cronjob(...)` 函数体 | 必须**不**含 `"cronjob tool is not available on Android"` 字面值；必须含 `when` 分支字面值 `"create"` / `"list"` / `"get"` / `"update"` / `"pause"` / `"resume"` / `"trigger"` / `"remove"` / `"run"`（dispatch 到 `Jobs.kt` 的对应 CRUD 函数）。 | unit-scan | `CronjobToolsWiringTest#TC-AGENT-031-b cronjob dispatcher covers all CRUD actions` 🔴 |
+| TC-AGENT-031-c | R-AGENT-031 | 源码扫描：`CronjobTools.cronjob` 的 `"create"` 分支 | 必须含 15 分钟最小间隔守卫字面值（如 `15` + `minimum interval` / `min interval` 任一），任何 schedule 解析后小于 15 分钟的 interval 都返回 `toolError`。 | unit-scan | `CronjobToolsWiringTest#TC-AGENT-031-c create branch enforces 15 minute minimum interval` 🔴 |
+| TC-AGENT-031-d | R-AGENT-031 | 源码扫描：`hermes-android/.../cron/Scheduler.kt` 文件头注释或顶部 KDoc | 必须含字面值 `app module` 或 `WorkManager` 任一（注明 Android 平台的真实执行链路在 app 模块的 CronTickWorker，避免后续 reviewer 误以为 Scheduler.runJob 是 Android 上的真实入口）。 | unit-scan | `CronWiringSchedulerStubTest#TC-AGENT-031-d Scheduler file documents app-module override` 🔴 |
+| TC-AGENT-031-e | R-AGENT-031 | 源码扫描：`app/.../cron/CronTickWorker.kt` | 必须存在 `class CronTickWorker(...) : CoroutineWorker(...)`；必须含 `companion object` 暴露 `enqueue(context: Context)`；必须用 `PeriodicWorkRequest` + `15` + `TimeUnit.MINUTES` 字面值；必须用 `ExistingPeriodicWorkPolicy.KEEP` 字面值（idempotent re-enqueue）。 | unit-scan | `CronTickWorkerWiringTest#TC-AGENT-031-e CronTickWorker is PeriodicWork at 15 min KEEP policy` 🔴 |
+| TC-AGENT-031-f | R-AGENT-031 | 源码扫描：`CronTickWorker.doWork()` 函数体 | 必须调 `Jobs.getDueJobs()`；对每个 due job 必须先 `Jobs.advanceNextRun(jobId)` 再调 `CronAgentRunner` 的 run 方法；必须用 try/catch 包住单个 job 的执行（一个 job 失败不影响其他）。 | unit-scan | `CronTickWorkerWiringTest#TC-AGENT-031-f doWork iterates getDueJobs and isolates failures` 🔴 |
+| TC-AGENT-031-g | R-AGENT-031 | 源码扫描：`app/.../cron/CronAgentRunner.kt` | 必须存在 `CronAgentRunner` 类 / object；必须有 `run(context, job)` 入口；调起 agent 前的 prompt 必须含字面值 `[CRON CONTEXT]` 与 `[CRON 上下文]`（双语前缀，告知 agent 当前是被 cron 触发的回合）。 | unit-scan | `CronAgentRunnerWiringTest#TC-AGENT-031-g run prepends bilingual cron context tags` 🔴 |
+| TC-AGENT-031-h | R-AGENT-031 | 源码扫描：`CronAgentRunner` 的 deliver 路径 | 必须含字面值 `ChatHistoryManager.getInstance(` 和 `.addMessage(`（走持久化层）；**不**得含 `ChatHistoryDelegate.` 字面值（守 UI-bound 边界）；必须含 `GatewayChatEventBus.events.emit(` + `Event.ProcessingCompleted(` 字面值（触发 UI 刷新）。 | unit-scan | `CronAgentRunnerWiringTest#TC-AGENT-031-h deliver writes via ChatHistoryManager and emits ProcessingCompleted` 🔴 |
+| TC-AGENT-031-i | R-AGENT-031 | 源码扫描：`CronAgentRunner` 的 deliver 路径 | 必须调 `Jobs.markJobRun(jobId, success, error, deliveryError)` 把执行结果写回数据层；必须调 `Jobs.saveJobOutput(jobId, output)` 持久化 agent 回复全文。 | unit-scan | `CronAgentRunnerWiringTest#TC-AGENT-031-i deliver records run via markJobRun and saveJobOutput` 🔴 |
+| TC-AGENT-031-j | R-AGENT-031 | 源码扫描：`app/.../OperitApplication.kt` 的 `onCreate()` | 必须 `import com.ai.assistance.operit.core.cron.CronTickWorker` 并含 `CronTickWorker.enqueue(this)` 字面值调用。 | unit-scan | `CronWiringApplicationStartupTest#TC-AGENT-031-j OperitApplication enqueues CronTickWorker on startup` 🔴 |
+| TC-AGENT-031-k | R-AGENT-031 | 源码扫描：`core/config/SystemPromptConfig.kt` 的 `APP_SELF_AWARENESS_EN` / `APP_SELF_AWARENESS_CN` 常量体 | 两个常量都必须 mention `cronjob` 工具名 + `15` 字面值（告知 agent 平台最小间隔限制）；中文段必须含「定时」或「计划任务」任一字面字符。 | unit-scan | `SystemPromptAppSelfAwarenessWiringTest#TC-AGENT-031-k self-awareness mentions cronjob tool with 15-minute interval` 🔴 |
+| TC-AGENT-031-l | R-AGENT-031 | 行为单测：调 `CronjobTools.cronjob(action="create", prompt="ping me", schedule="every 30 minutes", ...)` | 返回字符串里含创建后 job 的 `id` / `next_run`；`Jobs.listJobs()` 应能查到该 job。**Deferred (needs Robolectric)** —— `createJob` 经 `getHermesHome() → getAppContext().filesDir`，纯单测无 Context；与 `JobsTest` 同处理，靠 §3 E2E + 手测兜底。 | unit | `CronjobToolsBehaviorTest#TC-AGENT-031-l create then list roundtrips through Jobs (deferred)` 🔴 |
+| TC-AGENT-031-m | R-AGENT-031 | 行为单测：调 `CronjobTools.cronjob(action="create", schedule="every 5 minutes", ...)` | 必须返回 `toolError`，错误消息含 `15` 字面值（min interval 守卫）。Guard 在 `createJob()` 调用前就 return，所以**不**需要 Context。 | unit | `CronjobToolsBehaviorTest#TC-AGENT-031-m create denies sub-15-minute interval` 🔴 |
+| TC-AGENT-031-n | R-AGENT-031 | 行为单测：调 `CronjobTools.cronjob(action="list")` 但 Jobs 表为空 | 必须返回空列表的人类可读字符串（`No jobs` / `没有定时任务` 任一），**不**得抛异常或返回 toolError。**Deferred (needs Robolectric)** —— `listJobs()` 经 `getHermesHome()`，纯单测无 Context；靠 §3 E2E + 手测兜底。 | unit | `CronjobToolsBehaviorTest#TC-AGENT-031-n list on empty store returns human-readable empty result (deferred)` 🔴 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
 
 ---
 

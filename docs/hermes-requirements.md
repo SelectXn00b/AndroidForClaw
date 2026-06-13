@@ -380,7 +380,7 @@ Hermes Android 翻译已半成品：`hermes-android/.../MemoryManager.kt:339-362
 - 用 `SUMMARY_MARKER_*` 结尾分隔线（或下个 `=` 起头行）定位段尾
 - 对节内每行 `trim()` 之后保留以 `- ` / `* ` / `• ` 开头的 bullet line（容错三种 marker）
 - 剥掉 bullet 前缀后取首句（或 `take(800)` 防超长），一行一条 fact
-- 每条 fact 独立调 `memoryRepository.saveMemory(Memory(...))` 落库 + 打 `#auto_extracted` + `#chat:$chatId` + `#auto_summary_id:$parentMemoryId`
+- 每条 fact 独立调 `memoryRepository.saveMemory(Memory(...))` 落库 + 打 `#auto_extracted` + `#chat:$chatId`（R-AGENT-027 删除原本的 `#auto_summary_id:$parentMemoryId` 第三 tag —— 全代码库无读取方且 R-AGENT-026 keepDecision=false 路径产生孤儿污染）
 
 **架构合规（§6 红线）**：
 - **不**改 `SUMMARY_PROMPT` / `SUMMARY_PROMPT_EN` ——既有 prompt 已经稳定输出 `【关键事实】 / [Key Facts]` bullet 段，零 prompt 风险，纯下游解析。
@@ -407,7 +407,7 @@ Hermes Android 翻译已半成品：`hermes-android/.../MemoryManager.kt:339-362
   - `val factId = repository.saveMemory(factMemory)`
   - `repository.addTagToMemory(factMemory, "#auto_extracted")`
   - `repository.addTagToMemory(factMemory, "#chat:$chatId")`
-  - `repository.addTagToMemory(factMemory, "#auto_summary_id:$parentMemoryId")` —— 用于关联回父 `#auto_summary` 整段摘要，方便用户在 MemoryScreen 反查"这条事实是从哪段摘要来的"
+  - ~~`repository.addTagToMemory(factMemory, "#auto_summary_id:$parentMemoryId")`~~ —— **R-AGENT-027 (2026-06-13) 删除**：全代码库无任何读取方；R-AGENT-026 keepDecision=false 路径会产生 `#auto_summary_id:-1` 孤儿污染；`#chat:<chatId>` 已足够提供会话级溯源
 - **去重（最小防御）**:
   - 落库前调 `repository.searchMemories(query = factContent, limit = 3, tags = listOf("#auto_extracted"))`，命中已有 `#auto_extracted` 节点且其 `content` `equals(factContent, ignoreCase = true)` → 跳过本次落库（避免同一条事实在多次自动摘要里重复积累——R-AGENT-013 每次自动摘要都会重跑全段抽取，没有去重就会爆 N 倍冗余）。
   - 严格相等比对（不做语义去重）—— LLM 输出同一事实通常字面一致；语义级去重（"我喜欢 Tailwind" vs "我用 Tailwind 写样式"）由用户在 MemoryScreen 手动合并兜底。
@@ -759,3 +759,120 @@ CONFIG 原先的三条 R-CONFIG-001..003（Preferences / ConfigBuilder / Control
 - 单元测试：源码字符串扫描（与 `SystemPromptMemoryMaintenanceWiringTest.kt` 同范式），不依赖 Android Context / LLM。
 - §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 当前基线 390。本改动**只动 app/ 模块**（prompt 常量 + 单测），不动 hermes-android/。
 - **手测验收**: 安装新 APK 后开 logcat（或手动观察 chat 行为），用户问 "我能在哪里管理记忆 / 我能录制技能吗 / 工具箱里有什么" 时 agent 回答应包含对应 UI 入口的导航说明，而非"我没办法 / 我可以帮你做 X"。
+
+### R-AGENT-031: 接通 hermes-android cron 子系统（cronjob CRUD + WorkManager tick + Repository 注回）
+**来源**:
+- 用户 2026-06-13 直接指令链：① "app 有心跳、计时器，等等这些功能有的吗？" → ② "选择1，你自己全部处理"（接通 hermes-android cron）→ ③ AskUserQuestion 提交 3 个风险点后用户回 "1+3+4"（hermes-android 只动数据、prompt-injection 软法防递归、Worker 走 Repository 而不是 Delegate）
+- Python 上游 `reference/hermes-agent/cron/scheduler.py` + `cron/jobs.py` + `tools/cronjob_tools.py` + `gateway/run.py::_start_cron_ticker` 是 source of truth；Kotlin 1:1 翻译 `hermes-android/.../cron/Jobs.kt`（已 real）+ `Scheduler.kt`（tick 框架 real，runJob/deliverResult 是 stub）+ `tools/CronjobTools.kt`（CRUD 入口 stub）+ `gateway/Run.kt::_startCronTicker = null`（stub）
+- R-CRON-001（L642 一行骨架占位）由本需求承接为完整实现规格
+
+**背景**:
+- **App 当前缺失 cron 能力**：`AIToolHandler` 里 `cronjob` schema 暴露但 `CronjobTools.cronjob()` 直接返回 `toolError("cronjob tool is not available on Android")`；`checkCronjobRequirements()` 永远 `false`；Scheduler 没有任何 ticker 拉它跑；`Scheduler.runJob` 写死 `finalResponse = ""`、`deliverResult` 只 `logger.info("would deliver ...")` —— 全链路 0 输出。
+- **Python vs Android 平台差异**：Python `_start_cron_ticker` 用 `threading.Thread(daemon=True)` 60s loop；`run_job` 直接调 `AIAgent(...).chat(...)`；`_deliver_result` 走平台 adapter（IM webhook、stdout）。Android 三处不通：(1) 长驻线程在 Doze 下不可靠，必须 WorkManager `PeriodicWorkRequest` 15min；(2) `HermesAgentLoop` 实例化要 provider/key/SessionDB 等 UI 上下文，无法 in-Worker 直接构造（已有 `ExternalChatRequestExecutor` 是这条路的 headless 包装）；(3) "deliver" 目标是回到原 chat 而非外部 IM。
+- **Python 上游的 `disabled_toolsets=['cronjob','messaging','clarify']` 在 Android 没法 1:1 翻译**：`HermesAgentLoop` 没有 `disabled_toolsets` 形参（修签名 = 破坏性变更，本次不做）。改用 prompt-injection 软法：cron 触发的 agent 在 system prompt 末尾追加一段"运行在 cron 上下文，不要再调 cronjob 工具创建任务"，靠 LLM 遵循软法。承认弱于上游硬约束，但避免改动 1:1 翻译过的核心 loop 接口。
+- **Worker 不走 ChatHistoryDelegate**：Delegate 是 UI 层（持有 `_chatHistory` MutableStateFlow，只在 UI 流程里被调）。直接持久化层是 `ChatHistoryManager.getInstance(appContext).addMessage(chatId, message)`（Room DAO + Mutex，suspend，已有多个 headless 调用方：`HermesGatewayController` / `WebChatHttpBridge` / `StandardChatManagerTool`）。
+- **MVP scope（按用户 1+3+4 决策）**：cronjob 工具 CRUD（5 actions: create/list/update/remove/run）+ WorkManager 15min tick + ExternalChatRequestExecutor 复用 + cron context prompt 软防御 + ChatHistoryManager.addMessage 写回。**不**覆盖：cron 表达式（保 R-CRON-013 拒 cron-expr 红线不动）/ subprocess 脚本（`_runJobScript` 保持 stub）/ 多平台 deliver（webhook / 文件 IO 留 follow-up）/ HermesAgentLoop 增加 `disabled_toolsets` 形参（保 1:1 接口）/ pause/resume action（落上游字面 schema 但暂返 not-yet-implemented）。
+
+**架构合规（按用户选 1+3+4）**:
+- **路径 1（hermes-android 只承担数据层）**：`hermes-android/.../cron/Jobs.kt` 是数据 CRUD（real）；`Scheduler.tick()` 框架（real）只做 due-jobs 迭代 + advanceNextRun + saveJobOutput + markJobRun。**所有"调 agent + 写回 chat"的胶水代码落在 app 模块**（`OperitApplication`/`CronTickWorker`/`CronAgentRunner`），hermes-android 模块**不依赖** app（保依赖方向：app → hermes-android，禁反向）。Scheduler 不加任何静态 var lambda 注入位（避免 deep_align 抓"Python 没有的字段"），改为：
+  - `CronTickWorker`（在 app 模块）用 `Jobs.getDueJobs()` 直接拿到期 job 列表，**自己**走 advanceNextRun → invoke runner → saveJobOutput → markJobRun → deliverer 流水线
+  - `Scheduler.runJob` / `Scheduler.deliverResult` 两个 stub 不动（保留它们作为"如果将来需要 hermes-android 内自带 ticker 时的接口形状"），仅在文件头加注释说明 Android 由 app 模块的 CronTickWorker 接管这两步
+- **路径 3（递归 cronjob 走 prompt-level 软防御）**：cron 触发的 agent 调用前，在 prompt 末尾追加一段 cron context 警告。技术实现：
+  - `ExternalChatRequest` 已有 `message: String` 字段（用户 prompt）。在 `CronAgentRunner.run` 拼 ExternalChatRequest 时，把 `message` 设为 `prompt + "\n\n[CRON CONTEXT] You are running under cron tick. Do not call cronjob tool to create new schedules; instead just answer the user's prompt."`（中文 prompt 用中文 marker；按 prompt 是否含中文字符自动选）
+  - 不修改 `ExternalChatRequestExecutor` 内部（避免影响其他 entry point），只在 cron 调用方拼 message 时附加
+- **路径 4（Worker 用 ChatHistoryManager 而非 Delegate）**：
+  - 调 `ChatHistoryManager.getInstance(appContext).addMessage(chatId, ChatMessage(sender="ai", content=...))` 直接写 Room
+  - sidebar `chatHistoriesFlow` 自动刷新（已是 Room Flow）
+  - 活跃 chat 的 `_chatHistory` MutableStateFlow（在 ChatHistoryDelegate 内）走既有 `GatewayChatEventBus.events.emit(Event.ProcessingCompleted(chatId, ...))`：`ChatHistoryDelegate.kt:223-227` 已订阅这个 event 并自动调 `reloadChatMessagesSmart`。复用既有 event bus，零新增 bus。
+- **不引入 cron-utils / Quartz**：保 R-CRON-013 在 Android 拒 cron-expr 不变。
+- **不修改 HermesAgentLoop 形参**：保 1:1 翻译接口。
+- **15min 下限是 OS 硬约束**：WorkManager `PeriodicWorkRequest` < 15min 会 silently round up；在 cronjob() API 边界硬性拒绝并显式告知 agent。
+
+**行为**:
+- **CronjobTools.cronjob 入口接通（`hermes-android/.../tools/CronjobTools.kt`）**：
+  - 替换 `return toolError("cronjob tool is not available on Android", ...)` 为按 `action` 分派：
+    - `create`: 调 `_scanCronPrompt(prompt)` 做威胁扫描 → 若返回非空提示则 `toolError(scanWarning)`；通过则**预校验** `every` 字段（若 < 15min → toolError）→ 调 `Jobs.createJob(name, prompt, schedule, repeat=..., skills=..., origin=..., deliver=...)` → 用 `_formatJob(job)` 序列化返回 `toolResult(...)`
+    - `list`: 调 `Jobs.listJobs()` → `map { _formatJob(it) }` 包入 `toolResult`
+    - `update`: 同 create 的 every 校验 + scan → 调 `Jobs.updateJob(id, ...)` → `_formatJob(...)` → `toolResult`
+    - `remove`: 调 `Jobs.removeJob(id)` → `toolResult({"removed": true, "id": id})`
+    - `run`: 调 `Jobs.triggerJob(id)`（手动触发不等 tick） → `toolResult({"triggered": true, "id": id})`
+    - `pause`/`resume`: 暂返回 `toolError("Not yet implemented on Android (use 'remove' + 'create' as workaround)")`
+    - 任何 `IllegalArgumentException`（来自 `Jobs.parseSchedule` 拒 cron-expr / 拒 every < 15min）→ 转 `toolError(e.message)` 返回 agent 友好错误
+  - **min-interval 守卫**：在调 `Jobs.createJob` / `Jobs.updateJob` 之前预先解析 `every` 字段，若解析后 interval < 15 min → 返回 `toolError("Schedule interval below 15 minutes is not supported on Android due to WorkManager constraints. Use 'every 15m' or longer.")`
+  - `checkCronjobRequirements(): Boolean` 从 `false` 改为 **`true`**（Android 现在支持 cron）
+- **Scheduler 文件头注释**（`hermes-android/.../cron/Scheduler.kt`）：
+  - 在 `runJob` / `deliverResult` 两个 stub 上方加 KDoc 说明：`* On Android the cron pipeline is driven by the app module's CronTickWorker, which uses Jobs.getDueJobs() directly. This stub is preserved for hermes-android-internal callers and remains unimplemented on Android.`
+  - **不**修改函数体（保留 stub 不动，避免新增"Python 上游没有的字段"被 deep_align 抓住）
+  - **不**新增 `agentRunner` / `resultDeliverer` 静态 var
+- **CronTickWorker 新建（`app/.../cron/CronTickWorker.kt`，注意是 app 模块不是 hermes-android）**：
+  - 继承 `androidx.work.CoroutineWorker`，`override suspend fun doWork(): Result`
+  - body 流程（按 Python `Scheduler.tick` 顺序但全部在 app 模块走）：
+    1. `Jobs.acquireLock()`（hermes-android 已有 `FileChannel.tryLock` 实现）；获取失败 → `Result.success()`（让下一个 tick 试）
+    2. `val due = Jobs.getDueJobs()`
+    3. for each job: `Jobs.advanceNextRun(jobId)`（at-most-once 必须先 advance）→ `runOneJob(job)`
+    4. `Jobs.releaseLock()`（finally 块）
+    5. 任何顶层 throwable → log + `Result.success()`（避免 Worker 失败导致 WorkManager 退避停排）
+  - `private suspend fun runOneJob(job)`：
+    1. 调 `CronAgentRunner(applicationContext).run(job)` → `JobRunResult`
+    2. `Jobs.saveJobOutput(jobId, fullOutputDoc)`
+    3. 若 `finalResponse` 非空 + 非 SILENT_MARKER → 调 `CronAgentRunner.deliver(job, finalResponse)`
+    4. `Jobs.markJobRun(jobId, success, errorMessage)`
+  - 伴生对象 `CronTickWorker.Companion.enqueue(context: Context)`：用 `PeriodicWorkRequestBuilder<CronTickWorker>(15, TimeUnit.MINUTES)` + `setBackoffCriteria(LINEAR, 30, SECONDS)` + `WorkManager.getInstance(ctx).enqueueUniquePeriodicWork("hermes_cron_tick", KEEP, request)`（KEEP 防 app 重启清空时间表）
+- **CronAgentRunner 新建（`app/.../cron/CronAgentRunner.kt`）**：
+  - `class CronAgentRunner(private val appContext: Context)`
+  - `suspend fun run(job: Map<String,Any?>): JobRunResult`：
+    1. 取 `prompt = job["prompt"] as String`、`origin = job["origin"] as Map<*,*>?`、`originChatId = origin?.get("chat_id") as String?`
+    2. 拼 `cronContextSuffix`：若 prompt 含 CJK 字符 → 中文版 `\n\n[CRON 上下文] 你正在 cron tick 中运行。请直接回答上面的 prompt，不要再调用 cronjob 工具创建新任务。`；否则英文版 `\n\n[CRON CONTEXT] You are running under cron tick. Do not call cronjob tool to create new schedules; just answer the prompt above.`
+    3. 拼 `ExternalChatRequest(message=prompt+suffix, chatId=originChatId, createIfNone=false, returnToolStatus=false, showFloating=false, stopAfter=false, requestId="cron-${job["id"]}-${System.currentTimeMillis()}")`
+    4. 调 `ExternalChatRequestExecutor(appContext).execute(request)` → 把 `aiResponse` 包成 `JobRunResult(success=result.success, fullOutputDoc=aiResponse ?: "", finalResponse=aiResponse ?: "", errorMessage=result.error)`
+  - `suspend fun deliver(job: Map<String,Any?>, content: String): String?`：
+    1. 取 `originChatId = (job["origin"] as Map<*,*>?)?.get("chat_id") as String?`；空 → 返回 null
+    2. `chatHistoryManager = ChatHistoryManager.getInstance(appContext)`
+    3. `chatHistoryManager.ensureChatWithId(originChatId, title="Cron")`（idempotent，防原 chat 被删后 cron 写入失败）
+    4. 拼 `ChatMessage(sender="ai", content=content, timestamp=System.currentTimeMillis())`
+    5. `chatHistoryManager.addMessage(originChatId, message)`
+    6. emit `GatewayChatEventBus.events.emit(Event.ProcessingCompleted(chatId=originChatId, ...))` 或等价（让活跃 chat 的 `_chatHistory` 通过既有 `ChatHistoryDelegate.kt:223-227` 订阅触发 reloadChatMessagesSmart）
+    7. 返回 `"chat:$originChatId"` 用于 logger
+- **OperitApplication.onCreate 注入**（`app/.../OperitApplication.kt`）：
+  - 在既有 `launchOrphanTagMigrationsIfNeeded()`（R-AGENT-029）之后调 `CronTickWorker.enqueue(this)`
+  - **不**调 `Scheduler.agentRunner = ...`（路径 1 决策：Scheduler 不接管 Android cron）
+- **APP_SELF_AWARENESS prompt 增补**（`app/.../core/config/SystemPromptConfig.kt`）：
+  - `APP_SELF_AWARENESS_EN` / `APP_SELF_AWARENESS_CN` 各加一句关于 `cronjob`：
+    - EN 例: "You can also schedule prompts to run later via the `cronjob` tool (15-minute minimum interval; results post back as your reply in the original chat)."
+    - CN 例: "你也可以用 `cronjob` 工具登记定时任务（最小间隔 15 分钟；到点结果会以你的回复形式回到原对话）。"
+  - 该增补**不**改既有"工具箱 / Memory hub / Settings / Skill Recorder / Terminal" 5 个核心导航点，仅追加一句
+
+**验收**:
+- **A. CronjobTools 入口已接通**：
+  - `CronjobTools.kt` 整文件**不**含 `"cronjob tool is not available on Android"` 字面值
+  - `checkCronjobRequirements()` 函数体含 `return true`（不再 `return false`）
+  - `cronjob(...)` 函数体含 `when (action) {` 或等价 dispatch（按 action 分派至少 5 个分支：create/list/update/remove/run）
+  - `cronjob(...)` 函数体含 `_scanCronPrompt(` 调用（create / update 路径）+ `Jobs.createJob(` / `Jobs.listJobs(` / `Jobs.updateJob(` / `Jobs.removeJob(` / `Jobs.triggerJob(` 五处函数引用
+  - `cronjob(...)` 函数体含 min-interval guard 字面值（`15` + (`minutes` 或 `min`) 共现 + `toolError(`）
+- **B. Scheduler stub 状态**：
+  - `Scheduler.kt::runJob` / `Scheduler.kt::deliverResult` 两个函数**不**新增 lambda 注入字段（守路径 1 红线，不让 deep_align 抓到 Python 没有的字段）
+  - 两个函数 KDoc 含 `CronTickWorker` 字面值（说明 Android 由 app 模块接管的注释）
+- **C. CronTickWorker 已落盘（在 app 模块）**：
+  - `app/src/main/java/com/ai/assistance/operit/cron/CronTickWorker.kt` 文件存在
+  - 内含 `class CronTickWorker` 继承 `CoroutineWorker`、`override suspend fun doWork()`
+  - 函数体调 `Jobs.getDueJobs(` + `Jobs.advanceNextRun(` + `Jobs.saveJobOutput(` + `Jobs.markJobRun(` 四处
+  - 伴生对象含 `enqueueUniquePeriodicWork("hermes_cron_tick"` + `PeriodicWorkRequestBuilder<CronTickWorker>(15, TimeUnit.MINUTES)` + `KEEP` 字面值
+- **D. CronAgentRunner 已落盘**：
+  - `app/src/main/java/com/ai/assistance/operit/cron/CronAgentRunner.kt` 文件存在
+  - 内含 `ExternalChatRequestExecutor(` 引用 + `[CRON CONTEXT]` 或 `[CRON 上下文]` 字面值（cron context prompt 软防御）
+  - 内含 `ChatHistoryManager.getInstance(` + `addMessage(` + `sender = "ai"` 字面值
+  - 内含 `GatewayChatEventBus` 引用 + `ProcessingCompleted` 字面值（触发 UI reloadChatMessagesSmart）
+- **E. OperitApplication 启动注入**：
+  - `OperitApplication.kt::onCreate` 函数体含 `CronTickWorker.enqueue(` 调用
+  - 同函数体**不**含 `Scheduler.agentRunner = ` 或 `Scheduler.resultDeliverer = ` 字面值（守路径 1）
+- **F. APP_SELF_AWARENESS prompt 增补**：
+  - `SystemPromptConfig.kt::APP_SELF_AWARENESS_EN` 常量体含 `cronjob` 字面值 + `15` 字面值
+  - `SystemPromptConfig.kt::APP_SELF_AWARENESS_CN` 常量体含 `cronjob` 字面值 + `15` 字面值
+- **G. 单元测试**：源码字符串扫描 + behavioral test —— 详见 TC-AGENT-031-a..n
+- **H. §2 四件套**：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` **减少**（CronjobTools.cronjob + checkCronjobRequirements 至少 -2，目标 ≤ 388）
+- **I. 手测验收**：
+  - 启动 APK → 等 ≤ 16 分钟（首次 PeriodicWork 触发）→ logcat 应见 `CronTickWorker doWork` + `Jobs.getDueJobs` 日志，无 ANR / crash
+  - 在 chat 内告诉 agent "every 15m send me '心跳'" → agent 调 `cronjob(action="create", ...)` 成功；过一个 tick 后该 chat 内出现 sender=ai 的"心跳"消息且活跃 chat UI 自动滚动到底
+  - 跟 agent 说 "every 5m ..." → agent 应得到 `toolError` 提示 15min 下限
+  - 跟 agent 说 "在每天早上 9 点 ..." (cron-expr) → agent 应得到 `toolError("Cron expressions are not supported on Android")` 并 fallback 到 `every` 语法（守 R-CRON-013 不回归）
+  - cron 触发的 agent 在收到 `[CRON CONTEXT] / [CRON 上下文]` 后应直接回复用户 prompt，不再调 `cronjob(create)` 嵌套生成新 job（软防御，弱于 Python `disabled_toolsets` 但够用）

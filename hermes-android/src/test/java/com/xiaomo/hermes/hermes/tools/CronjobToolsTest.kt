@@ -9,15 +9,14 @@ import org.junit.Test
 
 class CronjobToolsTest {
 
+    /**
+     * R-AGENT-031: cronjob tool is now wired on Android. The data layer (Jobs.kt CRUD)
+     * lives in this module; scheduling/agent invocation lives in the app module's
+     * CronTickWorker + CronAgentRunner. checkCronjobRequirements() now returns true.
+     */
     @Test
-    fun `cronjob returns not-available error on Android`() {
-        val result = cronjob(action = "list")
-        assertTrue(result.contains("not available") || result.contains("error"))
-    }
-
-    @Test
-    fun `checkCronjobRequirements returns false`() {
-        assertFalse(checkCronjobRequirements())
+    fun `checkCronjobRequirements returns true`() {
+        assertTrue(checkCronjobRequirements())
     }
 
     @Test

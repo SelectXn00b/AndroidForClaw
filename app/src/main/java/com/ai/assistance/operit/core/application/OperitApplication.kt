@@ -29,6 +29,7 @@ import com.ai.assistance.operit.plugins.lifecycle.AppLifecycleEvent
 import com.ai.assistance.operit.plugins.lifecycle.AppLifecycleHookParams
 import com.ai.assistance.operit.plugins.lifecycle.AppLifecycleHookPluginRegistry
 import com.ai.assistance.operit.core.config.SystemPromptConfig
+import com.ai.assistance.operit.core.cron.CronTickWorker
 import com.ai.assistance.operit.core.tools.AIToolHandler
 import com.ai.assistance.operit.core.tools.system.AndroidShellExecutor
 import com.ai.assistance.operit.core.tools.system.Terminal
@@ -149,6 +150,11 @@ class OperitApplication : Application(), ImageLoaderFactory, WorkConfiguration.P
 
         launchOrphanTagMigrationsIfNeeded()
         AppLogger.d(TAG, "【启动计时】R-AGENT-029 孤儿 tag 迁移任务已提交（异步IO） - ${System.currentTimeMillis() - startTime}ms")
+
+        // R-AGENT-031: enqueue the WorkManager-driven cron tick (15-minute period, KEEP policy).
+        // Must be after launchOrphanTagMigrationsIfNeeded so memory-side maintenance runs first.
+        CronTickWorker.enqueue(this)
+        AppLogger.d(TAG, "【启动计时】R-AGENT-031 CronTickWorker 已入队（PeriodicWork 15m KEEP） - ${System.currentTimeMillis() - startTime}ms")
 
         // Initialize ActivityLifecycleManager to track the current activity
         ActivityLifecycleManager.initialize(this)

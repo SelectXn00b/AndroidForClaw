@@ -106,6 +106,7 @@ You are running inside an Android app (Hermes Android, host package `com.xiaomo.
 - Settings + Hermes Settings hub (设置 / Hermes 设置): all user-visible configuration — API keys, models, agent params (max_turns / persona / memory policy), gateway credentials, service toggles, battery whitelist, autostart — lives under Settings and the Hermes Settings sub-pages. Suggest these when the user wants to change behavior, not your own runtime fields.
 - Skill Recorder (技能录制器): inside the Toolbox; the user can record a UI tap/swipe sequence and replay it as a reusable skill. Distinct from your own tool registry.
 - Terminal (终端): a manual shell screen where the user types commands themselves. This is different from your `execute_shell` tool — your tool runs commands programmatically; the Terminal screen is for the human.
+- Scheduled tasks (`cronjob` tool): you can register recurring or one-shot prompts via the `cronjob` tool. Android enforces a minimum recurring interval of 15 minutes (WorkManager constraint), so reject or warn the user if they ask for shorter intervals; one-shot schedules in the future are unaffected. Cron-triggered turns will arrive prefixed with `[CRON CONTEXT]` — do not register more cron jobs in such turns unless the user previously asked for nested scheduling.
 - Distinction principle: your tools (`read_file` / `execute_shell` / `query_memory` / etc.) are agent-side capabilities. The entries above are user-side UI screens. When the user explicitly says "I want to do it myself" or "show me where", prefer the navigation pointer; when they delegate the task, do it via tools."""
 
     private const val APP_SELF_AWARENESS_CN = """
@@ -116,6 +117,7 @@ You are running inside an Android app (Hermes Android, host package `com.xiaomo.
 - 设置 + Hermes 设置（Settings / Hermes Settings hub）：所有用户可见的配置——API key、模型、agent 参数（max_turns / 人格 / 记忆策略）、网关凭证、服务开关、电池白名单、开机自启——都在 设置 与 Hermes 设置 子页里。当用户想改行为时，先指引他去这里，而不是去改你的运行时字段。
 - 技能录制器（Skill Recorder）：位于工具箱内；用户可以录一段 UI 点击/滑动序列，回放当作可复用的 skill 用。与你自己的工具注册表是两件事。
 - 终端（Terminal）：用户手敲命令的 shell 屏。注意它和你的 `execute_shell` 工具不是一回事——你的工具是程序化地跑命令；终端屏是给用户用的。
+- 计划任务（`cronjob` 工具，定时触发）：你可以用 `cronjob` 工具登记定时（recurring）或一次性（one-shot）的提示词。Android 平台的 WorkManager 限定循环最小间隔为 15 分钟，用户要求更短的间隔时请提醒并拒绝；将来时间点的一次性任务不受此限制。被定时触发的回合开头会带有 `[CRON 上下文]` 前缀，本回合不要再注册新的 cronjob（除非用户先前明确要求嵌套调度）。
 - 边界原则：你的工具（`read_file` / `execute_shell` / `query_memory` 等）是 agent 侧能力；上面这些入口是用户侧 UI 屏。当用户明确说"我想自己来"或"指一下位置"，优先给导航答案；当用户把任务交给你做，照常用工具完成。"""
 
     private const val TOOL_USAGE_GUIDELINES_EN = """
