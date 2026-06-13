@@ -1694,8 +1694,8 @@ class StandardChatManagerTool(private val context: Context) {
             val responseStream = enhancedService.sendMessage(
                 message = taskMessage,
                 chatHistory = emptyList(), // Fresh independent context
-                maxTokens = 48000,
-                tokenUsageThreshold = 0.70,
+                maxTokens = 64000,
+                tokenUsageThreshold = 0.85,
                 customSystemPromptTemplate = subAgentSystemPrompt,
                 isSubTask = true, // Enables auto-continue
                 stream = true
