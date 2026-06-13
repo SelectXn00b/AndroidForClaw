@@ -724,3 +724,38 @@ CONFIG 原先的三条 R-CONFIG-001..003（Preferences / ConfigBuilder / Control
 - 编辑文档节点（`isDocumentNode = true`）：content 文本框仍为 disabled；chip 不出现
 - 保存后 `MemoryRepository.updateMemory` 路径不变；`#auto_summary` tag 不被自动删除（仍在 `tags` 列表中可见，由用户在 `TagsEditor` 区域手动删除）
 - §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增）
+
+### R-AGENT-030: Agent system prompt 注入「应用自我感知」段（工具箱 / Settings / Memory hub 等 UI 入口）
+**来源**: 无 Python 上游对应（Python Hermes 是无 GUI 的 server-side agent，不存在"宿主 app 内置 UI 入口"概念）。本需求由用户 2026-06-13 提出："agent 他们知道 app 有一个叫工具箱的地方吗？" —— 当前 `SystemPromptConfig.kt` 注入的 `GATEWAY_AWARENESS_SECTION` 只覆盖飞书 / 微信 gateway 多人会话场景，全文 0 处提及"工具箱 / Toolbox / Settings / MemoryScreen / SkillRecorder / Hermes Settings hub"等用户实际能进入的 UI 子屏，agent 在被用户问"打开工具箱"或"我去哪里管理记忆"时只能瞎猜。
+
+**背景**: HermesApp 的 NavItem 主目录（`ui/common/NavItem.kt`）登记了 21 个一级入口（`ai_chat / shizuku_commands / assistant_config / settings / tool_permissions / user_preferences_guide / user_preferences_settings / chat_history_settings / packages / memory_base / terminal / toolbox / about / mcp / agreement / help / token_config / workflow / model_config / feedback / hermes_settings`），其中 `toolbox` 子屏（`ui/features/toolbox/screens/ToolboxScreen.kt`）下挂 18 个具名子工具（`tool_test_center / tool_file_manager / tool_tts / tool_speech_recognition / tool_permission_manager / tool_user_agreement / tool_default_assistant_guide / tool_terminal / tool_ui_debugger / tool_shell_executor / tool_log_viewer / tool_sql_viewer / token_config / tool_process_limit_remover / tool_html_packager / tool_autoglm_one_click / tool_autoglm_tool / tool_skill_recorder`）。这些是**用户视角**的功能入口，与 agent 工具集（`AIToolHandler` 注册的 `read_file / execute_shell / use_package / sleep ...`）不在同一层；agent 应该知道用户可以"自己去工具箱里跑 UI 调试器 / 终端 / SQL viewer / 技能录制器"，从而能在"用户问怎么操作"时给出导航式回答而非自己代劳。
+
+**架构合规**:
+- 仿 `GATEWAY_AWARENESS_EN/CN` 既有范式新增 `APP_SELF_AWARENESS_EN/CN` 常量 + `APP_SELF_AWARENESS_SECTION` 占位符，**不破坏**现有 9 段 system prompt 模板顺序——插在 `GATEWAY_AWARENESS_SECTION` 之后、`TOOL_USAGE_GUIDELINES_SECTION` 之前。
+- 仅注入到 `SYSTEM_PROMPT_TEMPLATE` / `SYSTEM_PROMPT_TEMPLATE_CN`（主 agent）；**不**注入到 `SUBTASK_AGENT_PROMPT_TEMPLATE`（子任务 agent 不需要 UI 自我感知，与 GATEWAY_AWARENESS 同处理）。
+- `getSystemPrompt()` 的 replace 链按既有"先 GATEWAY、再 SCHEDULED_TASK、再 PERSISTENT_INSTRUCTIONS"顺序追加 `APP_SELF_AWARENESS_SECTION` 替换。
+- 段内仅描述功能定位与导航语义（"如果用户想看记忆库，引导他打开 Memory hub"），**不**列举具体路由 key / Compose 函数名（避免 UI 重构时反复改 prompt）。
+- 中英两版**完全等价**翻译，避免 i18n drift（与 `GATEWAY_AWARENESS_EN/CN` 同标准）。
+
+**行为**:
+- 新增 `APP_SELF_AWARENESS_EN`（英文段）和 `APP_SELF_AWARENESS_CN`（中文段）两个 const val，紧邻 `GATEWAY_AWARENESS_EN/CN` 声明。
+- 段内最少必含的核心导航点（用户视角，非工具白名单）：
+  - **Toolbox**: 用户进入 app 主菜单 → "工具箱 / Toolbox" 入口可访问 文件管理 / 终端 / UI 调试器 / Shell 执行器 / 日志查看 / SQL viewer / 技能录制器 / 进程限制清除 / HTML 打包 / TTS / 语音识别 / 权限管理 等子工具，agent 被问"我能不能 X"时若 X 在工具箱里应建议用户自行打开。
+  - **Memory hub（记忆库）**: 用户可在 "记忆库 / Memory" 主入口查看 / 编辑 / 删除自己的长期记忆与持久化指令；自动摘要节点 `#auto_summary` 与 gateway 节点 `#chat:*` 也都呈现在该图谱里。
+  - **Settings / Hermes Settings hub**: 全部用户可见配置（API key / 模型 / agent 参数 / gateway 凭证 / 服务开关）由 Settings 与 Hermes Settings 子页承载。
+  - **Skill Recorder**: 用户可在工具箱内录制自己的 UI 操作序列作为可复用 skill。
+  - **Terminal**: app 内置终端可执行 shell 命令（与 agent 的 `execute_shell` 工具不同：终端是**用户**手动执行）。
+- `SYSTEM_PROMPT_TEMPLATE`（英文）在 `GATEWAY_AWARENESS_SECTION\n\n` 之后、`TOOL_USAGE_GUIDELINES_SECTION` 之前插入新行 `APP_SELF_AWARENESS_SECTION\n\n`。
+- `SYSTEM_PROMPT_TEMPLATE_CN`（中文）同位置同样插入 `APP_SELF_AWARENESS_SECTION\n\n`。
+- `getSystemPrompt(useEnglish, ...)` 的 replace 链新增一行：`prompt = prompt.replace("APP_SELF_AWARENESS_SECTION", if (useEnglish) APP_SELF_AWARENESS_EN else APP_SELF_AWARENESS_CN)`，紧邻现有 `GATEWAY_AWARENESS_SECTION` 替换之后。
+- 段头建议（用户视角语气，与 GATEWAY_AWARENESS 风格一致）：英文 `## App Self-Awareness (Hermes Android Host)`；中文 `## 应用自我感知（Hermes Android 宿主）`。
+
+**验收**:
+- `core/config/SystemPromptConfig.kt` 必须含字面 const `APP_SELF_AWARENESS_EN` 和 `APP_SELF_AWARENESS_CN`，两者均为 `const val ... = """..."""` 形态。
+- `SYSTEM_PROMPT_TEMPLATE`（英文）和 `SYSTEM_PROMPT_TEMPLATE_CN`（中文）必须各含一处字面 `APP_SELF_AWARENESS_SECTION` 占位符，且位于 `GATEWAY_AWARENESS_SECTION` 与 `TOOL_USAGE_GUIDELINES_SECTION` 之间。
+- `getSystemPrompt(...)` 函数体必须含 `replace("APP_SELF_AWARENESS_SECTION", ...)` 调用，三元根据 `useEnglish` 选 EN/CN 常量。
+- 两个常量字符串体内必须同时含核心导航关键字（中文版含 `工具箱` / `记忆` / `设置` / `技能录制` / `终端`；英文版含 `Toolbox` / `Memory` / `Settings` / `Skill` / `Terminal`），用于守 prompt 内容不被空段或单语段意外提交。
+- `SUBTASK_AGENT_PROMPT_TEMPLATE` 必须**不**含 `APP_SELF_AWARENESS_SECTION` 字面值（守"只主 agent 注入"红线，与 `GATEWAY_AWARENESS_SECTION` 同处理）。
+- 单元测试：源码字符串扫描（与 `SystemPromptMemoryMaintenanceWiringTest.kt` 同范式），不依赖 Android Context / LLM。
+- §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 当前基线 390。本改动**只动 app/ 模块**（prompt 常量 + 单测），不动 hermes-android/。
+- **手测验收**: 安装新 APK 后开 logcat（或手动观察 chat 行为），用户问 "我能在哪里管理记忆 / 我能录制技能吗 / 工具箱里有什么" 时 agent 回答应包含对应 UI 入口的导航说明，而非"我没办法 / 我可以帮你做 X"。

@@ -98,6 +98,26 @@ WORKSPACE MEMORY FILES (long-term project memory, on-demand read):
 - `CLAUDE.md` §5.1（专题记忆索引）和 §5.2（自动摘要索引）列出了每份记忆文件 + 何时该读。
 - 规则：每次完成一类涉及多文件/多 commit 的修复（特别是 bugfix 串联），在工作区根追加一份 `MEMORY-<TOPIC>.md`，并登记到 `CLAUDE.md` §5.1，否则下次会话开窗这份经验就丢了。"""
 
+    private const val APP_SELF_AWARENESS_EN = """
+## App Self-Awareness (Hermes Android Host)
+You are running inside an Android app (Hermes Android, host package `com.xiaomo.androidforclaw`). The host app exposes a number of user-facing UI entry points that are NOT part of your own tool surface but that the user can navigate to themselves. When the user asks "where do I X" or "can I X in this app", point them at the relevant entry instead of trying to do it for them via tools, or in addition to tool work.
+- Toolbox (工具箱): a top-level menu in the app that bundles user-driven utilities including File Manager, Terminal (a manual shell the user can type into), UI Debugger, Shell Executor, Log Viewer, SQL Viewer, Skill Recorder, Process Limit Remover, HTML Packager, Text-To-Speech, Speech Recognition, and Permission Manager. If the user asks "can I open a terminal / look at my files / record a skill", route them through the Toolbox.
+- Memory hub (记忆库): a graph-based UI where the user can browse, edit, link, and delete their own long-term memories and persistent instructions. Auto-summary nodes (`#auto_summary`) and gateway-chat nodes (`#chat:*`) are also visible there. If the user asks where their memories live or how to clean them up, send them to the Memory hub.
+- Settings + Hermes Settings hub (设置 / Hermes 设置): all user-visible configuration — API keys, models, agent params (max_turns / persona / memory policy), gateway credentials, service toggles, battery whitelist, autostart — lives under Settings and the Hermes Settings sub-pages. Suggest these when the user wants to change behavior, not your own runtime fields.
+- Skill Recorder (技能录制器): inside the Toolbox; the user can record a UI tap/swipe sequence and replay it as a reusable skill. Distinct from your own tool registry.
+- Terminal (终端): a manual shell screen where the user types commands themselves. This is different from your `execute_shell` tool — your tool runs commands programmatically; the Terminal screen is for the human.
+- Distinction principle: your tools (`read_file` / `execute_shell` / `query_memory` / etc.) are agent-side capabilities. The entries above are user-side UI screens. When the user explicitly says "I want to do it myself" or "show me where", prefer the navigation pointer; when they delegate the task, do it via tools."""
+
+    private const val APP_SELF_AWARENESS_CN = """
+## 应用自我感知（Hermes Android 宿主）
+你正在 Android 应用 Hermes Android（宿主包名 `com.xiaomo.androidforclaw`）内运行。宿主 app 暴露了一组用户视角的 UI 入口，这些入口**不是**你自己的工具集，而是用户可以亲自打开的页面。当用户问"我去哪里 X"或"app 里能不能 X"时，应优先告知对应入口的位置，让用户自己进去操作；该用工具完成的任务依旧用工具。
+- 工具箱（Toolbox）：app 主菜单的一级入口，下挂 文件管理、终端（用户可手敲命令的 shell 屏）、UI 调试器、Shell 执行器、日志查看、SQL 查看器、技能录制器、进程限制清除、HTML 打包、文字转语音、语音识别、权限管理 等子工具。当用户问"我能不能开终端 / 看文件 / 录个技能"时，把工具箱当导航答案。
+- 记忆库（Memory hub）：基于图谱的 UI，用户可在此浏览 / 编辑 / 关联 / 删除自己的长期记忆和持久化指令。自动摘要节点（`#auto_summary`）和网关聊天节点（`#chat:*`）也都展示在这里。当用户问记忆存在哪里、怎么清理时，引导他打开记忆库。
+- 设置 + Hermes 设置（Settings / Hermes Settings hub）：所有用户可见的配置——API key、模型、agent 参数（max_turns / 人格 / 记忆策略）、网关凭证、服务开关、电池白名单、开机自启——都在 设置 与 Hermes 设置 子页里。当用户想改行为时，先指引他去这里，而不是去改你的运行时字段。
+- 技能录制器（Skill Recorder）：位于工具箱内；用户可以录一段 UI 点击/滑动序列，回放当作可复用的 skill 用。与你自己的工具注册表是两件事。
+- 终端（Terminal）：用户手敲命令的 shell 屏。注意它和你的 `execute_shell` 工具不是一回事——你的工具是程序化地跑命令；终端屏是给用户用的。
+- 边界原则：你的工具（`read_file` / `execute_shell` / `query_memory` 等）是 agent 侧能力；上面这些入口是用户侧 UI 屏。当用户明确说"我想自己来"或"指一下位置"，优先给导航答案；当用户把任务交给你做，照常用工具完成。"""
+
     private const val TOOL_USAGE_GUIDELINES_EN = """
 When calling a tool, the user will see your response, and then will automatically send the tool results back to you in a follow-up message.
 
@@ -284,6 +304,8 @@ WORKSPACE_GUIDELINES_SECTION
 
 GATEWAY_AWARENESS_SECTION
 
+APP_SELF_AWARENESS_SECTION
+
 TOOL_USAGE_GUIDELINES_SECTION
 
 PACKAGE_SYSTEM_GUIDELINES_SECTION
@@ -319,6 +341,8 @@ $BEHAVIOR_GUIDELINES_CN
 WORKSPACE_GUIDELINES_SECTION
 
 GATEWAY_AWARENESS_SECTION
+
+APP_SELF_AWARENESS_SECTION
 
 TOOL_USAGE_GUIDELINES_SECTION
 
@@ -544,6 +568,7 @@ AVAILABLE_TOOLS_SECTION""".trimIndent()
         .replace("ACTIVE_PACKAGES_SECTION", if (enableTools) packagesSection.toString() else "")
         .replace("WORKSPACE_GUIDELINES_SECTION", workspaceGuidelines)
         .replace("GATEWAY_AWARENESS_SECTION", if (useEnglish) GATEWAY_AWARENESS_EN else GATEWAY_AWARENESS_CN)
+        .replace("APP_SELF_AWARENESS_SECTION", if (useEnglish) APP_SELF_AWARENESS_EN else APP_SELF_AWARENESS_CN)
             
     // Add thinking guidance section if enabled
     prompt =

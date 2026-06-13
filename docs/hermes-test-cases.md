@@ -556,6 +556,26 @@ R-AGENT-012 是 R-AGENT-011 的 UI 兜底：R-011 已把 `#gateway:<platform>` t
 
 ---
 
+## 域 AGENT — App Self-Awareness Prompt Injection (R-AGENT-030)
+
+R-AGENT-030 让主 agent 的 system prompt 注入「应用自我感知」段，告诉 agent HermesApp 内置了哪些用户视角的 UI 入口（工具箱 / Memory hub / Settings / Skill Recorder / Terminal 等），方便 agent 在被问"我去哪里 X"时给出导航式回答而非自己代劳或瞎猜。
+
+测试策略：
+- 仿 `SystemPromptMemoryMaintenanceWiringTest` 同范式做 source-scan：直接对 `core/config/SystemPromptConfig.kt` 文件文本断言关键字面值 / 占位符 / replace 调用，**不**依赖 Android Context / Compose / LLM。
+- 不做行为层（要求 agent 实际给出"打开工具箱"建议）的单测——属于 prompt 行为层，由手测兜底（参考 §3 三个 E2E 已经覆盖 agent-level TOKEN echo 的回答正确性框架）。
+
+| TC ID | R-ID | 输入 / 触发 | 期望 | 测试类型 | 实现 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-030-a | R-AGENT-030 | 源码扫描：`core/config/SystemPromptConfig.kt` | 必须含 `const val APP_SELF_AWARENESS_EN` 和 `const val APP_SELF_AWARENESS_CN` 两个声明（字面值）。 | unit-scan | `SystemPromptAppSelfAwarenessWiringTest#TC-AGENT-030-a config exposes APP_SELF_AWARENESS constants for both languages` 🟢 |
+| TC-AGENT-030-b | R-AGENT-030 | 源码扫描：`SYSTEM_PROMPT_TEMPLATE` + `SYSTEM_PROMPT_TEMPLATE_CN` 两个常量体 | 两者都必须各含一处字面 `APP_SELF_AWARENESS_SECTION` 占位符；位置必须在 `GATEWAY_AWARENESS_SECTION` 之后、`TOOL_USAGE_GUIDELINES_SECTION` 之前。 | unit-scan | `SystemPromptAppSelfAwarenessWiringTest#TC-AGENT-030-b both system prompt templates contain APP_SELF_AWARENESS placeholder between gateway and tool usage` 🟢 |
+| TC-AGENT-030-c | R-AGENT-030 | 源码扫描：`getSystemPrompt(...)` 函数体 | 必须含 `replace("APP_SELF_AWARENESS_SECTION", ...)` 调用，三元根据 `useEnglish` 选 EN/CN 常量。 | unit-scan | `SystemPromptAppSelfAwarenessWiringTest#TC-AGENT-030-c getSystemPrompt replaces APP_SELF_AWARENESS placeholder with locale-appropriate constant` 🟢 |
+| TC-AGENT-030-d | R-AGENT-030 | 源码扫描：`APP_SELF_AWARENESS_EN` 与 `APP_SELF_AWARENESS_CN` 字符串体 | 中文版必须同时含 `工具箱` / `记忆` / `设置` / `技能录制` / `终端` 五个核心导航关键字；英文版必须同时含 `Toolbox` / `Memory` / `Settings` / `Skill` / `Terminal` 五个对应关键字（守 prompt 内容不被空段或单语段意外提交）。 | unit-scan | `SystemPromptAppSelfAwarenessWiringTest#TC-AGENT-030-d both prompt sections list the core navigation entry points` 🟢 |
+| TC-AGENT-030-e | R-AGENT-030 | 源码扫描：`SUBTASK_AGENT_PROMPT_TEMPLATE` 常量体 | 必须**不**含 `APP_SELF_AWARENESS_SECTION` 字面值（守"只主 agent 注入"红线，与 GATEWAY_AWARENESS 同处理）。 | unit-scan | `SystemPromptAppSelfAwarenessWiringTest#TC-AGENT-030-e subtask agent prompt does not get app self-awareness section` 🟢 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — Memory Dedup (R-AGENT-003 bugfix)
 
 测试类: `app/src/test/java/com/ai/assistance/operit/data/repository/MemoryDedupTest.kt`
