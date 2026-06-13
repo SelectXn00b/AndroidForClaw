@@ -1091,6 +1091,70 @@ class MemoryRepository(private val context: Context, profileId: String) {
         true
     }
 
+    /**
+     * R-AGENT-029: 按 tag 名前缀查找 tag 实体，用于一次性迁移清理（如清旧库 `#auto_summary_id:*` 孤儿 tag）。
+     *
+     * 用 ObjectBox `MemoryTag_.name.startsWith(prefix, CASE_SENSITIVE)` 一次性 query。
+     * 大小写敏感：`#Auto_Summary_Id:` 不会命中 `#auto_summary_id:` prefix。
+     *
+     * @param prefix tag 名前缀（如 `"#auto_summary_id:"`）。
+     * @return 匹配的 MemoryTag 实体列表；无命中返回空列表。
+     */
+    suspend fun findTagsByNamePrefix(prefix: String): List<MemoryTag> = withContext(Dispatchers.IO) {
+        if (prefix.isEmpty()) return@withContext emptyList()
+        tagBox.query(
+            MemoryTag_.name.startsWith(prefix, QueryBuilder.StringOrder.CASE_SENSITIVE)
+        ).build().find()
+    }
+
+    /**
+     * R-AGENT-029: 一次性迁移清理——按 tag 名前缀批量删孤儿 tag。
+     *
+     * 删 tag 实体的同时正确解关系：
+     * 1) 找出匹配 prefix 的所有 MemoryTag。
+     * 2) 单事务（`store.runInTx`）内：对每个 tag 遍历其 `tag.memories`（@Backlink 反向虚拟关系），
+     *    从 `memory.tags` ToMany 移除该 tag 引用并 `memoryBox.put(memory)`，再 `tagBox.remove(tag)`。
+     *    顺序很重要——@Backlink 不会反向自动解 ToMany；先解 ToMany 再 remove tag 实体，
+     *    避免 Memory 的 tags ToMany 留下指向死 id 的"幽灵关系"。
+     * 3) memory 本身保留；不动 link/chunk/index。
+     * 4) 幂等：已清空的库再调返回 0，无副作用。
+     *
+     * 用例：清旧库 R-AGENT-027 删除前留下的 `#auto_summary_id:*` 孤儿 tag（参 R-AGENT-029）。
+     *
+     * @param prefix tag 名前缀（如 `"#auto_summary_id:"`）。
+     * @return 实际清掉的 tag 行数。
+     */
+    suspend fun cleanupOrphanTagsByPrefix(prefix: String): Int = withContext(Dispatchers.IO) {
+        if (prefix.isEmpty()) return@withContext 0
+        val orphans = tagBox.query(
+            MemoryTag_.name.startsWith(prefix, QueryBuilder.StringOrder.CASE_SENSITIVE)
+        ).build().find()
+        if (orphans.isEmpty()) return@withContext 0
+
+        var removed = 0
+        store.runInTx {
+            for (tag in orphans) {
+                tag.memories.reset()
+                val carriers = tag.memories.toList()
+                for (memory in carriers) {
+                    val ref = memory.tags.firstOrNull { it.id == tag.id }
+                    if (ref != null) {
+                        memory.tags.remove(ref)
+                        memoryBox.put(memory)
+                    }
+                }
+                if (tagBox.remove(tag)) {
+                    removed++
+                }
+            }
+        }
+        com.ai.assistance.operit.util.AppLogger.d(
+            "MemoryRepo",
+            "R-AGENT-029: cleanupOrphanTagsByPrefix(\"$prefix\") removed=$removed."
+        )
+        removed
+    }
+
     // --- Linking Operations ---
 
     /**

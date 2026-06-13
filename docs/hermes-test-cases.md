@@ -530,6 +530,32 @@ R-AGENT-012 是 R-AGENT-011 的 UI 兜底：R-011 已把 `#gateway:<platform>` t
 
 ---
 
+## 域 AGENT — Orphan Tag Migration (R-AGENT-029)
+
+测试类:
+- `app/src/test/java/com/ai/assistance/operit/data/repository/MemoryRepositoryOrphanTagCleanupTest.kt`
+- `app/src/test/java/com/ai/assistance/operit/core/application/OperitApplicationOrphanTagMigrationWiringTest.kt`
+
+**背景**: R-AGENT-027 已删除 `extractAndPersistFacts` 写 `#auto_summary_id:<parentId>` 的代码路径，但**历史 APK**（含 `app-release-r026-aikeep-ba814a70.apk`）装机的 ObjectBox 里仍有该 tag 残留 + R-AGENT-026 keepDecision=false 路径产生的 `#auto_summary_id:-1` 孤儿。R-AGENT-029 = 启动时一次性迁移清理。
+
+测试策略：
+- 仓储层行为断言走 source-scan（`MemoryRepository.kt` 重度依赖 ObjectBox / Android Context，纯 JVM 单测构造 BoxStore 复杂度极高，与 R-AGENT-013/014/015/016/017 同策略走源码字符串扫描守 wiring）。
+- Application 层钩子断言走 source-scan（`OperitApplication` 不易在 JVM 测试里实例化）。
+- 行为正确性由手测兜底（旧 APK 残留 → 升级 → logcat 看清理日志 + MemoryScreen 看 tag 列表）。
+
+| TC ID | R-ID | 输入 / 触发 | 期望 | 测试类型 | 实现 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-029-a | R-AGENT-029 | 源码扫描：`MemoryRepository.kt` | 必须新增 `findTagsByNamePrefix` 字面值（suspend 函数签名）+ `cleanupOrphanTagsByPrefix` 字面值。 | unit-scan | `MemoryRepositoryOrphanTagCleanupTest#TC-AGENT-029-a repository exposes prefix-based tag query and cleanup api` 🟢 |
+| TC-AGENT-029-b | R-AGENT-029 | 源码扫描：`MemoryRepository.kt` `cleanupOrphanTagsByPrefix` 函数体 | 必须含 `runInTx` 调用（单事务保证）+ `tagBox.remove(` 调用（删 tag 实体）+ `memoryBox.put(` 调用（解 ToMany 后 put memory）+ `memory.tags.remove(` 调用（解 ToMany 关系）。 | unit-scan | `MemoryRepositoryOrphanTagCleanupTest#TC-AGENT-029-b cleanup function uses transaction and correct delete order` 🟢 |
+| TC-AGENT-029-c | R-AGENT-029 | 源码扫描：`MemoryRepository.kt` `findTagsByNamePrefix` + `cleanupOrphanTagsByPrefix` 函数体 | 必须含 `MemoryTag_.name.startsWith(` 字面值（按 prefix 查 tag 的 ObjectBox condition）+ 空 prefix 守卫（`if (prefix.isEmpty())`）。 | unit-scan | `MemoryRepositoryOrphanTagCleanupTest#TC-AGENT-029-c prefix query uses startsWith and guards empty prefix` 🟢 |
+| TC-AGENT-029-d | R-AGENT-029 | 源码扫描：`OperitApplication.kt` | 必须含 `launchOrphanTagMigrationsIfNeeded` 字面值（方法名）+ `"#auto_summary_id:"` 字面值（清理目标 prefix）+ `"hermes_data_migrations"` 字面值（SharedPreferences 名）+ `R_AGENT_029` 字面值（防重入键前缀）。 | unit-scan | `OperitApplicationOrphanTagMigrationWiringTest#TC-AGENT-029-d application source declares migration constants` 🟢 |
+| TC-AGENT-029-e | R-AGENT-029 | 源码扫描：`OperitApplication.kt::onCreate` 函数体 | `onCreate` 函数体内必须调用 `launchOrphanTagMigrationsIfNeeded()`（顺序无要求，但必须出现）。 | unit-scan | `OperitApplicationOrphanTagMigrationWiringTest#TC-AGENT-029-e onCreate invokes orphan tag migration hook` 🟢 |
+| TC-AGENT-029-f | R-AGENT-029 | 源码扫描：`OperitApplication.kt` `launchOrphanTagMigrationsIfNeeded` 函数体 | 必须含 `profileListFlow.first()` 字面值（多 profile 全遍历）+ `cleanupOrphanTagsByPrefix(` 字面值（调仓储 API）+ `try {` + `catch` 包裹（失败容忍）+ `prefs.edit().putBoolean(` 调用（成功才写完成标记）。 | unit-scan | `OperitApplicationOrphanTagMigrationWiringTest#TC-AGENT-029-f migration iterates all profiles with try-catch and writes done flag` 🟢 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — Memory Dedup (R-AGENT-003 bugfix)
 
 测试类: `app/src/test/java/com/ai/assistance/operit/data/repository/MemoryDedupTest.kt`

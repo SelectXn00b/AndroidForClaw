@@ -475,6 +475,38 @@ Hermes Android 翻译已半成品：`hermes-android/.../MemoryManager.kt:339-362
 
 ---
 
+### R-AGENT-029: 启动时一次性清理旧库 `#auto_summary_id:*` 孤儿 tag
+**来源**: 无 Python 上游对应（Python Hermes 通过 `MemoryProvider.sync_turn` 把 fact 维护委托给云端插件 Mem0 / Hindsight，本地不存 fact↔父摘要的串联 tag）。本需求由用户 2026-06-13 明确提出："`#auto_summary_id:xxx` 我觉得需要关停这些节点的生成"。R-AGENT-027（同日 working tree）已堵住生产源（`extractAndPersistFacts` 不再写该 tag），但历史 APK（含 `app-release-r026-aikeep-ba814a70.apk` MD5 `ba814a70db7e5c58605f62dfb5f48f16`）装机的 ObjectBox 仍有残留 + R-AGENT-026 keepDecision=false 路径产生的 `#auto_summary_id:-1` 孤儿，需一次性迁移清理。
+
+**背景**: `#auto_summary_id:<parentId>` 是 R-AGENT-016 设计冗余——原意"反查 fact 来自哪条父摘要"，但**全代码库无任何读取方**（`grep findMemoriesByTag\("#auto_summary_id:"` 0 命中），属"写而不读"的死 tag。R-AGENT-026 keepDecision=false 路径还会产生 parentId=-1 的孤儿 tag 进一步污染。R-AGENT-027 已删除写入，本条补上历史数据清理。
+
+**架构合规**:
+- 不动 R-AGENT-016/027 的抽取流程；不动 Python 上游对齐基线（本来就没这个概念）。
+- 新增 `MemoryRepository` 两个仓储 API（按 prefix 查 tag + 按 prefix 清孤儿 tag），不破坏既有 tag 读写路径。
+- 启动钩子放在 `OperitApplication.onCreate`，仿 `launchCleanOnExitCleanup()` 范式（异步 IO + 失败容忍 + 不阻塞主线程）。
+- SharedPreferences 防重入键，幂等无副作用——失败不写完成标记，下次启动重试。
+
+**行为**:
+- 新增仓储 API（`MemoryRepository.kt`，per-profile 实例方法）：
+  - `suspend fun findTagsByNamePrefix(prefix: String): List<MemoryTag>` —— 用 ObjectBox `tagBox.query().startsWith(MemoryTag_.name, prefix, CASE_SENSITIVE).build().find()`
+  - `suspend fun cleanupOrphanTagsByPrefix(prefix: String): Int` —— 在 `store.runInTx { }` 单事务内：找出匹配前缀的 tag → 对每个 tag 遍历其 `tag.memories`（@Backlink）→ 从 `memory.tags` ToMany 移除并 `memoryBox.put(memory)` → 最后 `tagBox.remove(tag)`。返回清掉的 tag 行数。
+- 新增 Application 钩子（`OperitApplication.kt::onCreate`）：
+  - 在 `launchCleanOnExitCleanup()` 后追加 `launchOrphanTagMigrationsIfNeeded()`，`applicationScope.launch` + try/catch 包围。
+  - SharedPreferences 名 `"hermes_data_migrations"`，key `R_AGENT_029_auto_summary_id_orphan_cleanup_done`。已完成 → return。
+  - 通过 `preferencesManager.profileListFlow.first()` 拿所有 profileId（默认 + 用户自建）；每个 profile 实例化 `MemoryRepository(applicationContext, profileId)` 调 `cleanupOrphanTagsByPrefix("#auto_summary_id:")`。
+  - 全部 profile 成功才写完成标记；任一失败 `AppLogger.w` 记日志、不写标记，下次启动重试。
+- **多 profile 必须遍历**: `MemoryRepository` 是 per-profile（每个 profile 独立 ObjectBox dbName `objectbox_<id>`），不能只清 active profile。
+- **删 tag 实体顺序**: `MemoryTag.memories` 是 `@Backlink(to = "tags")` 反向虚拟关系——删 MemoryTag 行不会自动反向解 Memory 的 ToMany；必须先解 ToMany + put memory，再 remove tag 实体，避免 Memory 的 tags ToMany 留下指向死 id 的"幽灵关系"。
+
+**验收**:
+- `MemoryRepository.kt` 必须新增 `findTagsByNamePrefix` + `cleanupOrphanTagsByPrefix` 两个 suspend 函数；签名形态如上。
+- `OperitApplication.kt::onCreate` 必须含 `launchOrphanTagMigrationsIfNeeded()` 调用；该方法必须用 SharedPreferences `"hermes_data_migrations"` 防重入；必须遍历 `preferencesManager.profileListFlow.first()`。
+- 单元测试覆盖（source-scan + 行为）：tag 实体被清；Memory.tags ToMany 不再含被清 tag；Memory 本身保留；其它 tag（`#auto_extracted` / `#chat:*`）不受影响；prefix 不匹配的 tag（`#auto_summary` 父节点本身）不被误清；幂等（连跑两次第二次返回 0）；空库跑返回 0。
+- §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 当前基线 390（本需求纯新增能力，不消除已有 stub，但也不引入新 stub）。本改动**只动 app/ 模块，不动 hermes-android/**——四件套指标理论上应该不变。
+- **手测验收**: 在装了旧 APK 残留数据的设备上更新到含 R-AGENT-029 的 APK，启动一次后用 `adb logcat` 检查 `R-AGENT-029: migration done` 行；MemoryScreen 打开任一 fact 节点 EditMemoryDialog 的 tag 列表里不再展示 `#auto_summary_id:*` tag。
+
+---
+
 ## 域 ACP — Agent Client Protocol
 
 HermesApp 支持 ACP 双向：作为 **server** 暴露自身 agent 给外部 client（Zed / CLI）；作为 **client** 连到外部 ACP server（如 GitHub Copilot）。Python 源：`reference/hermes-agent/acp_adapter/` + `acp_registry/` + `agent/copilot_acp_client.py`。

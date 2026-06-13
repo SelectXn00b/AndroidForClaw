@@ -147,6 +147,9 @@ class OperitApplication : Application(), ImageLoaderFactory, WorkConfiguration.P
         launchCleanOnExitCleanup()
         AppLogger.d(TAG, "【启动计时】cleanOnExit 清理任务已提交（异步IO） - ${System.currentTimeMillis() - startTime}ms")
 
+        launchOrphanTagMigrationsIfNeeded()
+        AppLogger.d(TAG, "【启动计时】R-AGENT-029 孤儿 tag 迁移任务已提交（异步IO） - ${System.currentTimeMillis() - startTime}ms")
+
         // Initialize ActivityLifecycleManager to track the current activity
         ActivityLifecycleManager.initialize(this)
         AppLogger.d(TAG, "【启动计时】ActivityLifecycleManager初始化完成 - ${System.currentTimeMillis() - startTime}ms")
@@ -417,6 +420,52 @@ class OperitApplication : Application(), ImageLoaderFactory, WorkConfiguration.P
                 )
             } catch (e: Exception) {
                 AppLogger.e(TAG, "清理临时文件失败", e)
+            }
+        }
+    }
+
+    /**
+     * R-AGENT-029: 一次性清理旧库 `#auto_summary_id:*` 孤儿 tag。
+     *
+     * R-AGENT-027 已堵住生产源（fact 抽取不再写该 tag），但历史 APK（含 r026-aikeep `ba814a70`）装机的
+     * ObjectBox 里仍有残留 + R-AGENT-026 keepDecision=false 路径产生的 `#auto_summary_id:-1` 孤儿。
+     * 用 SharedPreferences 防重入键 `R_AGENT_029_auto_summary_id_orphan_cleanup_done`，
+     * 任一 profile 失败不写完成标记，下次启动重试。
+     *
+     * 仿 [launchCleanOnExitCleanup] 范式：applicationScope + Dispatchers.IO + try/catch，
+     * 不阻塞主线程，不影响其它启动任务。
+     */
+    private fun launchOrphanTagMigrationsIfNeeded() {
+        applicationScope.launch {
+            val migrationStartTime = System.currentTimeMillis()
+            val prefs = getSharedPreferences("hermes_data_migrations", Context.MODE_PRIVATE)
+            val key = "R_AGENT_029_auto_summary_id_orphan_cleanup_done"
+            if (prefs.getBoolean(key, false)) {
+                return@launch
+            }
+            try {
+                val profiles = preferencesManager.profileListFlow.first()
+                if (profiles.isEmpty()) {
+                    AppLogger.d(TAG, "R-AGENT-029: no profiles yet, skip migration this run")
+                    return@launch
+                }
+                var totalCleaned = 0
+                for (profileId in profiles) {
+                    val repo = com.ai.assistance.operit.data.repository.MemoryRepository(
+                        applicationContext,
+                        profileId
+                    )
+                    val cleaned = repo.cleanupOrphanTagsByPrefix("#auto_summary_id:")
+                    totalCleaned += cleaned
+                    AppLogger.d(TAG, "R-AGENT-029: profile=$profileId cleaned=$cleaned orphan tag(s)")
+                }
+                prefs.edit().putBoolean(key, true).apply()
+                AppLogger.d(
+                    TAG,
+                    "R-AGENT-029: migration done, totalCleaned=$totalCleaned orphan tag(s) across ${profiles.size} profile(s), 耗时${System.currentTimeMillis() - migrationStartTime}ms"
+                )
+            } catch (e: Exception) {
+                AppLogger.w(TAG, "R-AGENT-029: orphan tag migration failed, will retry next launch: ${e.message}")
             }
         }
     }
