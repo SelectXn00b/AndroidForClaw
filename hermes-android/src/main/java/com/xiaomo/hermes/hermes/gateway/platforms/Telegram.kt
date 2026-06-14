@@ -94,11 +94,44 @@ class TelegramAdapter(
         ?.filter { it.isNotEmpty() }
         ?.toSet() ?: emptySet()
 
-    private val _httpClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(POLLING_TIMEOUT.toLong() + 10, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .build()
+    /**
+     * Optional HTTP / SOCKS proxy URL (R-GW-010). Empty string → fall back to
+     * env vars `TELEGRAM_PROXY` → `HTTPS_PROXY` → `HTTP_PROXY` → `ALL_PROXY`,
+     * matching Python upstream `gateway/platforms/base.py:151-170`. Final
+     * resolution happens in [_resolveProxy] which is called once during
+     * `_httpClient` construction.
+     *
+     * Schemes accepted: `http://`, `https://`, `socks5://`, `socks://`.
+     * `socks5h://` (remote DNS) is recognized but downgraded to local-DNS
+     * SOCKS — OkHttp does not natively support remote-DNS SOCKS.
+     */
+    private val _proxyUrl: String = config.extra("proxy_url", "").trim()
+
+    private val _resolvedProxy: java.net.Proxy? = _resolveProxy()
+
+    private val _httpClient: OkHttpClient = run {
+        val builder = OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(POLLING_TIMEOUT.toLong() + 10, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+        if (_resolvedProxy != null) {
+            builder.proxy(_resolvedProxy)
+            val addr = _resolvedProxy.address() as? java.net.InetSocketAddress
+            val typeLabel = when (_resolvedProxy.type()) {
+                java.net.Proxy.Type.SOCKS -> "socks"
+                java.net.Proxy.Type.HTTP -> "http"
+                else -> "direct"
+            }
+            // Never log the user:pass component of the URL.
+            Log.i(_TAG, "Telegram adapter using proxy=$typeLabel://${addr?.hostString}:${addr?.port}")
+        } else {
+            Log.i(_TAG, "Telegram adapter: no proxy configured")
+        }
+        builder.build()
+    }
+
+    private fun _resolveProxy(): java.net.Proxy? =
+        resolveProxyFromConfigAndEnv(_proxyUrl) { name -> System.getenv(name) }
 
     private val _dedup: MessageDeduplicator = MessageDeduplicator()
     private val _chatQueues: ConcurrentHashMap<String, Channel<MessageEvent>> = ConcurrentHashMap()
@@ -818,4 +851,99 @@ class TelegramAdapter(
      * Get the bot user id.
      */
     val botUserId: Long get() = _botUserId
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// R-GW-010: HTTP / SOCKS proxy URL parsing & resolution.
+//
+// Kept at top level so [TelegramProxyParseTest] can drive them as pure
+// functions — the adapter just calls [resolveProxyFromConfigAndEnv] with its
+// `proxy_url` extra and `System::getenv` and uses whatever comes back.
+//
+// Aligns with Python upstream `gateway/platforms/base.py:151-170`
+// `resolve_proxy_url(...)` and `gateway/platforms/telegram.py:706-736`.
+// ──────────────────────────────────────────────────────────────────────────
+
+private const val _PROXY_TAG = "TelegramProxy"
+
+/** Env vars consulted in order when `config.extra["proxy_url"]` is empty. */
+private val _PROXY_ENV_NAMES: List<String> = listOf(
+    "TELEGRAM_PROXY",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "ALL_PROXY",
+)
+
+/**
+ * Parse a single proxy URL string into a [java.net.Proxy] suitable for
+ * `OkHttpClient.Builder().proxy(...)`. Returns `null` if the URL is empty,
+ * blank, malformed, missing port, or uses an unsupported scheme.
+ *
+ * Supported schemes:
+ *   - `http://`, `https://`  → [java.net.Proxy.Type.HTTP] (HTTPS proxy uses
+ *     HTTP CONNECT — Java has no separate HTTPS type)
+ *   - `socks://`, `socks5://`, `socks5h://` → [java.net.Proxy.Type.SOCKS]
+ *     (note: `socks5h://` requests remote DNS, which OkHttp doesn't
+ *     natively support — we downgrade to local-DNS SOCKS)
+ *
+ * User:pass embedded in the URL (`socks5://user:pass@host:port`) is
+ * accepted but **not** wired into a [java.net.Authenticator] here —
+ * authenticated SOCKS / HTTP-CONNECT-with-Basic isn't surfaced as a
+ * configuration option in app UI; users needing auth should use
+ * `socks5://user:pass@host:port` and the OS-level / OkHttp default
+ * authenticator chain (out of scope for this minimal R).
+ */
+internal fun parseProxyUrl(raw: String): java.net.Proxy? {
+    val url = raw.trim()
+    if (url.isEmpty()) return null
+    return try {
+        val uri = java.net.URI(url)
+        val scheme = uri.scheme?.lowercase() ?: return logProxyWarn("missing scheme: $url")
+        val host = uri.host ?: return logProxyWarn("missing host: $url")
+        val port = uri.port
+        if (port < 0) return logProxyWarn("missing port: $url")
+
+        val type = when (scheme) {
+            "http", "https" -> java.net.Proxy.Type.HTTP
+            "socks", "socks5", "socks5h" -> java.net.Proxy.Type.SOCKS
+            else -> return logProxyWarn("unsupported scheme `$scheme`: $url")
+        }
+        // Use `createUnresolved` so DNS happens at connect time, not parse time.
+        java.net.Proxy(type, java.net.InetSocketAddress.createUnresolved(host, port))
+    } catch (e: Exception) {
+        logProxyWarn("parse failed: ${e.message}; url=$url")
+    }
+}
+
+/**
+ * Resolve a proxy from the user's `config.extra["proxy_url"]` (if non-empty)
+ * or the env-var fallback chain `TELEGRAM_PROXY` → `HTTPS_PROXY` →
+ * `HTTP_PROXY` → `ALL_PROXY`. The first non-empty source that parses
+ * successfully wins.
+ *
+ * @param configProxyUrl value of `config.extra["proxy_url"]` — typically what
+ *                       the user entered in the app credentials UI.
+ * @param envLookup      injectable env lookup so tests don't need to mutate
+ *                       the real process environment.
+ */
+internal fun resolveProxyFromConfigAndEnv(
+    configProxyUrl: String,
+    envLookup: (String) -> String?,
+): java.net.Proxy? {
+    val configTrimmed = configProxyUrl.trim()
+    if (configTrimmed.isNotEmpty()) {
+        parseProxyUrl(configTrimmed)?.let { return it }
+        // configured but unparseable → fall through to env, don't silently use no-proxy
+    }
+    for (envName in _PROXY_ENV_NAMES) {
+        val envValue = envLookup(envName)?.trim().orEmpty()
+        if (envValue.isEmpty()) continue
+        parseProxyUrl(envValue)?.let { return it }
+    }
+    return null
+}
+
+private fun logProxyWarn(msg: String): java.net.Proxy? {
+    Log.w(_PROXY_TAG, msg)
+    return null
 }

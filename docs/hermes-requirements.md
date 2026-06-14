@@ -698,6 +698,68 @@ HermesApp 作为网关把 agent 能力接到外部 IM / 协作平台（飞书、
   - token 留空 → buildTelegram 返回 null，gateway 不启动 telegram，无崩溃
   - 配好 token + 空 chat_ids → 给 bot 发语音，agent 拿到 R-GW-008 定义的 bilingual 前缀
 
+### R-GW-010: Telegram bot HTTP / SOCKS 代理支持
+**来源**:
+- 用户 2026-06-14 直接指令："增加一个代理 Telegram bot 的功能"——国内网络环境下 `api.telegram.org` 通常不可达，必须经 HTTP / HTTPS / SOCKS5 代理才能让 bot 正常 long-polling + 下载语音文件。
+- Python 上游对应实现（`reference/hermes-agent/gateway/platforms/telegram.py:706-736`）：通过 `resolve_proxy_url("TELEGRAM_PROXY")` 拿单个 proxy URL，然后 `HTTPXRequest(proxy=proxy_url)` 注入 PTB 的 httpx 传输层。当 proxy 设置时跳过 fallback IPs 路径。
+- Python 上游 schema 字段：`platforms.telegram.proxy_url`（单 string，对齐 `gateway/config.py` + `website/docs/user-guide/messaging/telegram.md:206-226`，scheme 支持 `http://` / `https://` / `socks5://`）。
+- Python 上游 env fallback（`gateway/platforms/base.py:151-170`）：`TELEGRAM_PROXY` > `HTTPS_PROXY` > `HTTP_PROXY` > `ALL_PROXY`。
+
+**背景**:
+- `Telegram.kt:97-101` 当前 OkHttp client 裸构造，无 proxy；R-GW-008 的 voice 下载（`getFile` + CDN GET）和 long-polling（`getUpdates`）都直连 `api.telegram.org` / `api.telegram.org/file/bot<TOKEN>/...`，国内 99% 失败。
+- `PlatformConfig.extra: Map<String, Any>`（`Config.kt:124-172`）已经是 escape hatch，已被 `webhook_url` / `use_polling` / `parse_markdown` 等多个可选字段使用——proxy_url 直接走 `extra["proxy_url"]` 即可，**不改 PlatformConfig schema**。
+- 当前 app 完全没有任何全局代理基础设施（OpenAI / OpenRouter 调用也是直连）；本 R 只解决 Telegram adapter 这一处，不引入跨平台代理抽象——其他平台需要时另开 R。
+
+**架构合规**:
+- 字段名严格用 `proxy_url`（**不**叫 `proxy`），1:1 对齐 Python 上游 schema 字面值。
+- 走 `PlatformConfig.extra["proxy_url"]`，不改 PlatformConfig data class。
+- 优先级：`config.extra["proxy_url"]`（用户在 app 配的）→ env `TELEGRAM_PROXY` → env `HTTPS_PROXY` → env `HTTP_PROXY` → env `ALL_PROXY`。Python 是 env-first（`resolve_proxy_url` 内部排序），但 Android 上 env 几乎不可设——用户在 app 输入框填的明显应当压过 env，所以这里**故意**翻转优先级：用户填了 = 用户说了算。
+- Scheme 解析：`http://` / `https://` → `Proxy.Type.HTTP`；`socks5://` / `socks://` → `Proxy.Type.SOCKS`。**不**支持 `socks5h://`（远端 DNS）—— OkHttp 原生不支持，强加 socket factory 复杂度过高，偏离最小可用方案；用户必要时可用 http 代理兜底（文档说明）。
+- SOCKS5 用户名密码：URL 内嵌 `socks5://user:pass@host:port`，通过 `java.net.Authenticator.setDefault` 注入；不为这种少见情况单独加字段。
+- 不加 feature flag、不加"启用代理"开关——`proxy_url` 空字符串就是关闭，简洁。
+
+**行为**:
+- **HermesGatewayPreferences.kt**：
+  - 加 `const val SECRET_TELEGRAM_PROXY_URL = "proxy_url"`（与 `SECRET_TELEGRAM_TOKEN` / `SECRET_TELEGRAM_ALLOWED_CHAT_IDS` 同区段）
+- **HermesGatewayConfigBuilder.kt**：
+  - `buildTelegram(prefs)` 内读 `prefs.readSecret(PLATFORM_TELEGRAM, SECRET_TELEGRAM_PROXY_URL)`；非空时写入 `extra["proxy_url"] = trimmedUrl`
+  - 空字符串 → 不写 key（让 adapter 走 env fallback；env 也没有就直连）
+- **Telegram.kt**：
+  - 加 `private val _proxyUrl: String = config.extra("proxy_url", "")` 解析（顶部字段区，与 `_webhookUrl` 等同级）
+  - 加私有 helper `_resolveProxy(): java.net.Proxy?`：
+    1. 优先用 `_proxyUrl`（非空）
+    2. 否则按顺序读 env `TELEGRAM_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`
+    3. 全空 → 返回 null（不加 proxy）
+    4. 解析 URL：scheme 决定 `Proxy.Type.HTTP` / `Proxy.Type.SOCKS`；host + port → `InetSocketAddress.createUnresolved`
+    5. URL 含 user:pass → 注册 `java.net.Authenticator`（仅当 host+port 与 proxy 匹配才返回 PasswordAuthentication，避免污染全局）
+    6. 解析失败 → log warn + 返回 null（不阻塞启动）
+  - `_httpClient` 构造改为：`OkHttpClient.Builder().proxy(_resolveProxy())...`；proxy 为 null 时不调 `.proxy()`（保持原行为）
+  - 启动日志：`connect()` 入口 log 一行 "Telegram adapter using proxy=<scheme>://<host>:<port>"（**不**打 user:pass）或 "no proxy configured" —— 排查链路问题首要信号
+- **HermesGatewayCredentialsScreen.kt**：
+  - `TELEGRAM_FIELDS` 加第三个 `CredentialField(SECRET_TELEGRAM_PROXY_URL, R.string.hermes_credentials_telegram_proxy_url, isSecret = false)`
+  - 字段标签下副文：示例 `socks5://127.0.0.1:1080` 或 `http://10.0.2.2:8118`
+- **strings.xml** + **values-en/strings.xml**：加 `hermes_credentials_telegram_proxy_url` 标签 + `hermes_credentials_telegram_proxy_url_hint` 提示文案
+
+**验收**:
+- **A. Preferences 已加常量**：`HermesGatewayPreferences.kt` 含 `SECRET_TELEGRAM_PROXY_URL = "proxy_url"`
+- **B. ConfigBuilder 已注入 extra**：`HermesGatewayConfigBuilder.kt` 在 `buildTelegram` 中读 `SECRET_TELEGRAM_PROXY_URL` 并在非空时写 `extra["proxy_url"]`
+- **C. Telegram.kt 已构造代理**：
+  - 含 `_proxyUrl` / `_resolveProxy` 命名（或语义等价）的字段 / helper
+  - `_httpClient` 构造路径含 `.proxy(` 调用（条件式，proxy 为 null 时跳过 OK）
+  - 含 `java.net.Proxy` / `Proxy.Type.HTTP` / `Proxy.Type.SOCKS` 引用
+  - 含 env fallback 链：源码扫描见 `TELEGRAM_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` 四个字面值
+- **D. UI 已加 proxy 输入字段**：`HermesGatewayCredentialsScreen.kt` 的 `TELEGRAM_FIELDS` 含 `SECRET_TELEGRAM_PROXY_URL` 引用
+- **E. 红线守卫**：R-GW-009 的 token / allowed_chat_ids 字段不被误改；Feishu / Weixin 接线不动
+- **F. §2 四件套**：维持基线（不新增 functional stub；deep_align / verify_align / scan_stubs 维持零）
+- **G. 单测覆盖**：源码扫描守 wiring（TC-GW-010-a..d）；URL 解析单测（http / https / socks5 / 带 auth / malformed）走 `Telegram.kt` 内的纯函数 helper
+- **H. 手测**:
+  - 在 app 设置 → Hermes Gateway → 凭证页 Telegram 卡片填 `socks5://127.0.0.1:1080`（或可达的 http proxy）→ 保存 → 启用
+  - logcat `HermesGatewayController` / `Telegram` 标签见 "using proxy=socks5://127.0.0.1:1080" 行
+  - bot 能正常 connect（log "Bot connected: @xxx"）
+  - 给 bot 发语音 → R-GW-008 链路完整跑通
+  - proxy_url 留空 → 行为与 R-GW-009 完全一致（直连，国外环境正常工作）
+  - proxy_url 写一个无效 URL（如 `not-a-url`）→ log warn + 退化到直连，不崩溃
+
 ---
 
 ## 域 STATE — 会话状态 / trajectory

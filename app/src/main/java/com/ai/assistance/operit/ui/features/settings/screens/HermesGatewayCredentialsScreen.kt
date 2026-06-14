@@ -130,6 +130,7 @@ private val WEIXIN_FIELDS = listOf(
 private val TELEGRAM_FIELDS = listOf(
     CredentialField(HermesGatewayPreferences.SECRET_TELEGRAM_TOKEN, R.string.hermes_credentials_telegram_token, true),
     CredentialField(HermesGatewayPreferences.SECRET_TELEGRAM_ALLOWED_CHAT_IDS, R.string.hermes_credentials_telegram_allowed_chat_ids, false),
+    CredentialField(HermesGatewayPreferences.SECRET_TELEGRAM_PROXY_URL, R.string.hermes_credentials_telegram_proxy_url, false),
 )
 
 @Composable
