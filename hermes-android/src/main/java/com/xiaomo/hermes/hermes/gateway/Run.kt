@@ -354,19 +354,33 @@ class GatewayRunner(
             var agentOk = true
             val runner = agentRunner
             var currentEvent = event
-            var responseText = if (runner != null) {
-                try {
-                    runner(
-                        event.text,
-                        session.sessionKey,
-                        platformName,
-                        event.source.chatId,
-                        event.source.userId
-                    )
-                } catch (e: Throwable) {
-                    Log.w(_TAG, "agentRunner threw: ${e.message}", e)
-                    agentOk = false
-                    "Agent loop error: ${e.message ?: e.javaClass.simpleName}"
+            // R-GW-011: 把 runner(...) 调用包到 coroutineScope { launch { _keepTyping } ... finally { cancel } }
+            // 让 Telegram 这类支持 typing 提示的平台在 agent 思考期间持续向 chat 发 "正在输入…"，
+            // adapter 为 null 或平台默认 no-op 时无副作用。对齐 Python `gateway/platforms/base.py:1812-1826`
+            // 的 typing_task = asyncio.create_task(_keep_typing(...)) + finally typing_task.cancel() 模式。
+            var responseText: String = if (runner != null) {
+                coroutineScope {
+                    val typingJob: Job? = adapter?.let {
+                        launch { it._keepTyping(event.source.chatId) }
+                    }
+                    try {
+                        try {
+                            runner(
+                                event.text,
+                                session.sessionKey,
+                                platformName,
+                                event.source.chatId,
+                                event.source.userId
+                            )
+                        } catch (e: Throwable) {
+                            Log.w(_TAG, "agentRunner threw: ${e.message}", e)
+                            agentOk = false
+                            "Agent loop error: ${e.message ?: e.javaClass.simpleName}"
+                        }
+                    } finally {
+                        typingJob?.cancel()
+                        typingJob?.join()
+                    }
                 }
             } else {
                 Log.w(_TAG, "agentRunner not configured — returning placeholder")
@@ -489,17 +503,29 @@ class GatewayRunner(
                 interruptFlag.set(false)
                 session.lastMessageAt = _sessionNowIso()
 
-                responseText = try {
-                    runner(
-                        pendingEvent.text,
-                        session.sessionKey,
-                        platformName,
-                        pendingEvent.source.chatId,
-                        pendingEvent.source.userId
-                    )
-                } catch (e: Throwable) {
-                    Log.w(_TAG, "agentRunner threw for pending event: ${e.message}", e)
-                    "Agent loop error: ${e.message ?: e.javaClass.simpleName}"
+                // R-GW-011: pending-event 循环里的 runner 调用同样要包 _keepTyping，
+                // 让 typing 提示跟着当前正在处理的 pendingEvent 的 chatId 走，而不是初始 event 的。
+                responseText = coroutineScope {
+                    val typingJob: Job? = adapter?.let {
+                        launch { it._keepTyping(pendingEvent.source.chatId) }
+                    }
+                    try {
+                        try {
+                            runner(
+                                pendingEvent.text,
+                                session.sessionKey,
+                                platformName,
+                                pendingEvent.source.chatId,
+                                pendingEvent.source.userId
+                            )
+                        } catch (e: Throwable) {
+                            Log.w(_TAG, "agentRunner threw for pending event: ${e.message}", e)
+                            "Agent loop error: ${e.message ?: e.javaClass.simpleName}"
+                        }
+                    } finally {
+                        typingJob?.cancel()
+                        typingJob?.join()
+                    }
                 }
 
                 currentEvent = pendingEvent
