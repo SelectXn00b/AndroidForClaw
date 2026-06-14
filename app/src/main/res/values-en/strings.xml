@@ -7307,6 +7307,9 @@
     <string name="hermes_credentials_feishu_encrypt_key">Encrypt Key (optional)</string>
     <string name="hermes_credentials_weixin_account_id">Account ID</string>
     <string name="hermes_credentials_weixin_login_token">Login Token (filled after QR login)</string>
+    <string name="hermes_platform_telegram">Telegram</string>
+    <string name="hermes_credentials_telegram_token">Bot Token</string>
+    <string name="hermes_credentials_telegram_allowed_chat_ids">Allowed Chat IDs (comma-separated; empty = anyone in the bot\'s chats can trigger it)</string>
 
     <string name="hermes_policy_dm_policy">DM access policy</string>
     <string name="hermes_policy_dm_allow_from">DM allow list (comma-separated)</string>

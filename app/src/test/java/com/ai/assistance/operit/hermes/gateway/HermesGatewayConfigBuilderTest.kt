@@ -163,9 +163,13 @@ class HermesGatewayConfigBuilderTest {
         // The hard-coded value lives in build(context) which we can't exercise
         // without Android runtime. Assert directly via the source text so this
         // test fails the moment someone changes the literal.
-        val src = java.io.File(
-            "/Users/qiao/file/HermesApp/HermesApp/app/src/main/java/com/ai/assistance/operit/hermes/gateway/HermesGatewayConfigBuilder.kt"
-        ).readText()
+        val candidates = listOf(
+            "app/src/main/java/com/ai/assistance/operit/hermes/gateway/HermesGatewayConfigBuilder.kt",
+            "src/main/java/com/ai/assistance/operit/hermes/gateway/HermesGatewayConfigBuilder.kt"
+        )
+        val builderFile = candidates.map { java.io.File(it) }.firstOrNull { it.exists() }
+            ?: error("Cannot locate HermesGatewayConfigBuilder.kt — cwd=${java.io.File(".").absolutePath}")
+        val src = builderFile.readText()
         assertTrue(
             "HermesGatewayConfigBuilder must hard-code maxConcurrentSessions = 5",
             src.contains("maxConcurrentSessions = 5"))

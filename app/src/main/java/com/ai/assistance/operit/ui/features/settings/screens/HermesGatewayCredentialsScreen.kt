@@ -54,6 +54,8 @@ fun HermesGatewayCredentialsScreen() {
         .collectAsState(initial = false)
     val weixinEnabled by prefs.platformEnabledFlow(HermesGatewayPreferences.PLATFORM_WEIXIN)
         .collectAsState(initial = false)
+    val telegramEnabled by prefs.platformEnabledFlow(HermesGatewayPreferences.PLATFORM_TELEGRAM)
+        .collectAsState(initial = false)
 
     CustomScaffold { padding: PaddingValues ->
         Column(
@@ -88,6 +90,18 @@ fun HermesGatewayCredentialsScreen() {
                 fields = WEIXIN_FIELDS,
                 prefs = prefs,
             )
+            PlatformCredentialsCard(
+                title = stringResource(R.string.hermes_platform_telegram),
+                enabled = telegramEnabled,
+                onEnabledChange = { enabled ->
+                    scope.launch {
+                        prefs.savePlatformEnabled(HermesGatewayPreferences.PLATFORM_TELEGRAM, enabled)
+                    }
+                },
+                platform = HermesGatewayPreferences.PLATFORM_TELEGRAM,
+                fields = TELEGRAM_FIELDS,
+                prefs = prefs,
+            )
         }
     }
 }
@@ -108,6 +122,14 @@ private val FEISHU_FIELDS = listOf(
 private val WEIXIN_FIELDS = listOf(
     CredentialField(HermesGatewayPreferences.SECRET_WEIXIN_ACCOUNT_ID, R.string.hermes_credentials_weixin_account_id, false),
     CredentialField(HermesGatewayPreferences.SECRET_WEIXIN_LOGIN_TOKEN, R.string.hermes_credentials_weixin_login_token, true),
+)
+
+// R-GW-009: Telegram credential fields. token is secret (Bot Token from @BotFather);
+// allowed_chat_ids is also stored encrypted because anyone holding it can inspect
+// the whitelist composition.
+private val TELEGRAM_FIELDS = listOf(
+    CredentialField(HermesGatewayPreferences.SECRET_TELEGRAM_TOKEN, R.string.hermes_credentials_telegram_token, true),
+    CredentialField(HermesGatewayPreferences.SECRET_TELEGRAM_ALLOWED_CHAT_IDS, R.string.hermes_credentials_telegram_allowed_chat_ids, false),
 )
 
 @Composable

@@ -24,6 +24,7 @@ object HermesGatewayConfigBuilder {
 
         buildFeishu(prefs)?.let { platforms[Platform.FEISHU] = it }
         buildWeixin(prefs)?.let { platforms[Platform.WEIXIN] = it }
+        buildTelegram(prefs)?.let { platforms[Platform.TELEGRAM] = it }
 
         return GatewayConfig(
             hermesHome = getHermesHome().absolutePath,
@@ -105,6 +106,54 @@ object HermesGatewayConfigBuilder {
             groupPolicy = readPolicy(prefs, HermesGatewayPreferences.PLATFORM_WEIXIN, HermesGatewayPreferences.FIELD_GROUP_POLICY, "allowlist"),
             groupAllowFrom = readCsv(prefs, HermesGatewayPreferences.PLATFORM_WEIXIN, HermesGatewayPreferences.FIELD_GROUP_ALLOW_FROM),
             replyToMode = readPolicy(prefs, HermesGatewayPreferences.PLATFORM_WEIXIN, HermesGatewayPreferences.FIELD_REPLY_TO_MODE, "first"),
+            extra = extra,
+        )
+    }
+
+    /**
+     * Build Telegram [PlatformConfig] from prefs (R-GW-009).
+     *
+     * Reads `token` (required) and `allowed_chat_ids` (optional, comma /
+     * newline-separated) from the encrypted secret store. Empty token →
+     * returns null (telegram adapter won't be instantiated; avoids the
+     * "Telegram bot token not configured" hard-error in `Telegram.kt:128`).
+     *
+     * `allowed_chat_ids` empty → no chat whitelist (any chat the bot is in
+     * can trigger it). UI surfaces a non-blocking warning for that case;
+     * see `HermesGatewayCredentialsScreen.kt`.
+     */
+    private suspend fun buildTelegram(prefs: HermesGatewayPreferences): PlatformConfig? {
+        val token = prefs.readSecret(
+            HermesGatewayPreferences.PLATFORM_TELEGRAM,
+            HermesGatewayPreferences.SECRET_TELEGRAM_TOKEN,
+        )
+        if (token.isEmpty()) {
+            Log.w(TAG, "buildTelegram: skipped — token MISSING")
+            return null
+        }
+
+        val allowedChatIdsCsv = prefs.readSecret(
+            HermesGatewayPreferences.PLATFORM_TELEGRAM,
+            HermesGatewayPreferences.SECRET_TELEGRAM_ALLOWED_CHAT_IDS,
+        )
+        val allowedChatIds = allowedChatIdsCsv
+            .split(',', '\n')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+
+        val extra = buildMap<String, Any> {
+            if (allowedChatIds.isNotEmpty()) put("allowed_chat_ids", allowedChatIds)
+        }
+
+        return PlatformConfig(
+            platform = Platform.TELEGRAM,
+            enabled = true,
+            token = token,
+            dmPolicy = readPolicy(prefs, HermesGatewayPreferences.PLATFORM_TELEGRAM, HermesGatewayPreferences.FIELD_DM_POLICY, "open"),
+            dmAllowFrom = readCsv(prefs, HermesGatewayPreferences.PLATFORM_TELEGRAM, HermesGatewayPreferences.FIELD_DM_ALLOW_FROM),
+            groupPolicy = readPolicy(prefs, HermesGatewayPreferences.PLATFORM_TELEGRAM, HermesGatewayPreferences.FIELD_GROUP_POLICY, "allowlist"),
+            groupAllowFrom = readCsv(prefs, HermesGatewayPreferences.PLATFORM_TELEGRAM, HermesGatewayPreferences.FIELD_GROUP_ALLOW_FROM),
+            replyToMode = readPolicy(prefs, HermesGatewayPreferences.PLATFORM_TELEGRAM, HermesGatewayPreferences.FIELD_REPLY_TO_MODE, "first"),
             extra = extra,
         )
     }

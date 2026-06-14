@@ -640,6 +640,64 @@ HermesApp 作为网关把 agent 能力接到外部 IM / 协作平台（飞书、
   - 转写失败（key 错 / 网络错）→ 显示降级文案，不崩溃
   - 用户发图片 → 维持现状（不下载、占位符）—— 守"图片下次 R"红线
 
+### R-GW-009: Telegram 平台凭证在 app UI 与启动配置链路里接通
+**来源**:
+- 用户 2026-06-14 直接指令：在尝试按 R-GW-008 的"手测建议"配 Telegram bot 时报告"在 app 上找不到配置 Telegram Bot"——R-GW-008 只接通了 hermes-android 内核侧的 voice/audio 自动转写链路，但 **app/HermesGatewayCredentialsScreen + HermesGatewayPreferences + HermesGatewayConfigBuilder 三处都没有 Telegram**，用户填不进 token，启动路径也不会构造 `Platform.TELEGRAM` 的 `PlatformConfig`，结果是内核代码齐全但永远不会被实例化。
+- 与 R-GW-002（Feishu）/ R-GW-003（Weixin）一一对应——这两个平台已经在 app UI 接通；R-GW-009 把同一套接线补到 Telegram。
+- Python 上游对应字段（`reference/hermes-agent/gateway/run.py` 的 `platforms.telegram` config + `gateway/platforms/telegram.py` 的 `TelegramAdapter.__init__` 读取的 `bot_token` / `allowed_chat_ids`）。
+
+**背景**:
+- `HermesGatewayPreferences.kt:170-192` 当前仅声明 `PLATFORM_FEISHU` / `PLATFORM_WEIXIN` 两个平台 key，没有 `PLATFORM_TELEGRAM`。
+- `HermesGatewayConfigBuilder.kt:21-33` 的 `build(appContext)` 只调 `buildFeishu` / `buildWeixin`，不会构造 telegram `PlatformConfig`。
+- `HermesGatewayCredentialsScreen.kt:67-90` 只渲染 Feishu / Weixin 两张 `PlatformCredentialsCard`，没有 Telegram 卡片。
+- 因此即便 `Telegram.kt` + `Run.kt#_createAdapter` 的 `Platform.TELEGRAM` 分支齐全，**用户无法在 app 内输入 token**，R-GW-008 实际上跑不起来。
+- Telegram bot 默认任何人加好友 / 拉群即可触发，没有 chat 白名单 = 任何人都能消耗 OpenAI key 跑转写——`allowed_chat_ids` 是安全门，不是 nice-to-have。
+
+**架构合规**:
+- 复用 R-GW-002/003 的接线模式（Preferences key 命名 + Card 复用 + Builder 分支添加），不引入新抽象。
+- 字段集只暴露 `token`（必填）+ `allowed_chat_ids`（可选，逗号分隔的 chat id 列表）；`base_url` 这次不做（用户没明确提，Python 上游 Telegram 也无 base_url 字段；后续真有自建反代需求再开新 R）。
+- 不加 feature flag——直接跟 Feishu / Weixin 同级走 `HermesGatewayConfigBuilder.build`，对齐 CLAUDE.md §6"不做 feature flag"反模式。
+
+**行为**:
+- **HermesGatewayPreferences.kt**：
+  - 加 `const val PLATFORM_TELEGRAM = "telegram"`
+  - 加 `val TELEGRAM_FIELDS = listOf("token", "allowed_chat_ids")` 之类的字段元数据（与 Feishu/Weixin 风格一致）
+  - 现有的 `savePlatformEnabled(platformKey, enabled)` / `setCredentialField` 等通用 API 自动适用，不改签名
+- **HermesGatewayConfigBuilder.kt**：
+  - 加 `private fun buildTelegram(appContext: Context): PlatformConfig?` 方法：
+    - 检查 `isPlatformEnabled(PLATFORM_TELEGRAM)`，未启用 → 返回 null
+    - 读 `getCredentialField(PLATFORM_TELEGRAM, "token")`；空 → 返回 null（缺 token 不构造 config，避免 Telegram.kt 启动失败）
+    - 读 `getCredentialField(PLATFORM_TELEGRAM, "allowed_chat_ids")`，逗号分隔解析为 `List<String>`（空字符串 → 空列表）
+    - 构造 `PlatformConfig(platform = Platform.TELEGRAM, token = token, extra = mapOf("allowed_chat_ids" to chatIds))` 之类（具体字段名按 `PlatformConfig` 现有 schema）
+  - `build(appContext)` 主入口加调用：`buildTelegram(appContext)?.let { configs += it }`，与 `buildFeishu` / `buildWeixin` 同级
+- **HermesGatewayCredentialsScreen.kt**：
+  - 加第三张 `PlatformCredentialsCard`，platformKey = `PLATFORM_TELEGRAM`，字段集 = `TELEGRAM_FIELDS`
+  - card 标题"Telegram"，副标题简短引导（如"配置 Bot Token，填了 allowed_chat_ids 才能限制谁能触发"）
+  - `allowed_chat_ids` 留空时给非阻断 warning（不是 error）：当前实现允许空白名单，但 UI 上文字提醒"留空表示任何与 bot 对话的人都会触发"
+
+**验收**:
+- **A. Preferences 已加常量**：
+  - `HermesGatewayPreferences.kt` 含 `PLATFORM_TELEGRAM` 常量声明，值为 `"telegram"`
+  - 含 `TELEGRAM_FIELDS` 常量声明，至少包含 `"token"` 和 `"allowed_chat_ids"` 两个字段名
+- **B. ConfigBuilder 已加分支**：
+  - `HermesGatewayConfigBuilder.kt` 含 `buildTelegram(` 函数声明
+  - `build(appContext)` 函数体含 `buildTelegram(` 调用
+  - `buildTelegram` 函数体读 `PLATFORM_TELEGRAM` + `"token"` + `"allowed_chat_ids"` 三个字面值
+- **C. UI 已加 Telegram 卡片**：
+  - `HermesGatewayCredentialsScreen.kt` 含 `PLATFORM_TELEGRAM` 引用
+  - 含 `TELEGRAM_FIELDS` 引用（或等价的 fields 字段集表达）
+  - 含 `"Telegram"` 字面值（标题）
+- **D. Feishu / Weixin 接线不变**（红线守卫）：
+  - `HermesGatewayConfigBuilder.kt` 仍含 `buildFeishu(` 与 `buildWeixin(` 调用
+  - `HermesGatewayCredentialsScreen.kt` 仍含 `PLATFORM_FEISHU` / `PLATFORM_WEIXIN` 引用
+- **E. §2 四件套**：`verify_align / scan_stubs / deep_align / scan_functional_stubs` 维持基线（本 R 只动 app 层接线，不动 hermes-android 内核 / 不新增 Python 上游对齐文件）
+- **F. 单元测试**：源码扫描守 wiring（TC-GW-009-a..d）；Compose UI 行为测 deferred 到手测（app 模块的 Compose 测试基础设施未配 ComposeTestRule）
+- **G. 手测验收**：
+  - 打开 app → 设置 → Hermes Gateway → 凭证页：可见 Telegram 卡片，能填 token + allowed_chat_ids
+  - 启用 Telegram 后启动 gateway → logcat `HermesGatewayController` / `Run` 日志含 Telegram adapter 启动行
+  - token 留空 → buildTelegram 返回 null，gateway 不启动 telegram，无崩溃
+  - 配好 token + 空 chat_ids → 给 bot 发语音，agent 拿到 R-GW-008 定义的 bilingual 前缀
+
 ---
 
 ## 域 STATE — 会话状态 / trajectory

@@ -7450,6 +7450,9 @@
     <string name="hermes_credentials_feishu_encrypt_key">Encrypt Key（可选）</string>
     <string name="hermes_credentials_weixin_account_id">账号 ID</string>
     <string name="hermes_credentials_weixin_login_token">登录令牌（扫码后自动填写）</string>
+    <string name="hermes_platform_telegram">Telegram</string>
+    <string name="hermes_credentials_telegram_token">Bot Token</string>
+    <string name="hermes_credentials_telegram_allowed_chat_ids">Allowed Chat IDs（逗号分隔，留空 = 任何人都能触发 bot）</string>
 
     <string name="hermes_policy_dm_policy">私聊准入策略</string>
     <string name="hermes_policy_dm_allow_from">私聊白名单（逗号分隔）</string>
