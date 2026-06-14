@@ -698,6 +698,60 @@ HermesApp 作为网关把 agent 能力接到外部 IM / 协作平台（飞书、
   - token 留空 → buildTelegram 返回 null，gateway 不启动 telegram，无崩溃
   - 配好 token + 空 chat_ids → 给 bot 发语音，agent 拿到 R-GW-008 定义的 bilingual 前缀
 
+### R-GW-010: [DELETED 2026-06-14]
+原 R-GW-010「Telegram bot HTTP/SOCKS proxy support」已被 commit `e202d87e` revert（用户 2026-06-14 撤回该需求）；按 §0.1 ID 不可回收规则保留占位。
+
+### R-GW-011: Gateway 处理消息时向用户发送 typing 提示（接通 _keepTyping 进 message lifecycle）
+**来源**:
+- 用户 2026-06-14 直接报告："但我发现bot，在处理信息的时候没有任何提示，正在处理等等让用户知道是正常运作工作中"——bot 收到消息后到 agent 回复前的 N 秒（甚至几十秒，含 LLM 思考 + 工具调用）chat 内完全静默，用户无从判断 bot 是死了还是在工作。
+- Python 上游 `reference/hermes-agent/gateway/platforms/base.py:1121-1136`（`send_typing` / `stop_typing` abstract，默认 no-op）+ `:1431-1475`（`_keep_typing` 后台循环每 2s 刷一次，含 `_typing_paused` 跳过 + `stop_event` 中断 + `finally: stop_typing`）+ `:1812-1826`（lifecycle：`typing_task = asyncio.create_task(_keep_typing(...))` 包住 `on_processing_start` + handler，`finally: typing_task.cancel()`）。
+- Telegram 平台 override：`reference/hermes-agent/gateway/platforms/telegram.py:1969-1997`（`send_typing` 调 `bot.send_chat_action(chat_id, action="typing", message_thread_id=...)`，5s 服务端过期）。
+
+**背景**:
+- `Base.kt:313` 已声明 `open suspend fun sendTyping(chatId, metadata)`（默认 no-op）。
+- `Telegram.kt:662-687` **已正确 override** `sendTyping`：POST `https://api.telegram.org/bot<token>/sendChatAction` body=`{"chat_id":..., "action":"typing"}`，与上游 `bot.send_chat_action` 等价。
+- `Base.kt:942-955` 已实现 `BasePlatformAdapter._keepTyping(chatId, intervalMs=2000)` 扩展函数：`while (Job.isActive) { sendTyping(); delay(intervalMs) }`，`finally { stopTyping(chatId) }` 自清理。
+- `Run.kt:349-352` 已调 `adapter?.onProcessingStart(event)`；`Run.kt:458-463` 已调 `adapter?.onProcessingComplete(...)`。
+- **缺口**：`Run.kt:357-375`（主入口 `runner(...)`）+ `Run.kt:492-503`（pending-event 循环 `runner(...)`）两处 agent loop 调用**都没用 `coroutineScope { launch { _keepTyping } }` 包住** —— 等同 Python 上游的 lifecycle 缺了 `typing_task = asyncio.create_task(_keep_typing(...))` + `finally: typing_task.cancel()`。结果：infrastructure（sendTyping override + _keepTyping 循环 + 钩子点）**已就位 80%**，差最后一条接线。
+
+**架构合规**:
+- 复用既有抽象：`sendTyping` 是 `BasePlatformAdapter` open member（已有），`_keepTyping` 是 `BasePlatformAdapter` 扩展函数（已有），`onProcessingStart` / `onProcessingComplete` 钩子（已有）。**不引入新接口、新类、新文件**。
+- 只在 `Run.kt._handleMessage` 两处 `runner(...)` 调用周围加 `coroutineScope { val typingJob = launch { adapter._keepTyping(chatId) }; try { runner(...) } finally { typingJob.cancel(); typingJob.join() } }`。
+- Feishu / Weixin 不重写 `sendTyping`（默认 no-op）= 与 Python 上游一致（`feishu.py` 显式注释 "API doesn't support typing indicator"；`weixin.py` 用复杂的 typing ticket 单独路径，本轮**不**做对齐）。Kotlin 侧 `Feishu.kt:1216-1218` 已有显式 no-op `override suspend fun sendTyping(...) { /* Feishu doesn't have a typing indicator API */ }`——这是 Python 注释的 Kotlin 落地，是正确的；本轮不动。
+- 不做 feature flag、不做兜底——直接接通；`adapter == null`（不在 platform 路径上）时，跳过 `_keepTyping` launch（与 `onProcessingStart` 同条件）。
+- **不动** `onProcessingStart` / `onProcessingComplete` 钩子的 base 实现（这是 R-GW-012 范围，当前轮次不做）。
+
+**行为**:
+- **Run.kt._handleMessage 主入口**（line 354-375 改造）：
+  - 现状：`adapter?.onProcessingStart(event)` → `runner(...)` → 处理 INTERRUPTED_SENTINEL → 走 delivery → `adapter?.onProcessingComplete(...)`。
+  - 改造：把 `runner(...)` 调用包到 `coroutineScope { val typingJob = launch { adapter._keepTyping(event.source.chatId) }; try { responseText = runner(...) } finally { typingJob.cancel(); typingJob.join() } }`。
+  - `adapter` 为 null 时不 launch `_keepTyping`（与 `onProcessingStart` 同条件守护）。
+  - try/catch 包 runner 抛错的逻辑保留（agentOk = false 路径不变）。
+- **Run.kt._handleMessage pending-event 循环**（line 492-503 改造）：
+  - 同样的 `coroutineScope { launch _keepTyping(pendingEvent.source.chatId) ... finally cancel }` 包住 pending 的 `runner(...)`。
+  - chatId 用 `pendingEvent.source.chatId`（pending event 的 chat id，不是初始 event 的）。
+- **Base.kt / Telegram.kt 不动**（已就位）。
+- **Feishu.kt / Weixin.kt / 其他平台不动**：无 override 时调到 base 默认 no-op `sendTyping`，`_keepTyping` 也仅消耗 ~0 IO（每 2s no-op call），不影响别的平台。
+
+**验收**:
+- **A. Run.kt 主入口 runner 调用被 _keepTyping 包住**：
+  - `Run.kt` 中 `_handleMessage` 函数内、`onProcessingStart` 之后、`runner(event.text,` 之前必须出现 `_keepTyping(` 调用（任意形式，带或不带前缀）。
+  - 同一函数体内出现 `coroutineScope` 字面值 + `typingJob` 字面值（变量名）+ `cancel()` 字面值，证明 launch+cancel 配对。
+- **B. Run.kt pending-event 循环 runner 调用同样被包住**：
+  - line ~485 后的 pending-event 处理段含第二次 `_keepTyping(` 调用（针对 `pendingEvent.source.chatId`）。
+- **C. Telegram.kt sendTyping override 不被误改（红线）**：
+  - `Telegram.kt` 仍含 `override suspend fun sendTyping(chatId: String, metadata: JSONObject?)` 函数声明，函数体仍含字面值 `sendChatAction` + `"typing"`。
+- **D. Base.kt _keepTyping 扩展不被误改（红线）**：
+  - `Base.kt` 仍含 `suspend fun BasePlatformAdapter._keepTyping(` 声明；函数体仍含 `sendTyping(` 调用 + `delay(intervalMs)` + `finally` + `stopTyping(`。
+- **E. §2 四件套**：`verify_align / scan_stubs / deep_align / scan_functional_stubs` 维持基线（本 R 不动 hermes-android Python 对齐文件，仅在 `Run.kt` 的两个 `runner(...)` 调用点加 5–10 行 wrap 代码）。
+- **F. 单元测试**（`*Test.kt`）：源码扫描守 wiring（TC-GW-011-a..e）。运行时行为（"消息发后 2s 内 chat 出现 typing 提示"）由 §3 E2E + 手测兜底（hermes-android testImpl 无 MockWebServer，`sendChatAction` HTTP 行为完整性由真 Telegram bot E2E 验证）。
+- **G. 手测验收**：
+  - 配好 Telegram bot + 启用 gateway → 给 bot 发条会让 agent 思考 ≥3 秒的消息（如"想个长点的笑话"）。
+  - chat 内应在 2 秒内看到 "正在输入…" / "is typing…" 提示（Telegram client 标准展现），并持续刷新直到 agent 回复。
+  - agent 回复落地后，typing 提示在 5 秒内自动消失（Telegram 服务端 5s 过期 + `_keepTyping` finally `stopTyping` 双重保险）。
+  - 多轮对话不残留、不串号；同一 chat 中断后再发新消息也能重新出现 typing。
+  - Feishu / Weixin / 其他平台**不**出现任何"奇怪的输入提示"（默认 no-op，无副作用）。
+
 ---
 
 ## 域 STATE — 会话状态 / trajectory
