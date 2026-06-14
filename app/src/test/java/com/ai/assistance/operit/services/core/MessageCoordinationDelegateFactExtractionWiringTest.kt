@@ -8,7 +8,11 @@ import java.io.File
  * R-AGENT-016 (2026-06-08): `MessageCoordinationDelegate.forcePersistSummaryToMemory` 落
  * `#auto_summary` 整段摘要之后，必须**追加**一步把 SUMMARY_PROMPT 已经稳定输出的
  * `【关键事实】 / [Key Facts]` bullet 段每行解析成独立 fact，逐条落 `MemoryRepository.saveMemory`
- * 并打 `#auto_extracted` + `#chat:<chatId>` + `#auto_summary_id:<parentId>` 三个 tag。
+ * 并打 `#auto_extracted` + `#chat:<chatId>` 两个 tag。
+ *
+ * R-AGENT-027 (2026-06-13): 删除原本的 `#auto_summary_id:<parentId>` 第三个 tag。
+ * 该 tag 全代码库无任何读取方，且 R-AGENT-026 的 keepDecision=false 路径会产生
+ * `#auto_summary_id:-1` 孤儿污染。`#chat:<chatId>` 已足够提供会话级溯源。
  *
  * 这是 Python Hermes `MemoryProvider.sync_turn` → 远端 Mem0/Hindsight fact extraction 的
  * Android 平台 LLM-free 平替——零额外 token，复用 R-AGENT-013 已经调过的 summary LLM 输出。
@@ -161,10 +165,14 @@ class MessageCoordinationDelegateFactExtractionWiringTest {
     }
 
     /**
-     * TC-AGENT-016-f: 必须打 `#chat:` 来源 tag + `#auto_summary_id:` 父节点引用 tag。
+     * TC-AGENT-016-f: 必须打 `#chat:` 来源 tag。
+     *
+     * R-AGENT-027 (2026-06-13)：删掉了 `#auto_summary_id:<parentId>` 父节点引用 tag 断言。
+     * 原本意图是反查"这条 fact 来自哪段摘要"，但全代码库无任何读取方，且 R-AGENT-026 的
+     * keepDecision=false 路径会产生 `#auto_summary_id:-1` 孤儿污染。`#chat:<chatId>` 已足够。
      */
     @Test
-    fun `TC-AGENT-016-f facts get chat tag and parent summary id tag`() {
+    fun `TC-AGENT-016-f facts get chat tag`() {
         assertTrue("找不到 fact 抽取函数 —— 先满足 TC-AGENT-016-a。", extractorBlock.isNotBlank())
 
         assertTrue(
@@ -172,14 +180,10 @@ class MessageCoordinationDelegateFactExtractionWiringTest {
             extractorBlock.contains("#chat:")
         )
 
-        val hasParentRef =
-            extractorBlock.contains("#auto_summary_id:") ||
-                extractorBlock.contains("#parent_summary:") ||
-                extractorBlock.contains("#summary_id:")
+        // R-AGENT-027 守红线：函数体不得再写 #auto_summary_id: tag（已经认定为冗余）
         assertTrue(
-            "fact 抽取函数体必须含父节点引用 tag —— `#auto_summary_id:` / `#parent_summary:` / " +
-                "`#summary_id:` 任一字面字符串。让用户在 MemoryScreen 能反查这条 fact 是从哪段摘要来的。",
-            hasParentRef
+            "R-AGENT-027: fact 抽取函数体不得再写 `#auto_summary_id:` tag —— 已认定为设计冗余。",
+            !Regex("""addTagToMemory[\s\S]{0,80}#auto_summary_id:""").containsMatchIn(extractorBlock)
         )
     }
 

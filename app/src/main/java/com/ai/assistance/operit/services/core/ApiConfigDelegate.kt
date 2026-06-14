@@ -106,6 +106,12 @@ class ApiConfigDelegate(
             MutableStateFlow(ModelConfigDefaults.DEFAULT_SUMMARY_MESSAGE_COUNT_THRESHOLD)
     val summaryMessageCountThreshold: StateFlow<Int> = _summaryMessageCountThreshold.asStateFlow()
 
+    // R-AGENT-026: 工具调用结果是否计入自动总结触发阈值（默认 false = 不计入）
+    private val _countToolResultsTowardsSummaryThreshold =
+            MutableStateFlow(ModelConfigDefaults.DEFAULT_COUNT_TOOL_RESULTS_TOWARDS_SUMMARY_THRESHOLD)
+    val countToolResultsTowardsSummaryThreshold: StateFlow<Boolean> =
+            _countToolResultsTowardsSummaryThreshold.asStateFlow()
+
     private val _enableTools = MutableStateFlow(ApiPreferences.DEFAULT_ENABLE_TOOLS)
     val enableTools: StateFlow<Boolean> = _enableTools.asStateFlow()
 
@@ -209,6 +215,7 @@ class ApiConfigDelegate(
         _enableSummary.value = config.enableSummary
         _enableSummaryByMessageCount.value = config.enableSummaryByMessageCount
         _summaryMessageCountThreshold.value = config.summaryMessageCountThreshold
+        _countToolResultsTowardsSummaryThreshold.value = config.countToolResultsTowardsSummaryThreshold
     }
 
     private fun initializeSettingsCollection() {
@@ -582,6 +589,24 @@ class ApiConfigDelegate(
                     summaryTokenThreshold = current.summaryTokenThreshold,
                     enableSummaryByMessageCount = current.enableSummaryByMessageCount,
                     summaryMessageCountThreshold = threshold
+            )
+        }
+    }
+
+    /** R-AGENT-026: 切换"工具调用结果计入总结触发阈值"开关 */
+    fun toggleCountToolResultsTowardsSummaryThreshold() {
+        coroutineScope.launch {
+            val newValue = !_countToolResultsTowardsSummaryThreshold.value
+            _countToolResultsTowardsSummaryThreshold.value = newValue
+            val configId = _activeConfigId.value
+            val current = modelConfigManager.getModelConfig(configId) ?: return@launch
+            modelConfigManager.updateSummarySettings(
+                    configId = configId,
+                    enableSummary = current.enableSummary,
+                    summaryTokenThreshold = current.summaryTokenThreshold,
+                    enableSummaryByMessageCount = current.enableSummaryByMessageCount,
+                    summaryMessageCountThreshold = current.summaryMessageCountThreshold,
+                    countToolResultsTowardsSummaryThreshold = newValue
             )
         }
     }

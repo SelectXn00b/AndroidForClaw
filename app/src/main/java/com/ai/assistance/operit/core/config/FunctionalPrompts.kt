@@ -29,6 +29,12 @@ object FunctionalPrompts {
         - [事实2：同上。]
         - [事实3-N：按需添加，**有几个写几个**，没有就不写。不要为了凑数硬编。]
 
+        【保留判断】
+        [必填，仅一行，只能输出"值得"或"不值得"。判断标准：
+        - 如果【关键事实】里有真正影响后续决策的新事实/新偏好/新约定 → 输出"值得"
+        - 如果只是寒暄、闲聊、查天气、重复已知信息、纯工具调用结果回显 → 输出"不值得"
+        本字段控制【段落摘要】是否写入长期记忆库；【关键事实】无论值不值都会单独抽取保存。]
+
         ============================
 
         **格式要求：**
@@ -63,6 +69,12 @@ object FunctionalPrompts {
         - [Fact 1: one sentence per fact — user's hard requirements, explicit decisions, critical parameters, constraints. Write only the fact itself, do not expand.]
         - [Fact 2: same as above.]
         - [Fact 3-N: add as needed. **Write only as many as truly exist**; do not fabricate facts to fill a quota.]
+
+        [Persistence Decision]
+        [Required, one line only, must output "worth" or "not worth". Criteria:
+        - If [Key Facts] contains genuinely new facts/preferences/agreements that affect future decisions → output "worth"
+        - If it is merely small talk, weather query, repetition of known info, pure tool call echo → output "not worth"
+        This field controls whether the [paragraph summary] is written to long-term memory; [Key Facts] are extracted and saved separately regardless.]
 
         =======================================
 

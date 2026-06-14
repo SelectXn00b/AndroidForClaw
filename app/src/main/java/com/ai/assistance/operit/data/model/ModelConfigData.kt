@@ -48,6 +48,7 @@ object ModelConfigDefaults {
         const val DEFAULT_ENABLE_SUMMARY = true
         const val DEFAULT_ENABLE_SUMMARY_BY_MESSAGE_COUNT = true
         const val DEFAULT_SUMMARY_MESSAGE_COUNT_THRESHOLD = 16
+        const val DEFAULT_COUNT_TOOL_RESULTS_TOWARDS_SUMMARY_THRESHOLD = false
 }
 
 /** 表示完整的模型配置，包括API设置和模型参数 */
@@ -105,6 +106,9 @@ data class ModelConfigData(
                 ModelConfigDefaults.DEFAULT_ENABLE_SUMMARY_BY_MESSAGE_COUNT,
         val summaryMessageCountThreshold: Int =
                 ModelConfigDefaults.DEFAULT_SUMMARY_MESSAGE_COUNT_THRESHOLD,
+        // R-AGENT-026: 工具调用结果是否计入自动总结触发阈值（默认 false = 不计入，避免几次工具调用就触发总结）
+        val countToolResultsTowardsSummaryThreshold: Boolean =
+                ModelConfigDefaults.DEFAULT_COUNT_TOOL_RESULTS_TOWARDS_SUMMARY_THRESHOLD,
 
         // MNN特定配置
         // 注意：MNN模型路径会根据modelName自动构建，不需要单独存储

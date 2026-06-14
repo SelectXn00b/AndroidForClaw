@@ -1870,6 +1870,69 @@ class MessageCoordinationDelegate(
             ?.take(60)
             .orEmpty()
             .ifEmpty { context.getString(R.string.memory_auto_summary_chip) }
+
+        // R-AGENT-026 (2026-06-12) 计划 A：让 AI 决定段落是否值得入库。
+        // SUMMARY_PROMPT 已要求模型在末尾输出 【保留判断】=值得/不值得 (中) / [Persistence Decision]=worth/not worth (英)。
+        // 解析这个标记：
+        //   - 值得 / worth：照常走 dedup → updateMemory 或 saveMemory
+        //   - 不值得 / not worth：跳过段落落库；仍跑 fact 抽取（精确事实 #auto_extracted 仍要保存）
+        //   - 解析不到：默认按"值得"处理（向后兼容旧模型 / 异常输出）
+        val keepDecision = parseAutoSummaryKeepDecision(strippedSummary)
+        if (keepDecision == false) {
+            AppLogger.d(
+                TAG,
+                "R-AGENT-026: AI judged auto_summary as 不值得/not worth, skip paragraph save (chatId=$chatId, len=${strippedSummary.length})"
+            )
+            extractAndPersistFacts(
+                summaryText = strippedSummary,
+                chatId = chatId,
+                parentMemoryId = -1L,
+                useEnglish = useEnglish,
+                repository = repository
+            )
+            return
+        }
+
+        // R-AGENT-023 (2026-06-12): 写入侧去重。落库前查同 chat 已有的 #auto_summary 节点，
+        // 用 3-gram jaccard 比相似度，>= 0.75 视为"几乎一样"——更新旧那条 content（保留 id +
+        // 下游 fact 子节点的 #auto_summary_id:<parentId> 串联），不再新建。
+        // 修自动摘要堆积根因：之前 saveMemory 绕过 createMemory 的 dedup，每次触发都新建一条。
+        val existingAutoSummaries = try {
+            repository.findMemoriesByTag("#auto_summary")
+                .filter { mem -> mem.tags.any { it.name == "#chat:$chatId" } }
+                .sortedByDescending { it.createdAt }
+                .take(5)
+        } catch (t: Throwable) {
+            AppLogger.w(TAG, "R-AGENT-023: failed to load existing auto_summaries: ${t.message}")
+            emptyList()
+        }
+        val newSummaryNgrams = computeAutoSummaryNgrams(strippedSummary)
+        val dedupHit = existingAutoSummaries.firstOrNull { existing ->
+            val existingNgrams = computeAutoSummaryNgrams(existing.content)
+            val jaccard = computeAutoSummaryJaccard(newSummaryNgrams, existingNgrams)
+            jaccard >= 0.75f
+        }
+        if (dedupHit != null) {
+            repository.updateMemory(
+                memory = dedupHit,
+                newTitle = titleText,
+                newContent = strippedSummary
+            )
+            AppLogger.d(
+                TAG,
+                "R-AGENT-023: dedup hit, updated existing #auto_summary id=${dedupHit.id} (chatId=$chatId, len=${strippedSummary.length})"
+            )
+            // 命中 dedup 时 fact 子节点继续挂在旧父 id 下；重新跑一次 fact 抽取，让新事实也归到这个父
+            extractAndPersistFacts(
+                summaryText = strippedSummary,
+                chatId = chatId,
+                parentMemoryId = dedupHit.id,
+                useEnglish = useEnglish,
+                repository = repository
+            )
+            return
+        }
+
         val memory = Memory(
             title = titleText,
             content = strippedSummary,
@@ -2026,7 +2089,10 @@ class MessageCoordinationDelegate(
                     repository.saveMemory(factMemory)
                     repository.addTagToMemory(factMemory, "#auto_extracted")
                     repository.addTagToMemory(factMemory, "#chat:$chatId")
-                    repository.addTagToMemory(factMemory, "#auto_summary_id:$parentMemoryId")
+                    // R-AGENT-027 (2026-06-13): 删除 #auto_summary_id:<parentId> tag。
+                    // 原本意图是"反查这条事实来自哪条父摘要"，但实际无任何代码 / UI 读这个 tag；
+                    // R-AGENT-026 走 keepDecision=false 路径时还会产生 #auto_summary_id:-1 孤儿 tag 污染。
+                    // #chat:<chatId> 已足够提供会话级溯源；段落级溯源是无人使用的设计冗余，删掉。
                     savedCount++
                 } catch (t: Throwable) {
                     AppLogger.w(TAG, "R-AGENT-016: 单条 fact 落库失败（继续下一条）: ${t.message}")
@@ -2040,5 +2106,65 @@ class MessageCoordinationDelegate(
         } catch (t: Throwable) {
             AppLogger.w(TAG, "R-AGENT-016: fact extraction failed: ${t.message}", t)
         }
+    }
+
+    /**
+     * R-AGENT-023: 把字符串切成 n-gram 集合（默认 3-gram），供写入侧 dedup 用。
+     * 简化版本——空白塌缩 + lowercase + 滑窗。Token-free 不依赖分词。
+     */
+    private fun computeAutoSummaryNgrams(text: String, n: Int = 3): Set<String> {
+        if (text.length < n) return emptySet()
+        val normalized = text.replace(Regex("\\s+"), " ").trim().lowercase()
+        if (normalized.length < n) return emptySet()
+        val out = HashSet<String>(normalized.length)
+        for (i in 0..normalized.length - n) {
+            out.add(normalized.substring(i, i + n))
+        }
+        return out
+    }
+
+    /** R-AGENT-023: jaccard = |A ∩ B| / |A ∪ B|；空集时返回 0。 */
+    private fun computeAutoSummaryJaccard(a: Set<String>, b: Set<String>): Float {
+        if (a.isEmpty() || b.isEmpty()) return 0f
+        val intersect = a.count { it in b }
+        val union = a.size + b.size - intersect
+        if (union == 0) return 0f
+        return intersect.toFloat() / union.toFloat()
+    }
+
+    /**
+     * R-AGENT-026 (2026-06-12) 计划 A：解析 SUMMARY_PROMPT 末尾的 【保留判断】 / [Persistence Decision] 标记。
+     *
+     * 中文模板期望值："值得" / "不值得"
+     * 英文模板期望值："worth" / "not worth"
+     *
+     * @return true  = 值得保留段落摘要 → 走原有 dedup/saveMemory 路径
+     *         false = 不值得 → 跳过段落落库（fact 抽取仍跑）
+     *         null  = 解析不到（旧模型 / 异常输出 / 模型没遵循模板）→ 调用方按"值得"兜底处理
+     *
+     * 解析策略：找最后一段 【保留判断】 / [Persistence Decision]，看其后内容是否含 "不值得" / "not worth"。
+     * 命中"不值得/not worth"返回 false；否则若命中"值得/worth"返回 true；都没命中返回 null。
+     * 顺序很重要：先查"不值得"再查"值得"，因为"不值得"包含"值得"子串。
+     */
+    private fun parseAutoSummaryKeepDecision(summary: String): Boolean? {
+        // 切到段头之后的内容，避免 prompt 模板里的 "值得" / "不值得" 字面被误读
+        val cnHeader = "【保留判断】"
+        val enHeader = "[Persistence Decision]"
+        val cnIdx = summary.lastIndexOf(cnHeader)
+        val enIdx = summary.lastIndexOf(enHeader)
+        val tail = when {
+            cnIdx >= 0 && enIdx >= 0 -> summary.substring(maxOf(cnIdx + cnHeader.length, enIdx + enHeader.length))
+            cnIdx >= 0 -> summary.substring(cnIdx + cnHeader.length)
+            enIdx >= 0 -> summary.substring(enIdx + enHeader.length)
+            else -> return null
+        }
+        // 仅看段头之后 200 字以内（再远多半是别的段落）
+        val window = tail.take(200).lowercase()
+        // 顺序敏感："不值得" 必须先于 "值得" 查
+        if (window.contains("不值得")) return false
+        if (window.contains("not worth")) return false
+        if (window.contains("值得")) return true
+        if (Regex("\\bworth\\b").containsMatchIn(window)) return true
+        return null
     }
 }

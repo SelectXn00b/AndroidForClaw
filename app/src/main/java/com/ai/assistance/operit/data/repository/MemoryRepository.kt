@@ -957,6 +957,22 @@ class MemoryRepository(private val context: Context, profileId: String) {
         ok
     }
 
+    /**
+     * R-AGENT-024: 按 tag 名一键批删。复用 [findMemoriesByTag] + [deleteMemories]。
+     * 返回实际删除条数。
+     *
+     * 用例：UI 一键清理所有 #auto_summary（自动摘要堆积治理，方案 B）。
+     * 注意：删父 #auto_summary 时**不**级联删子 #auto_extracted（fact 子节点
+     * 通过 #auto_summary_id:<parentId> tag 串联，但 deleteMemory 只清 link/chunk/index，
+     * 不查这个 tag）。这是设计意图——精确事实保留下来。
+     */
+    suspend fun deleteByTag(tagName: String): Int = withContext(Dispatchers.IO) {
+        val memories = findMemoriesByTag(tagName)
+        if (memories.isEmpty()) return@withContext 0
+        val ids = memories.map { it.id }
+        deleteMemories(ids)
+    }
+
     // --- Link CRUD Operations ---
     private fun collectLinkIdsForDeletion(
         memoryIdsToDelete: Set<Long>,

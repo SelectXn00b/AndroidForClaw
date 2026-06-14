@@ -527,14 +527,18 @@ class ModelConfigManager(private val context: Context) {
             enableSummary: Boolean,
             summaryTokenThreshold: Float,
             enableSummaryByMessageCount: Boolean,
-            summaryMessageCountThreshold: Int
+            summaryMessageCountThreshold: Int,
+            countToolResultsTowardsSummaryThreshold: Boolean? = null
     ): ModelConfigData {
         return updateConfigInternal(configId) {
             it.copy(
                     enableSummary = enableSummary,
                     summaryTokenThreshold = summaryTokenThreshold,
                     enableSummaryByMessageCount = enableSummaryByMessageCount,
-                    summaryMessageCountThreshold = summaryMessageCountThreshold
+                    summaryMessageCountThreshold = summaryMessageCountThreshold,
+                    countToolResultsTowardsSummaryThreshold =
+                            countToolResultsTowardsSummaryThreshold
+                                    ?: it.countToolResultsTowardsSummaryThreshold
             )
         }
     }
