@@ -7310,7 +7310,6 @@
     <string name="hermes_platform_telegram">Telegram</string>
     <string name="hermes_credentials_telegram_token">Bot Token</string>
     <string name="hermes_credentials_telegram_allowed_chat_ids">Allowed Chat IDs (comma-separated; empty = anyone in the bot\'s chats can trigger it)</string>
-    <string name="hermes_credentials_telegram_proxy_url">Proxy URL (optional, e.g. socks5://127.0.0.1:1080 or http://10.0.2.2:8118)</string>
 
     <string name="hermes_policy_dm_policy">DM access policy</string>
     <string name="hermes_policy_dm_allow_from">DM allow list (comma-separated)</string>

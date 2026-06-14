@@ -192,10 +192,9 @@ class HermesGatewayPreferences private constructor(private val context: Context)
         const val SECRET_WEIXIN_ACCOUNT_ID = "account_id"
         const val SECRET_WEIXIN_LOGIN_TOKEN = "login_token"
 
-        // Telegram secret fields (R-GW-009 + R-GW-010)
+        // Telegram secret fields (R-GW-009)
         const val SECRET_TELEGRAM_TOKEN = "token"
         const val SECRET_TELEGRAM_ALLOWED_CHAT_IDS = "allowed_chat_ids"
-        const val SECRET_TELEGRAM_PROXY_URL = "proxy_url"
 
         private fun platformEnabledKey(platformKey: String) = "platform_${platformKey}_enabled"
         private fun platformPolicyKey(platformKey: String, field: String) = "platform_${platformKey}_${field}"

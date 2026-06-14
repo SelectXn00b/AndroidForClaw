@@ -141,16 +141,8 @@ object HermesGatewayConfigBuilder {
             .map { it.trim() }
             .filter { it.isNotEmpty() }
 
-        // R-GW-010: optional HTTP/SOCKS proxy. Empty → adapter falls back to
-        // env vars (TELEGRAM_PROXY / HTTPS_PROXY / HTTP_PROXY / ALL_PROXY).
-        val proxyUrl = prefs.readSecret(
-            HermesGatewayPreferences.PLATFORM_TELEGRAM,
-            HermesGatewayPreferences.SECRET_TELEGRAM_PROXY_URL,
-        ).trim()
-
         val extra = buildMap<String, Any> {
             if (allowedChatIds.isNotEmpty()) put("allowed_chat_ids", allowedChatIds)
-            if (proxyUrl.isNotEmpty()) put("proxy_url", proxyUrl)
         }
 
         return PlatformConfig(
