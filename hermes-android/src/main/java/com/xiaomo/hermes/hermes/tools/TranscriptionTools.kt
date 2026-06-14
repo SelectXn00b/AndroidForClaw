@@ -1,15 +1,39 @@
 /**
  * Transcription Tools Module — speech-to-text.
  *
- * Python ships three backends (local faster-whisper, Groq Whisper,
- * OpenAI Whisper, Mistral Voxtral). None of those run on Android, so
- * the top-level surface is stubbed to return an error dict matching
- * Python shape. Shape mirrors tools/transcription_tools.py so
- * registration stays aligned.
+ * Python upstream ships four backends (local faster-whisper, local_command,
+ * Groq Whisper, OpenAI Whisper, Mistral Voxtral). On Android **only the
+ * OpenAI Whisper provider is wired live** in R-AGENT-032 — the other
+ * backends remain shape-aligned stubs (faster-whisper / Groq SDK / Mistral
+ * SDK don't run on Android without major engineering). The OpenAI provider
+ * is driven via OkHttp multipart against
+ * `${STT_OPENAI_BASE_URL}/audio/transcriptions` (default
+ * `https://api.openai.com/v1`) and is what the messaging gateway uses to
+ * auto-transcribe inbound voice messages on Telegram.
+ *
+ * Public surface:
+ *   - [TranscribeResult]  — return value mirroring the Python dict
+ *                           {success, transcript, error, provider}.
+ *   - [transcribeAudio]   — entry point. Returns [TranscribeResult].
+ *   - [TranscriptionTools.transcribeAudio] — `object` wrapper used by
+ *     `gateway/platforms/Telegram.kt::_handleMessage` voice/audio branches.
+ *
+ * Aligns with `tools/transcription_tools.py` (constants `:65-79`,
+ * `_transcribe_openai` `:485-541`).
  *
  * Ported from tools/transcription_tools.py
  */
 package com.xiaomo.hermes.hermes.tools
+
+import android.util.Log
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
+import java.util.concurrent.TimeUnit
+
+private const val _TAG = "TranscriptionTools"
 
 private const val DEFAULT_PROVIDER: String = "local"
 const val DEFAULT_LOCAL_MODEL: String = "base"
@@ -112,34 +136,162 @@ private fun _transcribeLocalCommand(filePath: String, modelName: String): Map<St
 private fun _transcribeGroq(filePath: String, modelName: String): Map<String, Any?> =
     mapOf("success" to false, "transcript" to "", "error" to "GROQ_API_KEY not set")
 
-private fun _transcribeOpenai(filePath: String, modelName: String): Map<String, Any?> =
-    mapOf("success" to false, "transcript" to "", "error" to "openai package not installed")
+/**
+ * Result of a single [transcribeAudio] call.
+ *
+ * Field names mirror Python upstream dict {success, transcript, error, provider}
+ * — see `tools/transcription_tools.py:519` for the original return shape.
+ */
+data class TranscribeResult(
+    val success: Boolean,
+    val transcript: String,
+    val error: String? = null,
+    val provider: String? = null,
+)
+
+/** Lazy OkHttp client used for OpenAI Whisper multipart uploads. */
+private val _httpClient: OkHttpClient by lazy {
+    OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
+        .writeTimeout(120, TimeUnit.SECONDS)
+        .build()
+}
+
+private fun _transcribeOpenai(filePath: String, modelName: String): TranscribeResult {
+    // Resolve API key — VOICE_TOOLS_OPENAI_KEY takes precedence, then OPENAI_API_KEY.
+    val apiKey = System.getenv("VOICE_TOOLS_OPENAI_KEY")?.takeIf { it.isNotBlank() }
+        ?: System.getenv("OPENAI_API_KEY")?.takeIf { it.isNotBlank() }
+    if (apiKey.isNullOrBlank()) {
+        return TranscribeResult(
+            success = false,
+            transcript = "",
+            error = "No STT API key configured (set VOICE_TOOLS_OPENAI_KEY or OPENAI_API_KEY).",
+            provider = "openai",
+        )
+    }
+
+    // Auto-correct Groq-only models to whisper-1 on OpenAI (aligns with Python `:500`).
+    var resolvedModel = modelName
+    if (resolvedModel in GROQ_MODELS) {
+        Log.i(_TAG, "Model $resolvedModel not available on OpenAI, using $DEFAULT_STT_MODEL")
+        resolvedModel = DEFAULT_STT_MODEL
+    }
+
+    val baseUrl = OPENAI_BASE_URL.trimEnd('/')
+
+    val file = java.io.File(filePath)
+    val ext = "." + file.extension.lowercase()
+    val mediaType = when (ext) {
+        ".mp3", ".mpga", ".mpeg" -> "audio/mpeg"
+        ".mp4", ".m4a" -> "audio/mp4"
+        ".wav" -> "audio/wav"
+        ".webm" -> "audio/webm"
+        ".ogg" -> "audio/ogg"
+        ".aac" -> "audio/aac"
+        ".flac" -> "audio/flac"
+        else -> "application/octet-stream"
+    }.toMediaType()
+
+    val responseFormat = if (resolvedModel == "whisper-1") "text" else "json"
+
+    val multipart = MultipartBody.Builder()
+        .setType("multipart/form-data".toMediaType())
+        .addFormDataPart("model", resolvedModel)
+        .addFormDataPart("response_format", responseFormat)
+        .addFormDataPart("file", file.name, file.asRequestBody(mediaType))
+        .build()
+
+    val request = Request.Builder()
+        .url("$baseUrl/audio/transcriptions")
+        .header("Authorization", "Bearer $apiKey")
+        .post(multipart)
+        .build()
+
+    return try {
+        _httpClient.newCall(request).execute().use { resp ->
+            val bodyText = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                Log.w(_TAG, "OpenAI Whisper HTTP ${resp.code}: ${bodyText.take(200)}")
+                return@use TranscribeResult(
+                    success = false,
+                    transcript = "",
+                    error = "OpenAI Whisper API error ${resp.code}: ${bodyText.take(200)}",
+                    provider = "openai",
+                )
+            }
+            val transcript = if (responseFormat == "text") {
+                bodyText.trim()
+            } else {
+                try {
+                    org.json.JSONObject(bodyText).optString("text", "").trim()
+                } catch (_: Exception) {
+                    bodyText.trim()
+                }
+            }
+            Log.i(_TAG, "Transcribed ${file.name} via OpenAI API ($resolvedModel, ${transcript.length} chars)")
+            TranscribeResult(success = true, transcript = transcript, provider = "openai")
+        }
+    } catch (e: Exception) {
+        Log.e(_TAG, "OpenAI transcription failed: ${e.message}", e)
+        TranscribeResult(
+            success = false,
+            transcript = "",
+            error = "Transcription failed: ${e.message}",
+            provider = "openai",
+        )
+    }
+}
 
 private fun _transcribeMistral(filePath: String, modelName: String): Map<String, Any?> =
     mapOf("success" to false, "transcript" to "", "error" to "MISTRAL_API_KEY not set")
 
-fun transcribeAudio(filePath: String, model: String? = null): Map<String, Any?> {
-    val error = _validateAudioFile(filePath)
-    if (error != null) return error
-    val sttConfig = _loadSttConfig()
-    if (!isSttEnabled(sttConfig)) {
-        return mapOf(
-            "success" to false,
-            "transcript" to "",
-            "error" to "STT is disabled in config.yaml (stt.enabled: false).",
+/**
+ * Transcribe a local audio file using OpenAI Whisper.
+ *
+ * On Android only the OpenAI provider is wired. Other providers (local
+ * faster-whisper, Groq SDK, Mistral SDK) remain shape-aligned stubs in
+ * this file but are not reachable from this entry point — they require
+ * binaries / SDKs that don't run on Android.
+ *
+ * @param filePath absolute path to a local audio file (must exist, ≤
+ *                 [MAX_FILE_SIZE] bytes, extension in [SUPPORTED_FORMATS]).
+ * @param model    Whisper model name; defaults to [DEFAULT_STT_MODEL]
+ *                 (`whisper-1`). Groq-only models are auto-corrected to
+ *                 `whisper-1`.
+ */
+fun transcribeAudio(filePath: String, model: String? = null): TranscribeResult {
+    val validation = _validateAudioFile(filePath)
+    if (validation != null) {
+        return TranscribeResult(
+            success = false,
+            transcript = "",
+            error = (validation["error"] as? String) ?: "Audio validation failed",
+            provider = "openai",
         )
     }
-    return mapOf(
-        "success" to false,
-        "transcript" to "",
-        "error" to (
-            "No STT provider available. Install faster-whisper for free local " +
-                "transcription, configure $LOCAL_STT_COMMAND_ENV or install a local whisper CLI, " +
-                "set GROQ_API_KEY for free Groq Whisper, set MISTRAL_API_KEY for Mistral " +
-                "Voxtral Transcribe, or set VOICE_TOOLS_OPENAI_KEY " +
-                "or OPENAI_API_KEY for the OpenAI Whisper API."
-        ),
-    )
+    val sttConfig = _loadSttConfig()
+    if (!isSttEnabled(sttConfig)) {
+        return TranscribeResult(
+            success = false,
+            transcript = "",
+            error = "STT is disabled in config.yaml (stt.enabled: false).",
+            provider = "openai",
+        )
+    }
+    val modelName = (model?.takeIf { it.isNotBlank() } ?: DEFAULT_STT_MODEL)
+    return _transcribeOpenai(filePath, modelName)
+}
+
+/**
+ * Convenience `object` wrapper used by the messaging gateway so callers
+ * (e.g. `gateway/platforms/Telegram.kt::_handleMessage`) can write
+ * `TranscriptionTools.transcribeAudio(path)` without reaching for the
+ * top-level function. Aligns with R-GW-008 acceptance criteria.
+ */
+object TranscriptionTools {
+    fun transcribeAudio(filePath: String, model: String? = null): TranscribeResult =
+        com.xiaomo.hermes.hermes.tools.transcribeAudio(filePath, model)
 }
 
 private fun _resolveOpenaiAudioClientConfig(): Pair<String, String> =

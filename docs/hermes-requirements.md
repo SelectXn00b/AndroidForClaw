@@ -587,6 +587,59 @@ HermesApp 作为网关把 agent 能力接到外部 IM / 协作平台（飞书、
 **来源**: 无 Python 直接上游（Android 特有）；对应 Python runner 的生命周期
 **行为**: Gateway 在 Android 上通过前台服务运行（`GatewayForegroundService`），随应用/开机自启策略、电量白名单引导、存活通知均由前台服务负责；服务状态可被 UI 实时订阅。
 
+### R-GW-008: Telegram 入站语音 / 音频真下载 + STT 自动转写
+**来源**:
+- 用户 2026-06-14 直接指令链：① "能增加飞书处理音频和图片能力？" → ② 三方案对比（飞书 vs Telegram）后用户选 "Telegram 方案 a 第一步"（更划算的试点平台 + STT 可复用资产）→ ③ AskUserQuestion 提交 4 个决策点，用户选 "OpenAI Whisper 起步 / Telegram 入站自动转写 / mediaUrls 本地路径 / 源码扫描+Robolectric+E2E" → ④ 第二轮 AskUserQuestion 收敛"本轮只动 audio/voice STT，图片下次 R"
+- Python 上游 `reference/hermes-agent/gateway/platforms/telegram.py:2641-2660`（`_handle_media_message` 中 voice/audio 分支：`get_file()` → `download_as_bytearray()` → `cache_audio_from_bytes`）+ `gateway/run.py:8181-8263`（`_enrich_message_with_transcription`：调 `transcribe_audio` → 拼 `[The user sent a voice message~ Here's what they said: "<transcript>"]` 前置到 user message）
+- R-AGENT-032（同时立）提供 STT 工具基础设施
+- 当前 Kotlin `Telegram.kt:283-321` voice/audio 分支只塞 file_id 到 `mediaUrls`，**不下载、不转写**——agent 拿到的只是占位符，等于没听到
+
+**背景**:
+- Telegram Bot API 鉴权简单（bot token 在 URL 里），下载分两步：(1) `GET https://api.telegram.org/bot<TOKEN>/getFile?file_id=<id>` 拿到 `result.file_path`；(2) `GET https://api.telegram.org/file/bot<TOKEN>/<file_path>` 拿 bytes。`TelegramAdapter._httpClient`（`Telegram.kt:89-93`）已配 timeout，可直接复用；`TelegramNetworkClient.getFileUrl` 当前有 bug（写成调 `getUpdates`，`TelegramNetwork.kt:158-164`），不复用。
+- Python 上游对 voice 强制 `.ogg`、对 audio 强制 `.mp3`（`telegram.py:2641-2660`）。Kotlin 1:1 翻译保留这套 ext 选择。
+- 缓存路径：本项目把 `hermesHome`（长期数据，`filesDir/.hermes`）和 `cacheDir/media/<type>`（短期媒体）分开。Telegram 私有缓存复用既有 `TelegramAdapter._fileCacheDir = File(context.cacheDir, "telegram_files")` 模式，新增 audio 子目录：`File(context.cacheDir, "media/telegram/audio/")`（用户决策："Telegram 专属缓存路径分层"）。
+- voice/audio 入站后**自动调 STT**（用户决策："Telegram 入站自动转写"，对齐 Python `gateway/run.py:_enrich_message_with_transcription` 行为），不暴露独立 transcribeAudio 工具给 agent；图片处理不在本 R 范围（用户决策："本轮只动 audio/voice STT，图片下次 R"）。
+- **MVP scope（按用户决策）**：本 R 只动 voice / audio 两个分支的下载 + STT 接线；photo / document / video / sticker 维持现状（继续塞 file_id），后续在新 R 中处理。
+
+**架构合规**:
+- 复用 `TelegramAdapter._httpClient`，不新建 OkHttpClient 实例（避免新增依赖配置）
+- 写盘走 `BasePlatformAdapter.cacheAudioFromBytes(context, bytes, ext)`（`Adapter.kt:666-675`），不裸 `File.writeBytes`，保持与既有平台一致；该 helper 当前路径是 `<context.cacheDir>/media/audio/`——按用户决策的"专属缓存路径分层"，新增 Telegram 子目录约定：实际落盘走 `<context.cacheDir>/media/audio/`（既有 helper），但下载临时层先写到 `File(context.cacheDir, "telegram_files")` 已有目录，转交 `cacheAudioFromBytes` 后该目录文件可清理（避免双层冗余）
+- STT 调用走 R-AGENT-032 的 `TranscriptionTools.transcribeAudio(filePath, model=null)`（平台无关，对齐 Python `tools/transcription_tools.py:transcribe_audio`）
+- 转写文本前置到 `event.text`，**不**经过 mediaUrls 注入到 LLM image/audio_url 部分（保持 Python 上游"STT 转写 → 文本注入"的一致性）
+
+**行为**:
+- **Telegram._handleMessage 内 voice/audio 分支重写**（`hermes-android/.../gateway/platforms/Telegram.kt`）：
+  - voice 分支（`message.has("voice")`）：取 `fileId` → 调 `_downloadTelegramFile(fileId, "ogg")` 拿 `localPath` → 调 `TranscriptionTools.transcribeAudio(localPath)` → 若成功，把 `text` 改成 `"[The user sent a voice message~ Here's what they said: \"$transcript\"]\n\n${原 caption（voice 没 caption 取空）}"` → `mediaUrls = listOf(localPath)`、`mediaTypes = listOf("audio/ogg")`
+  - audio 分支（`message.has("audio")`）：同上但 ext 为 `mp3`、mediaTypes 为 `audio/mpeg`、保留原 caption
+  - 两分支转写失败时：`text` 改成 `"[The user sent a voice message but I had trouble transcribing it~ ($error)]\n\n${原 caption}"` → 仍下载并保留 `mediaUrls`（让用户/agent 至少能在 chat 历史里看到文件路径）
+  - photo / document / video / sticker 分支**不动**（保持现有 file_id 占位行为）
+- **新增 `_downloadTelegramFile(fileId: String, ext: String): String?` 私有方法**（同文件）：
+  - `GET ${API_BASE}/bot${_token}/getFile?file_id=${fileId}` → 解析 `result.file_path`
+  - `GET ${API_BASE}/file/bot${_token}/${file_path}` → bytes
+  - 调 `BasePlatformAdapter.Companion.cacheAudioFromBytes(context, bytes, ".$ext")` → 返回本地绝对路径
+  - 任一步失败 → log + 返回 null
+  - 用 `_httpClient` 共用实例，不 new OkHttpClient
+
+**验收**:
+- **A. Telegram.kt voice/audio 分支已接通**：
+  - voice 分支函数体含 `_downloadTelegramFile(` 调用 + `TranscriptionTools.transcribeAudio(` 引用（或等价的 `TranscriptionTools` import + 后续调用）
+  - voice 分支函数体**不**含原占位字面值（fileId 直塞 mediaUrls 那种，确认改成 localPath）
+  - voice 分支函数体含 `[The user sent a voice message~ Here's what they said:` 字面值前缀
+  - audio 分支同上，但 ext 为 `mp3`
+- **B. _downloadTelegramFile 已落盘**：
+  - `Telegram.kt` 文件含 `private suspend fun _downloadTelegramFile` 或 `private fun _downloadTelegramFile` 函数声明
+  - 函数体含 `getFile?file_id=` 字面值（拼接 URL）+ `/file/bot` 字面值（下载 URL）
+  - 函数体调 `cacheAudioFromBytes(`（写盘）
+- **C. 图片/视频/文档分支不动**（守"本轮只做语音"红线）：
+  - photo 分支 `mediaUrls = listOf(...)` 仍是 `fileId`（不能误改）
+  - document / video / sticker 三分支同上
+- **D. §2 四件套**：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` 不增（理想状态减若干，因为 Telegram 之前对 voice/audio 是占位 stub）
+- **E. 单元测试**：源码扫描（wiring 关键字面值）；行为完整性 deferred to §3 E2E + 手测（hermes-android testImpl 无 MockWebServer 依赖）。详见 TC-GW-008-a..g
+- **F. 手测验收**：
+  - 用户在 Telegram 给 bot 发语音 → bot 收到后 chat 内显示 `[The user sent a voice message~ Here's what they said: "..."]` 前置 + 原文转写
+  - 转写失败（key 错 / 网络错）→ 显示降级文案，不崩溃
+  - 用户发图片 → 维持现状（不下载、占位符）—— 守"图片下次 R"红线
+
 ---
 
 ## 域 STATE — 会话状态 / trajectory
@@ -876,3 +929,82 @@ CONFIG 原先的三条 R-CONFIG-001..003（Preferences / ConfigBuilder / Control
   - 跟 agent 说 "every 5m ..." → agent 应得到 `toolError` 提示 15min 下限
   - 跟 agent 说 "在每天早上 9 点 ..." (cron-expr) → agent 应得到 `toolError("Cron expressions are not supported on Android")` 并 fallback 到 `every` 语法（守 R-CRON-013 不回归）
   - cron 触发的 agent 在收到 `[CRON CONTEXT] / [CRON 上下文]` 后应直接回复用户 prompt，不再调 `cronjob(create)` 嵌套生成新 job（软防御，弱于 Python `disabled_toolsets` 但够用）
+
+### R-AGENT-032: STT 工具基础设施（OpenAI Whisper `/v1/audio/transcriptions` 接通）
+**来源**:
+- 用户 2026-06-14 决策链：① Telegram 方案 a 第一步（图片 + 语音都通）→ ② AskUserQuestion 选 "OpenAI Whisper 起步"（GLM-asr / Groq / Mistral / local 后续追加）→ ③ "Telegram 入站自动转写"（不暴露独立 transcribeAudio 工具，对齐 Python `gateway/run.py` 上游行为）
+- Python 上游 `reference/hermes-agent/tools/transcription_tools.py:581 transcribe_audio(file_path, model=None)`（公共入口）+ `:485 _transcribe_openai`（OpenAI provider 实现）+ `:75 STT_OPENAI_BASE_URL` 环境变量 + `:67 DEFAULT_STT_MODEL = "whisper-1"`
+- 跟 R-GW-008（Telegram audio 下载）一起立，作为可复用的 STT 基础设施供其他平台后续接入
+
+**背景**:
+- Python 上游 STT 是 5-provider 体系：`local (faster-whisper) / local_command / groq / openai / mistral`，按 auto-detect 顺序选。Kotlin 第一版**只**实现 OpenAI provider（用户决策："仅 OpenAI Whisper 起步"，简化对齐）；其余 provider 在 R 文档里登记为"已知偏离上游"，由后续 R 追加（不在本 R 范围）。
+- HTTP 调用形状（OpenAI Whisper）：`POST {base_url}/audio/transcriptions`，`Authorization: Bearer <key>`，`multipart/form-data`，字段 `model=whisper-1` + `file=<binary>` + `response_format=text`。
+- 配置读取顺序对齐上游：`VOICE_TOOLS_OPENAI_KEY` → `OPENAI_API_KEY` fallback；`STT_OPENAI_BASE_URL` → 默认 `https://api.openai.com/v1`；`STT_OPENAI_MODEL` → 默认 `whisper-1`。
+- 文件大小 / 格式校验（对齐上游 `transcription_tools.py:77,79`）：25 MB 上限；接受扩展名 `mp3/mp4/mpeg/mpga/m4a/wav/webm/ogg/aac/flac`。
+- 失败返回 `{"success": false, "transcript": "", "error": <message>}` —— 调用方（R-GW-008 Telegram）按 error 是否含 `"No STT provider"` / `"Missing"` 决定降级文案。
+- **不暴露 agent 工具入口**：本轮按用户决策只用作 R-GW-008 的内部依赖；工具暴露层（让 agent 在对话里直接调 transcribeAudio）留给后续 R。
+
+**架构合规**:
+- 平台无关入口 `TranscriptionTools.transcribeAudio(filePath: String, model: String? = null): TranscribeResult`（对齐 Python `transcribe_audio` 函数签名）
+- 同模块同包：`hermes-android/src/main/java/com/xiaomo/hermes/hermes/tools/TranscriptionTools.kt`，1:1 对齐 Python `tools/transcription_tools.py` 文件名
+- 复用既有 OkHttp 实例（不在 hermes-android 里新建全工程单例，但可以在本文件内 lazy 一个 OkHttpClient + 30s timeout，对齐 Python OpenAI SDK `timeout=30, max_retries=0`）
+- 配置读取走 `Config.kt` / `HermesConstants.kt` 既有路径（如已存在的 `OPENAI_API_KEY` 读取点），新增 `VOICE_TOOLS_OPENAI_KEY` / `STT_OPENAI_BASE_URL` / `STT_OPENAI_MODEL` 三个独立读取键
+- `TranscribeResult` 为 sealed/data class，包含 `success: Boolean / transcript: String / error: String? / provider: String?`
+
+**行为**:
+- **新增文件 `TranscriptionTools.kt`**（`hermes-android/src/main/java/com/xiaomo/hermes/hermes/tools/`）：
+  - 顶层常量：
+    - `const val DEFAULT_STT_MODEL = "whisper-1"`
+    - `const val STT_OPENAI_BASE_URL_DEFAULT = "https://api.openai.com/v1"`
+    - `const val MAX_FILE_SIZE = 25L * 1024L * 1024L` (25 MB)
+    - `val SUPPORTED_FORMATS = setOf(".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm", ".ogg", ".aac", ".flac")`
+    - `val OPENAI_MODELS = setOf("whisper-1", "gpt-4o-mini-transcribe", "gpt-4o-transcribe")`
+  - data class `TranscribeResult(val success: Boolean, val transcript: String, val error: String? = null, val provider: String? = null)`
+  - `fun transcribeAudio(filePath: String, model: String? = null): TranscribeResult`（**suspend 或同步均可**，对齐 Python 同步函数；调用方 `Telegram.kt` 用 `withContext(Dispatchers.IO)` 包装）：
+    1. `_validateAudioFile(filePath)` —— 检文件存在 / 扩展名在 `SUPPORTED_FORMATS` / 大小 ≤ 25 MB；任一失败 → 返回 `TranscribeResult(false, "", error="...")`
+    2. 解析 provider：当前硬编码 `"openai"`（Python 上游的 `_get_provider` 简化为单 provider）；后续 R 加 dispatch
+    3. 调 `_transcribeOpenai(filePath, model ?: DEFAULT_STT_MODEL)`
+  - `private fun _transcribeOpenai(filePath: String, model: String): TranscribeResult`：
+    1. 读 key：`getEnvOrConfig("VOICE_TOOLS_OPENAI_KEY") ?: getEnvOrConfig("OPENAI_API_KEY")`；空 → `TranscribeResult(false, "", error="No STT API key configured (set VOICE_TOOLS_OPENAI_KEY or OPENAI_API_KEY)", provider="openai")`
+    2. 读 base url：`getEnvOrConfig("STT_OPENAI_BASE_URL") ?: STT_OPENAI_BASE_URL_DEFAULT`
+    3. 读 model override：`getEnvOrConfig("STT_OPENAI_MODEL") ?: model`；如果传入的 model 是 Groq-only 名（自动校正，对齐上游 `:500`，第一版可省略，后续追加）
+    4. 构造 multipart：
+       - `model: $modelName`
+       - `response_format: text`（对齐上游 `:512` 对 `whisper-1` 的处理）
+       - `file: <binary, filename=<File(filePath).name>, mediaType=audio/*>`
+    5. 构造 request：`POST $baseUrl/audio/transcriptions`，`Authorization: Bearer $key`
+    6. 调 `_httpClient.newCall(request).execute()`：
+       - 2xx → 读 body 为 `String`（response_format=text 时 body 就是裸 transcript）→ `TranscribeResult(true, body.trim(), provider="openai")`
+       - 4xx/5xx → `TranscribeResult(false, "", error="OpenAI STT $code: ${body or message}", provider="openai")`
+       - IOException → `TranscribeResult(false, "", error="Network error: ${e.message}", provider="openai")`
+  - `private fun getEnvOrConfig(key: String): String?` 帮手：先 `System.getenv(key)`，再读 `HermesConstants.getConfigString(key)`（既有的 config layer），都空返回 null
+  - 私有 `_httpClient: OkHttpClient` lazy 单例（30s timeout × 3，0 retries）
+
+**验收**:
+- **A. TranscriptionTools.kt 已落盘**：
+  - 文件路径 `hermes-android/src/main/java/com/xiaomo/hermes/hermes/tools/TranscriptionTools.kt` 存在
+  - 含 `fun transcribeAudio(filePath: String` 函数声明（顶层 fun，与 Python module-level 函数一致）
+  - 含 `data class TranscribeResult` 声明
+- **B. OpenAI provider 实现**：
+  - 含 `whisper-1` 字面值
+  - 含 `https://api.openai.com/v1` 字面值（`STT_OPENAI_BASE_URL_DEFAULT` 常量）
+  - 含 `/audio/transcriptions` URL path 字面值
+  - 含 `Authorization` + `Bearer ` 字面值
+  - 含 `multipart/form-data` 或等价的 `MultipartBody.Builder()` 调用
+  - 含 `response_format` + `text` 字面值
+- **C. Key 读取顺序**：
+  - 函数体含 `VOICE_TOOLS_OPENAI_KEY` + `OPENAI_API_KEY` 两个环境变量名字面值（fallback 顺序）
+  - missing key 时返回的 error 字面值含 `No STT API key`
+- **D. 文件校验**：
+  - 含 `25` + `1024` 字面值（MAX_FILE_SIZE 计算）或 `MAX_FILE_SIZE` 常量名
+  - 含 `SUPPORTED_FORMATS` 常量声明，set 中含 `.mp3` + `.ogg` + `.wav` 字面值
+- **E. §2 四件套**：
+  - `verify_align`：新增文件 `tools/TranscriptionTools.kt` 对齐 Python `tools/transcription_tools.py`，达成 195/195
+  - `scan_stubs`：维持零
+  - `deep_align`：维持零（OpenAI 路径完整；其他 provider 通过文件 KDoc 标注"R-AGENT-032 only OpenAI; other providers deferred"豁免）
+  - `scan_functional_stubs`：不增（理想 -1，因为 hermes-android 之前没有 transcription tool 文件，stub 数从基线增加 0）
+- **F. 单元测试**：源码扫描 + 纯 JVM 行为测（missing-key + missing-file 短路）；完整 multipart shape 验证 deferred to §3 E2E（hermes-android testImpl 无 MockWebServer 依赖）。详见 TC-AGENT-032-a..f
+- **G. 手测验收**：
+  - 配 `VOICE_TOOLS_OPENAI_KEY` 后给 Telegram bot 发语音，logcat 应见 `TranscriptionTools` 调用 + multipart POST 到 `/audio/transcriptions`
+  - 不配 key → 返回 `error="No STT API key configured..."`，Telegram chat 中显示降级文案
+  - 用 26 MB 音频 → 返回 `error="File exceeds 25MB"` 或等价

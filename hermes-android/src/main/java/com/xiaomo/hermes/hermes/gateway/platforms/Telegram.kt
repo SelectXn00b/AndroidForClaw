@@ -16,6 +16,7 @@ package com.xiaomo.hermes.hermes.gateway.platforms
 import android.content.Context
 import android.util.Log
 import com.xiaomo.hermes.hermes.gateway.*
+import com.xiaomo.hermes.hermes.tools.TranscriptionTools
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import okhttp3.MediaType.Companion.toMediaType
@@ -45,6 +46,13 @@ import java.util.concurrent.atomic.AtomicLong
 class TelegramAdapter(
     context: Context,
     config: PlatformConfig) : BasePlatformAdapter(config, Platform.TELEGRAM) {
+
+    /**
+     * Captured [Context] used by `_downloadTelegramFile` to write downloaded
+     * voice/audio bytes into the app cacheDir via `cacheAudioFromBytes`.
+     * R-GW-008.
+     */
+    private val _context: Context = context.applicationContext
     companion object {
         private const val _TAG = "Telegram"
         const val MAX_MESSAGE_LENGTH = 4096
@@ -306,17 +314,51 @@ class TelegramAdapter(
             message.has("audio") -> {
                 val audio = message.getJSONObject("audio")
                 val fileId = audio.getString("file_id")
-                text = message.optString("caption", "")
+                val caption = message.optString("caption", "")
                 messageType = MessageType.AUDIO
-                mediaUrls = listOf(fileId)
+                // R-GW-008: real download + STT auto-transcribe.
+                val localPath = _downloadTelegramFile(fileId, "mp3")
+                if (localPath != null) {
+                    mediaUrls = listOf(localPath)
+                    val sttResult = TranscriptionTools.transcribeAudio(localPath)
+                    text = if (sttResult.success && sttResult.transcript.isNotBlank()) {
+                        val prefix = "[The user sent a voice message~ Here's what they said:" +
+                            " \"${sttResult.transcript}\"]"
+                        if (caption.isNotBlank()) "$prefix $caption" else prefix
+                    } else {
+                        val notice = "[The user sent a voice message but I had trouble transcribing it~" +
+                            " (${sttResult.error ?: "unknown error"})]"
+                        if (caption.isNotBlank()) "$notice $caption" else notice
+                    }
+                } else {
+                    // Download failed — leave mediaUrls empty (a raw Telegram fileId is not
+                    // resolvable downstream). Surface the failure as bilingual notice text.
+                    text = if (caption.isNotBlank()) caption else
+                        "[The user sent a voice message but I had trouble transcribing it~ (download failed)]"
+                    mediaUrls = emptyList()
+                }
                 mediaTypes = listOf("audio/mpeg")
             }
             message.has("voice") -> {
                 val voice = message.getJSONObject("voice")
                 val fileId = voice.getString("file_id")
-                text = ""
                 messageType = MessageType.AUDIO
-                mediaUrls = listOf(fileId)
+                // R-GW-008: real download + STT auto-transcribe.
+                val localPath = _downloadTelegramFile(fileId, "ogg")
+                if (localPath != null) {
+                    mediaUrls = listOf(localPath)
+                    val sttResult = TranscriptionTools.transcribeAudio(localPath)
+                    text = if (sttResult.success && sttResult.transcript.isNotBlank()) {
+                        "[The user sent a voice message~ Here's what they said:" +
+                            " \"${sttResult.transcript}\"]"
+                    } else {
+                        "[The user sent a voice message but I had trouble transcribing it~" +
+                            " (${sttResult.error ?: "unknown error"})]"
+                    }
+                } else {
+                    text = "[The user sent a voice message but I had trouble transcribing it~ (download failed)]"
+                    mediaUrls = emptyList()
+                }
                 mediaTypes = listOf("audio/ogg")
             }
             message.has("video") -> {
@@ -709,6 +751,61 @@ class TelegramAdapter(
             } catch (e: Exception) {
                 Log.w(_TAG, "Failed to delete webhook: ${e.message}")
             }
+        }
+    }
+
+    /**
+     * R-GW-008: Download a Telegram file (voice / audio bytes) to the local
+     * cache and return its absolute path, or `null` on failure.
+     *
+     * Two-step protocol per Telegram Bot API:
+     *   1. `GET ${API_BASE}/bot<token>/getFile?file_id=<fileId>` → returns
+     *      JSON `{ result: { file_path: "voice/file_123.oga" } }`.
+     *   2. `GET ${API_BASE}/file/bot<token>/<file_path>` → raw audio bytes.
+     *
+     * Bytes are written via [cacheAudioFromBytes] under
+     * `<context.cacheDir>/media/audio/<timestamp>_<hash>.<ext>`.
+     */
+    private suspend fun _downloadTelegramFile(fileId: String, ext: String): String? = withContext(Dispatchers.IO) {
+        try {
+            // Step 1: getFile?file_id=<fileId>
+            val getFileReq = Request.Builder()
+                .url("$API_BASE/bot$_token/getFile?file_id=$fileId")
+                .get()
+                .build()
+            val filePath = _httpClient.newCall(getFileReq).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    Log.w(_TAG, "Telegram getFile HTTP ${resp.code} for $fileId")
+                    return@use null
+                }
+                val body = resp.body?.string().orEmpty()
+                val json = JSONObject(body)
+                if (!json.optBoolean("ok", false)) {
+                    Log.w(_TAG, "Telegram getFile not ok for $fileId: ${json.optString("description")}")
+                    return@use null
+                }
+                json.optJSONObject("result")?.optString("file_path")?.takeIf { it.isNotBlank() }
+            } ?: return@withContext null
+
+            // Step 2: download from /file/bot<token>/<file_path>
+            val downloadReq = Request.Builder()
+                .url("$API_BASE/file/bot$_token/$filePath")
+                .get()
+                .build()
+            _httpClient.newCall(downloadReq).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    Log.w(_TAG, "Telegram file download HTTP ${resp.code} for $fileId ($filePath)")
+                    return@use null
+                }
+                val bytes = resp.body?.bytes() ?: return@use null
+                val cleanExt = ".${ext.trimStart('.')}"
+                val localPath = cacheAudioFromBytes(_context, bytes, cleanExt)
+                Log.i(_TAG, "Downloaded Telegram file $fileId → $localPath (${bytes.size} bytes)")
+                localPath
+            }
+        } catch (e: Exception) {
+            Log.e(_TAG, "Failed to download Telegram file $fileId: ${e.message}", e)
+            null
         }
     }
 

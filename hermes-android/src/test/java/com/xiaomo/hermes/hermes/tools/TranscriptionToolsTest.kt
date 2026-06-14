@@ -96,20 +96,20 @@ class TranscriptionToolsTest {
     @Test
     fun `transcribeAudio missing file returns error`() {
         val result = transcribeAudio(tmp.root.absolutePath + "/not-there.wav")
-        assertEquals(false, result["success"])
+        assertEquals(false, result.success)
         assertTrue(
-            "must mention file not found: ${result["error"]}",
-            (result["error"] as String).contains("not found"))
+            "must mention file not found: ${result.error}",
+            (result.error ?: "").contains("not found"))
     }
 
     @Test
     fun `transcribeAudio directory rejected`() {
         val result = transcribeAudio(tmp.root.absolutePath)
-        assertEquals(false, result["success"])
+        assertEquals(false, result.success)
         assertTrue(
-            "must reject directory: ${result["error"]}",
-            (result["error"] as String).contains("not a file") ||
-                (result["error"] as String).contains("not found"))
+            "must reject directory: ${result.error}",
+            (result.error ?: "").contains("not a file") ||
+                (result.error ?: "").contains("not found"))
     }
 
     @Test
@@ -117,10 +117,10 @@ class TranscriptionToolsTest {
         val f = tmp.newFile("audio.txt")
         f.writeText("not really audio")
         val result = transcribeAudio(f.absolutePath)
-        assertEquals(false, result["success"])
+        assertEquals(false, result.success)
         assertTrue(
-            "must mention unsupported format: ${result["error"]}",
-            (result["error"] as String).contains("Unsupported format"))
+            "must mention unsupported format: ${result.error}",
+            (result.error ?: "").contains("Unsupported format"))
     }
 
     // ── R-TOOL-312 / TC-TOOL-312-a: > 25 MB rejected ──
@@ -139,9 +139,9 @@ class TranscriptionToolsTest {
         assertTrue("sparse file should be > 25MB", big.length() > MAX_FILE_SIZE)
 
         val result = transcribeAudio(big.absolutePath)
-        assertEquals(false, result["success"])
-        assertEquals("", result["transcript"])
-        val err = result["error"] as String
+        assertEquals(false, result.success)
+        assertEquals("", result.transcript)
+        val err = result.error ?: ""
         assertTrue("must mention file too large: $err", err.contains("File too large"))
         assertTrue("must mention 25MB cap: $err", err.contains("25MB"))
     }
@@ -149,32 +149,43 @@ class TranscriptionToolsTest {
     @Test
     fun `file exactly at limit is not rejected for size`() {
         // Boundary check — MAX_FILE_SIZE bytes exactly passes the size gate.
-        // The call will still fail at provider dispatch (no STT on Android),
-        // but the error must NOT be "File too large".
+        // The call will still fail at provider dispatch when no API key is
+        // configured, but the error must NOT be "File too large".
         val f = tmp.newFile("exact.wav")
         RandomAccessFile(f, "rw").use { raf -> raf.setLength(MAX_FILE_SIZE) }
         val result = transcribeAudio(f.absolutePath)
-        val err = result["error"] as String
+        val err = result.error ?: ""
         // Whatever the error is, it's not a size-cap error.
         assertFalse(
             "size-cap must NOT fire at exactly MAX_FILE_SIZE: $err",
             err.contains("File too large"))
     }
 
-    // ── transcribeAudio with disabled STT config ──
+    // ── transcribeAudio with valid file but missing API key ──
     @Test
-    fun `transcribeAudio with supported-size-but-no-provider falls through to no-provider error`() {
+    fun `transcribeAudio with supported file falls through to OpenAI provider`() {
+        // Skip if a real OpenAI key is configured in the test env (avoid
+        // hitting paid API or polluting result).
+        val voiceKey = System.getenv("VOICE_TOOLS_OPENAI_KEY")
+        val openaiKey = System.getenv("OPENAI_API_KEY")
+        org.junit.Assume.assumeTrue(
+            "Test env must have no STT keys configured (otherwise the call would hit the live API)",
+            voiceKey.isNullOrBlank() && openaiKey.isNullOrBlank()
+        )
+
         val f = tmp.newFile("ok.wav")
         f.writeBytes(ByteArray(1024)) // 1 KB, well under cap
         val result = transcribeAudio(f.absolutePath)
-        assertEquals(false, result["success"])
-        val err = result["error"] as String
-        // On Android: no provider available. Must NOT be a file-validation error.
+        assertEquals(false, result.success)
+        val err = result.error ?: ""
+        // Must NOT be a file-validation error.
         assertFalse(err.contains("File too large"))
         assertFalse(err.contains("not found"))
         assertFalse(err.contains("Unsupported format"))
-        // Expected error references "STT disabled" OR "No STT provider"
-        val shape = err.contains("STT") || err.contains("provider")
-        assertTrue("should mention STT/provider unavailability: $err", shape)
+        // Expected error references missing key (R-AGENT-032 OpenAI provider).
+        val shape = err.contains("No STT API key") ||
+            err.contains("VOICE_TOOLS_OPENAI_KEY") ||
+            err.contains("OPENAI_API_KEY")
+        assertTrue("should mention missing OpenAI key: $err", shape)
     }
 }

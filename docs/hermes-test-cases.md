@@ -1372,6 +1372,41 @@ R-AGENT-031 把 hermes-android 已存在的 cron 数据层（`Jobs.kt` CRUD / �
 
 ---
 
+## 域 AGENT — Telegram inbound voice/audio + STT (R-GW-008 + R-AGENT-032)
+
+R-GW-008 + R-AGENT-032 是一对孪生需求，目的是把 Telegram 入站的 voice / audio 消息**真正下载到本地**并通过 OpenAI Whisper STT **自动转写为文本**，让 agent 不再只看到 `[Voice: <fileId>]` 占位字符串。本轮**只动 voice / audio 两个分支**——photo / document / video / sticker 维持现状（继续塞 fileId），后续在新 R 中处理（用户决策："本轮只动 audio/voice STT，图片下次 R"）。
+
+**架构合规（按用户决策）**:
+- **STT provider 简化**：仅 OpenAI Whisper（用户决策："仅 OpenAI Whisper 起步"）。Python 上游有 5 个 provider（local / local_command / groq / openai / mistral），其余在 R-AGENT-032 文档里登记为"已知偏离上游"，由后续 R 追加。
+- **不暴露独立 transcribe 工具**：用户决策："Telegram 入站自动转写"，对齐 Python `gateway/run.py:_enrich_message_with_transcription` 上游行为——平台层直接调，不让 agent 在对话里主动调。
+- **缓存路径专属分层**（用户决策"Telegram 专属缓存路径分层"）：写盘走 `BasePlatformAdapter.cacheAudioFromBytes(context, bytes, ext)`（既有 helper，落到 `<context.cacheDir>/media/audio/`），不裸 `File.writeBytes`。
+- **图片 / 视频 / 文档 / sticker 不动**（守"本轮只做语音"红线，由 TC-GW-008-c 守住）。
+
+测试策略：
+- **源码扫描**（unit-scan）覆盖 wiring 关键字面值：`getFile?file_id=` URL 拼接、`/file/bot` 下载 URL、`cacheAudioFromBytes` 调用、`TranscriptionTools.transcribeAudio` 调用、双语前缀 `[The user sent a voice message~ Here's what they said:`、OpenAI Whisper endpoint / multipart 字段。
+- **Robolectric 行为测**（unit + Robolectric）：用 `MockWebServer` mock Telegram getFile + download，断言 `_downloadTelegramFile` 真发出对应请求；mock OpenAI `/v1/audio/transcriptions`，断言 `transcribeAudio` 真发出 multipart POST。
+- **手测**：在真实 Telegram bot 上发语音，看 chat 内是否真的收到转写文本。
+
+| TC ID | R-ID | 输入 / 触发 | 期望 | 测试类型 | 实现 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-032-a | R-AGENT-032 | 源码扫描：`hermes-android/.../tools/TranscriptionTools.kt` 是否存在 + 文件签名 | 文件存在；含顶层 `fun transcribeAudio(filePath: String, model: String? = null)` 函数声明；含 `data class TranscribeResult(val success: Boolean, val transcript: String, val error: String?, val provider: String?)` 声明。 | unit-scan | `TranscriptionToolsWiringTest#TC-AGENT-032-a TranscriptionTools file and public API exist` 🔴 |
+| TC-AGENT-032-b | R-AGENT-032 | 源码扫描：OpenAI Whisper provider 实现关键字面值 | 必须含 `whisper-1` / `https://api.openai.com/v1` / `/audio/transcriptions` / `Authorization` / `Bearer ` / `multipart/form-data` 或 `MultipartBody.Builder` / `response_format` / `text` 共 8 处字面值（multipart POST 形状对齐 OpenAI SDK `client.audio.transcriptions.create`）。 | unit-scan | `TranscriptionToolsWiringTest#TC-AGENT-032-b OpenAI Whisper request shape literals` 🔴 |
+| TC-AGENT-032-c | R-AGENT-032 | 源码扫描：API key 读取 fallback | 必须含字面值 `VOICE_TOOLS_OPENAI_KEY` 与 `OPENAI_API_KEY`（fallback 顺序对齐 Python `tool_backend_helpers.py:104`）；missing key 路径返回的 error 文案含 `No STT API key` 字面值。 | unit-scan | `TranscriptionToolsWiringTest#TC-AGENT-032-c key resolution falls back from VOICE_TOOLS_OPENAI_KEY to OPENAI_API_KEY` 🔴 |
+| TC-AGENT-032-d | R-AGENT-032 | 源码扫描：文件大小 + 格式校验 | 必须含 `25` + `1024` 字面值（25 MB 上限，对齐上游 `transcription_tools.py:79`）或 `MAX_FILE_SIZE` 常量；必须含 `SUPPORTED_FORMATS` 常量声明，set 中至少含 `.mp3` / `.ogg` / `.wav` / `.m4a` 四个扩展名字面值。 | unit-scan | `TranscriptionToolsWiringTest#TC-AGENT-032-d file size cap and supported formats` 🔴 |
+| TC-AGENT-032-e | R-AGENT-032 | 行为单测（纯 JVM）：调 `transcribeAudio("/nonexistent/file.mp3")`（文件不存在）| 函数应返回 `TranscribeResult(success=false, transcript="", error 含 "not found" 或 "does not exist"）`，不抛异常、**不**真发网络请求。 | unit | `TranscriptionToolsBehaviorTest#TC-AGENT-032-e missing file returns error without throwing` 🔴 |
+| TC-AGENT-032-f | R-AGENT-032 | 行为单测（纯 JVM）：调 `transcribeAudio` 但环境无 `VOICE_TOOLS_OPENAI_KEY` 也无 `OPENAI_API_KEY` | 函数应返回 `TranscribeResult(success=false, error 含 "No STT API key", provider="openai")`，**不**真发网络请求。其它路径（200 success / 401 / multipart shape 验证）由 §3 E2E + 手测兜底（hermes-android testImpl 无 MockWebServer 依赖，**Deferred to E2E**）。 | unit | `TranscriptionToolsBehaviorTest#TC-AGENT-032-f missing key short-circuits before network call` 🔴 |
+| TC-GW-008-a | R-GW-008 | 源码扫描：`hermes-android/.../gateway/platforms/Telegram.kt` 中 voice 分支（`message.has("voice")`） | 必须调 `_downloadTelegramFile(` + `TranscriptionTools.transcribeAudio(`（不再裸塞 fileId 到 mediaUrls）；text 改造必须含字面值 `[The user sent a voice message~ Here's what they said:`（对齐 Python `gateway/run.py:8218`）；mediaUrls 应为 `listOf(localPath)` 而非 `listOf(fileId)`。 | unit-scan | `TelegramVoiceAudioWiringTest#TC-GW-008-a voice branch downloads then transcribes` 🔴 |
+| TC-GW-008-b | R-GW-008 | 源码扫描：Telegram.kt 中 audio 分支（`message.has("audio")`） | 同 TC-GW-008-a，但 ext 字面值为 `mp3`、mediaTypes 为 `audio/mpeg`；必须保留 `caption` 读取（audio 与 voice 不同：voice 没 caption，audio 有 caption）。 | unit-scan | `TelegramVoiceAudioWiringTest#TC-GW-008-b audio branch downloads then transcribes with caption` 🔴 |
+| TC-GW-008-c | R-GW-008 | 源码扫描（红线守卫）：Telegram.kt photo / document / video / sticker 四个分支 | 这四个分支的 `mediaUrls` 仍必须是 `listOf(<fileId>)` 而非 `listOf(<localPath>)` —— 守"本轮只动 voice/audio"红线，防误改。 | unit-scan | `TelegramVoiceAudioWiringTest#TC-GW-008-c photo document video sticker branches stay placeholder` 🔴 |
+| TC-GW-008-d | R-GW-008 | 源码扫描：`_downloadTelegramFile` 函数 | Telegram.kt 必须含 `private fun _downloadTelegramFile` 或 `private suspend fun _downloadTelegramFile` 函数声明；函数体含字面值 `getFile?file_id=`（步骤 1 拿 file_path）+ `/file/bot`（步骤 2 拼下载 URL）+ `cacheAudioFromBytes(`（写盘）。 | unit-scan | `TelegramVoiceAudioWiringTest#TC-GW-008-d _downloadTelegramFile fetches getFile then downloads then caches` 🔴 |
+| TC-GW-008-e | R-GW-008 | 源码扫描：失败降级文案 | voice 与 audio 分支的失败路径必须含字面值 `[The user sent a voice message but I had trouble transcribing it~`（对齐 Python `gateway/run.py:8222-8252`）；转写失败时仍下载并保留 `mediaUrls = listOf(localPath)`，**不**让 agent 完全感知不到媒体存在。 | unit-scan | `TelegramVoiceAudioWiringTest#TC-GW-008-e transcription failure falls back to bilingual notice` 🔴 |
+| TC-GW-008-f | R-GW-008 | 端到端验证：在真 Telegram bot 上发语音 | bot 收到后 chat 内显示 `[The user sent a voice message~ Here's what they said: "..."]` 前置 + 原文转写。**Deferred to §3 E2E + 手测**（hermes-android testImpl 无 MockWebServer，行为完整性由 E2E 兜底）。 | manual / E2E | `(no unit test; manual verification required)` 🔴 |
+| TC-GW-008-g | R-GW-008 | 端到端验证：bot 发语音但 OpenAI key 错 | chat 内显示 `[The user sent a voice message but I had trouble transcribing it~ ...]` 降级文案，不崩溃。**Deferred to §3 E2E + 手测**。 | manual / E2E | `(no unit test; manual verification required)` 🔴 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 SAFETY
 
 SAFETY 大多通过引用其它域的 TC 覆盖；此处列集成层 smoke。
