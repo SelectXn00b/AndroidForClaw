@@ -49,6 +49,11 @@ data class MemoryUiState(
         val boxSelectedNodeIds: Set<String> = emptySet(), // 新增：框选中的节点ID
         val showBatchDeleteConfirm: Boolean = false, // 新增：是否显示批量删除确认对话框
 
+        // R-AGENT-025: 一键清理自动摘要的反馈（删除条数；UI 弹 toast 后调 clearCleanupResult 清空）
+        val lastCleanupResult: Int? = null,
+        // R-AGENT-025: 是否显示"清理自动摘要"确认弹窗
+        val showCleanupConfirm: Boolean = false,
+
         // --- 新增：文档相关状态 ---
         val selectedDocumentChunks: List<DocumentChunk> = emptyList(),
         val documentSearchQuery: String = "",
@@ -846,6 +851,50 @@ class MemoryViewModel(
     /** R-AGENT-003 后续：关闭手动重复清理弹窗。 */
     fun dismissDedupDialog() {
         _uiState.update { it.copy(dedupScan = DedupScanState.Idle) }
+    }
+
+    /**
+     * R-AGENT-025: 一键清理所有 #auto_summary 节点（自动摘要）。
+     * 不影响 #auto_extracted（精确事实）—— 那些是 AI 从摘要里抽出的有用条目，保留。
+     * 完成后刷新 graph，并把删除条数写到 [MemoryUiState.lastCleanupResult] 让 UI 弹 toast/snackbar。
+     */
+    fun cleanupAutoSummaries() {
+        viewModelScope.launch {
+            try {
+                val deleted = repository.deleteByTag("#auto_summary")
+                val updatedGraph = refreshGraph()
+                loadFolderPaths()
+                _uiState.update {
+                    it.copy(
+                        graph = updatedGraph,
+                        lastCleanupResult = deleted,
+                    )
+                }
+                AppLogger.d(TAG, "R-AGENT-025: cleanupAutoSummaries deleted=$deleted")
+            } catch (e: Exception) {
+                AppLogger.e(TAG, "R-AGENT-025: cleanupAutoSummaries failed: ${e.message}")
+                _uiState.update {
+                    it.copy(
+                        error = context.getString(R.string.memory_error_delete_memory, e.message ?: "Unknown error"),
+                    )
+                }
+            }
+        }
+    }
+
+    /** R-AGENT-025: 清除上次清理结果反馈（toast 显示后由 UI 调）。 */
+    fun clearCleanupResult() {
+        _uiState.update { it.copy(lastCleanupResult = null) }
+    }
+
+    /** R-AGENT-025: 显示清理自动摘要的确认弹窗。 */
+    fun showCleanupConfirm() {
+        _uiState.update { it.copy(showCleanupConfirm = true) }
+    }
+
+    /** R-AGENT-025: 关闭清理确认弹窗。 */
+    fun dismissCleanupConfirm() {
+        _uiState.update { it.copy(showCleanupConfirm = false) }
     }
 
     /**

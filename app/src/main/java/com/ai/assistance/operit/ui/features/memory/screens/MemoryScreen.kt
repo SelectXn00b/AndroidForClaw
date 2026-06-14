@@ -42,6 +42,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -203,6 +205,17 @@ fun MemoryScreen() {
         val message = uiState.message ?: return@LaunchedEffect
         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
         viewModel.clearMessage()
+    }
+
+    // R-AGENT-025: 一键清理自动摘要后的 toast 反馈
+    LaunchedEffect(uiState.lastCleanupResult) {
+        val deleted = uiState.lastCleanupResult ?: return@LaunchedEffect
+        Toast.makeText(
+            context,
+            "已清理 $deleted 条自动摘要（精确事实保留）",
+            Toast.LENGTH_SHORT
+        ).show()
+        viewModel.clearCleanupResult()
     }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -383,6 +396,22 @@ fun MemoryScreen() {
                     onFilterChange = { viewModel.onGatewayFilterChange(it) }
                 )
 
+                // R-AGENT-025 (2026-06-12): 一键清理所有 #auto_summary 节点
+                // （治自动摘要堆积；不影响 #auto_extracted 精确事实）
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    OutlinedButton(
+                        onClick = { viewModel.showCleanupConfirm() },
+                        modifier = Modifier.padding(end = 4.dp)
+                    ) {
+                        Text("清理自动摘要", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -472,6 +501,32 @@ fun MemoryScreen() {
                     lastDeletedCount = deletedCount,
                     onDismiss = { viewModel.dismissDedupDialog() },
                     onDelete = { ids -> viewModel.deleteSelectedDuplicates(ids) },
+                )
+            }
+
+            // R-AGENT-025 (2026-06-12): 一键清理自动摘要的确认弹窗
+            if (uiState.showCleanupConfirm) {
+                AlertDialog(
+                    onDismissRequest = { viewModel.dismissCleanupConfirm() },
+                    title = { Text("清理自动摘要") },
+                    text = {
+                        Text(
+                            "将删除所有「#auto_summary」标记的对话摘要节点。\n\n" +
+                                "AI 抽出的精确事实（#auto_extracted）会保留。\n\n" +
+                                "此操作不可撤销，确定要清理吗？"
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            viewModel.dismissCleanupConfirm()
+                            viewModel.cleanupAutoSummaries()
+                        }) { Text("确定清理") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { viewModel.dismissCleanupConfirm() }) {
+                            Text("取消")
+                        }
+                    }
                 )
             }
 
