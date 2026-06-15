@@ -2026,9 +2026,12 @@ class MessageCoordinationDelegate(
                 return
             }
 
-            // (4) 剥前缀 + take(800) + 过滤短/空 + 限 20 条上限
+            // (4) 剥前缀 + take(800) + 过滤短/空 + 限 10 条上限
+            // R-AGENT-016 (2026-06-15) 收紧：MAX_FACT_COUNT 从 20 降到 10。`#auto_extracted` 节点
+            // 雪球元凶之一是单次抽取上限太宽（20 条让模型有"补全感"，把所有 bullet 抄一遍）。
+            // 配合 (5) 的 jaccard dedup 升级，把单次落库量减半，逼模型只挑最重要的事实。
             val MAX_FACT_CONTENT_CHARS = 800
-            val MAX_FACT_COUNT = 20
+            val MAX_FACT_COUNT = 10
             val MIN_FACT_CHARS = 5
             val facts = bullets
                 .map { line ->
@@ -2049,16 +2052,29 @@ class MessageCoordinationDelegate(
                 return
             }
 
-            // (5) 去重前置查询：取出当前 profile 已有 #auto_extracted 节点的 content（小写比对）
-            val existingFactContents: Set<String> = try {
+            // (5) R-AGENT-016 (2026-06-15) 去重升级：3-gram jaccard 0.75（原 lowercase exact）
+            //
+            // 雪球根因：原 `factKey = trim().lowercase()` exact 比对——"用户喜欢 Tailwind" /
+            // "User likes Tailwind CSS" / "偏好 Tailwind 框架" 三种措辞被认作 3 条独立 fact，
+            // 同一句话日产 3-5 节点。改成与父 #auto_summary 同款 3-gram jaccard 0.75（复用
+            // computeAutoSummaryNgrams + computeAutoSummaryJaccard），同义改写就被吸收。
+            //
+            // 同步把 baseline take(200) 提到 take(1000)：用户 #auto_extracted 库变大后
+            // 200 召回容易漏旧 fact 导致重复落库；1000 已经足够覆盖任何健康规模的库
+            // （配合 commit-c 的 per-chat 50 + 30d TTL 后总量也压在 ~1500 内）。
+            val DEDUP_BASELINE = 1000
+            data class ExistingFact(val ngrams: Set<String>)
+            val existingFacts: List<ExistingFact> = try {
                 val existingHits = repository.searchMemories(
                     query = "",
                     tags = listOf("#auto_extracted")
                 )
-                existingHits.take(200).map { it.content.trim().lowercase() }.toSet()
+                existingHits.take(DEDUP_BASELINE).map { mem ->
+                    ExistingFact(ngrams = computeAutoSummaryNgrams(mem.content))
+                }
             } catch (t: Throwable) {
                 AppLogger.w(TAG, "R-AGENT-016: dedup 前置查询失败，按零去重处理: ${t.message}")
-                emptySet()
+                emptyList()
             }
 
             // (6) 逐条落库，单条失败不影响其它
@@ -2066,8 +2082,11 @@ class MessageCoordinationDelegate(
             var dedupedCount = 0
             for (fact in facts) {
                 try {
-                    val factKey = fact.trim().lowercase()
-                    if (factKey in existingFactContents) {
+                    val factNgrams = computeAutoSummaryNgrams(fact)
+                    val isDuplicate = existingFacts.any { existing ->
+                        computeAutoSummaryJaccard(factNgrams, existing.ngrams) >= 0.75f
+                    }
+                    if (isDuplicate) {
                         dedupedCount++
                         continue
                     }

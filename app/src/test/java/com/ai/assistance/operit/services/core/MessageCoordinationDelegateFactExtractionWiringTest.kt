@@ -144,23 +144,30 @@ class MessageCoordinationDelegateFactExtractionWiringTest {
     }
 
     /**
-     * TC-AGENT-016-e: 单次抽取最多 20 条 fact。
+     * TC-AGENT-016-e (2026-06-15 收紧): 单次抽取最多 **10 条** fact（原 20）。
+     * `#auto_extracted` 雪球元凶之一——把单次抽取上限砍半，逼模型只挑最重要的事实。
      */
     @Test
-    fun `TC-AGENT-016-e fact count capped at 20`() {
+    fun `TC-AGENT-016-e fact count capped at 10`() {
         assertTrue("找不到 fact 抽取函数 —— 先满足 TC-AGENT-016-a。", extractorBlock.isNotBlank())
 
         val hasCap =
-            Regex("""\.take\s*\(\s*20\s*\)""").containsMatchIn(extractorBlock) ||
-                Regex("""coerceAtMost\s*\(\s*20\s*\)""").containsMatchIn(extractorBlock) ||
-                Regex("""minOf\s*\([^)]*\b20\b""").containsMatchIn(extractorBlock) ||
-                Regex("""MAX_FACT_COUNT\s*=\s*20\b""").containsMatchIn(source) ||
-                Regex("""MAX_FACTS_PER_SUMMARY\s*=\s*20\b""").containsMatchIn(source) ||
-                Regex("""FACT_COUNT_LIMIT\s*=\s*20\b""").containsMatchIn(source)
+            Regex("""\.take\s*\(\s*10\s*\)""").containsMatchIn(extractorBlock) ||
+                Regex("""coerceAtMost\s*\(\s*10\s*\)""").containsMatchIn(extractorBlock) ||
+                Regex("""minOf\s*\([^)]*\b10\b""").containsMatchIn(extractorBlock) ||
+                Regex("""MAX_FACT_COUNT\s*=\s*10\b""").containsMatchIn(source) ||
+                Regex("""MAX_FACTS_PER_SUMMARY\s*=\s*10\b""").containsMatchIn(source) ||
+                Regex("""FACT_COUNT_LIMIT\s*=\s*10\b""").containsMatchIn(source)
         assertTrue(
-            "fact 抽取函数体必须对单次抽取数量做 20 条上限 —— " +
-                "源码内含 `take(20)` / `coerceAtMost(20)` / `MAX_FACT_COUNT = 20` 之一。",
+            "fact 抽取函数体必须对单次抽取数量做 10 条上限（2026-06-15 从 20 收紧）—— " +
+                "源码内含 `take(10)` / `coerceAtMost(10)` / `MAX_FACT_COUNT = 10` 之一。",
             hasCap
+        )
+
+        // 红线：不得再用旧的 20 上限（commit-a R-AGENT-016 收紧的核心）
+        assertTrue(
+            "TC-AGENT-016-e 红线：源码不得再含 `MAX_FACT_COUNT = 20` 旧常量定义（已收紧到 10）。",
+            !Regex("""MAX_FACT_COUNT\s*=\s*20\b""").containsMatchIn(source)
         )
     }
 
@@ -188,10 +195,16 @@ class MessageCoordinationDelegateFactExtractionWiringTest {
     }
 
     /**
-     * TC-AGENT-016-g: 去重防御：必须先查 `#auto_extracted` tag 子集做 dedup。
+     * TC-AGENT-016-g (2026-06-15 收紧): 去重升级到 **3-gram jaccard 0.75**。
+     *
+     * **背景**：原 lowercase exact 比对——同义改写（"用户喜欢 Tailwind" / "User likes Tailwind CSS"
+     * / "偏好 Tailwind 框架"）就被绕开，导致 `#auto_extracted` 节点雪球式增长（用户报告
+     * "记忆库数量太多了"的 #1 元凶）。复用 R-AGENT-023 已有的 `computeAutoSummaryNgrams` +
+     * `computeAutoSummaryJaccard` helper（同一文件），阈值 0.75（与父 #auto_summary dedup 同
+     * 阈值，行为一致）。同时把 baseline `take(200)` 提到 `take(1000)` 避免少召回。
      */
     @Test
-    fun `TC-AGENT-016-g fact extractor dedupes against existing auto_extracted nodes`() {
+    fun `TC-AGENT-016-g fact extractor dedupes against existing auto_extracted nodes via jaccard`() {
         assertTrue("找不到 fact 抽取函数 —— 先满足 TC-AGENT-016-a。", extractorBlock.isNotBlank())
 
         // 必须 reference searchMemories（dedup 前置查询）
@@ -201,8 +214,7 @@ class MessageCoordinationDelegateFactExtractionWiringTest {
             Regex("""\bsearchMemories\s*\(""").containsMatchIn(extractorBlock)
         )
 
-        // searchMemories 调用应该用 `#auto_extracted` tag 限定查询范围
-        // 接受 listOf("#auto_extracted") 或字面 "#auto_extracted" 在 searchMemories 调用上下文里
+        // searchMemories 调用必须用 `#auto_extracted` tag 限定查询范围
         val hasTagsScopedDedup =
             Regex("""searchMemories\s*\([\s\S]*?#auto_extracted""").containsMatchIn(extractorBlock) ||
                 Regex("""tags\s*=\s*listOf\s*\(\s*"#auto_extracted"""").containsMatchIn(extractorBlock) ||
@@ -212,6 +224,48 @@ class MessageCoordinationDelegateFactExtractionWiringTest {
                 "源码 searchMemories 调用上下文需含 `#auto_extracted` 字面值在 tags 参数里。\n" +
                 "实际函数体:\n$extractorBlock",
             hasTagsScopedDedup
+        )
+
+        // (2026-06-15 收紧) 必须用 jaccard 升级版 dedup
+        assertTrue(
+            "TC-AGENT-016-g (2026-06-15): fact 抽取块必须调用 `computeAutoSummaryNgrams(` —— " +
+                "复用 R-AGENT-023 的 3-gram helper 做相似度比对（替换 lowercase exact 雪球元凶）。\n" +
+                "实际函数体:\n$extractorBlock",
+            Regex("""\bcomputeAutoSummaryNgrams\s*\(""").containsMatchIn(extractorBlock)
+        )
+        assertTrue(
+            "TC-AGENT-016-g (2026-06-15): fact 抽取块必须调用 `computeAutoSummaryJaccard(` —— " +
+                "复用 R-AGENT-023 的 jaccard helper。\n实际函数体:\n$extractorBlock",
+            Regex("""\bcomputeAutoSummaryJaccard\s*\(""").containsMatchIn(extractorBlock)
+        )
+        assertTrue(
+            "TC-AGENT-016-g (2026-06-15): fact 抽取块必须含阈值 `0.75` 字面值 —— " +
+                "与父 #auto_summary dedup 同阈值，保持行为一致。\n实际函数体:\n$extractorBlock",
+            extractorBlock.contains("0.75")
+        )
+
+        // baseline 必须 take(1000) 或同等数量（避免少召回——原 take(200) 当用户库变大就可能漏召旧 fact）
+        val hasLargerBaseline =
+            Regex("""\.take\s*\(\s*1000\s*\)""").containsMatchIn(extractorBlock) ||
+                Regex("""\.take\s*\(\s*\w*FACT\w*BASELINE\w*\s*\)""").containsMatchIn(extractorBlock) ||
+                Regex("""DEDUP_BASELINE\s*=\s*1000\b""").containsMatchIn(source)
+        assertTrue(
+            "TC-AGENT-016-g (2026-06-15): fact 抽取块的 dedup baseline 必须 `take(1000)` 或更大 " +
+                "—— 原 `take(200)` 当用户 #auto_extracted 库变大时会漏召旧 fact。\n" +
+                "实际函数体:\n$extractorBlock",
+            hasLargerBaseline
+        )
+
+        // 红线：不得再用 lowercase exact dedup（trim().lowercase() 形成的 Set<String> + factKey in set）
+        // 注意：computeAutoSummaryNgrams 内部也会 lowercase()，所以仅扫 fact 抽取函数体内的 .lowercase() 链
+        // 同时排除作为 search 文本输入的 lowercase 调用，重点抓"作为 dedup key 直接放进 Set"的旧路径
+        val oldExactDedupPattern = Regex(
+            """\.content\s*\.\s*trim\s*\(\s*\)\s*\.\s*lowercase\s*\(\s*\)"""
+        )
+        assertTrue(
+            "TC-AGENT-016-g 红线：fact 抽取函数体不得再含 `.content.trim().lowercase()` 旧 lowercase exact dedup 链 —— " +
+                "已升级到 jaccard。\n实际函数体:\n$extractorBlock",
+            !oldExactDedupPattern.containsMatchIn(extractorBlock)
         )
     }
 
