@@ -11,6 +11,7 @@ package com.xiaomo.hermes.hermes.cron
 import com.xiaomo.hermes.hermes.getHermesHome
 import com.xiaomo.hermes.hermes.getLogger
 import com.xiaomo.hermes.hermes.hermesNow
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.channels.FileLock
@@ -63,6 +64,24 @@ private val _LEGACY_HOME_TARGET_ENV_VARS = mapOf(
 
 /** Sentinel: when a cron agent has nothing new to report. */
 const val SILENT_MARKER = "[SILENT]"
+
+/**
+ * R-AGENT-033 Bug C: outbound dispatcher injection point.
+ *
+ * `app→hermes-android` is a single-direction dependency, so this module
+ * cannot import `HermesGatewayController` directly. Instead, the app
+ * module injects a lambda here at gateway start that fans out to the
+ * platform adapters, and clears it on stop.
+ *
+ * Signature: `(platform, chatId, text, threadId) -> Boolean`
+ *  - returns `true` on successful delivery, `false` otherwise (recorded
+ *    into `deliveryErrors` by [deliverResult]).
+ *  - lambda is `suspend` because platform adapter `.send` is suspending.
+ */
+@Volatile
+var cronOutboundDispatcher:
+    (suspend (platform: String, chatId: String, text: String, threadId: String?) -> Boolean)? =
+    null
 
 // File-based lock directory
 private val _LOCK_DIR: File get() = File(getHermesHome(), "cron")
@@ -475,12 +494,27 @@ fun deliverResult(
 
     for (target in targets) {
         try {
-            // TODO: Route through Android platform adapters
-            // For now, log the delivery attempt
-            logger.info(
-                "Job '$jobId': would deliver to ${target.platform}:${target.chatId}" +
-                (if (target.threadId != null) " thread=${target.threadId}" else "")
-            )
+            val dispatcher = cronOutboundDispatcher
+            if (dispatcher == null) {
+                val msg = "delivery to ${target.platform}:${target.chatId} skipped: " +
+                    "cronOutboundDispatcher not injected (gateway not started?)"
+                logger.warning("Job '$jobId': $msg")
+                deliveryErrors.add(msg)
+                continue
+            }
+            val ok = runBlocking {
+                dispatcher(target.platform, target.chatId, deliveryContent, target.threadId)
+            }
+            if (!ok) {
+                val msg = "delivery to ${target.platform}:${target.chatId} returned false"
+                logger.warning("Job '$jobId': $msg")
+                deliveryErrors.add(msg)
+            } else {
+                logger.info(
+                    "Job '$jobId': delivered to ${target.platform}:${target.chatId}" +
+                        (if (target.threadId != null) " thread=${target.threadId}" else "")
+                )
+            }
         } catch (e: Exception) {
             val msg = "delivery to ${target.platform}:${target.chatId} failed: ${e.message}"
             logger.error("Job '$jobId': $msg")

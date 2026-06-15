@@ -285,6 +285,26 @@ class GatewayRunner(
         }
 
         try {
+            // R-AGENT-033 Bug A: inject ThreadLocal session vars from inbound event source.
+            // Mirrors Python `gateway/run.py:3964 _set_session_env`.
+            // Required for getSessionEnv("HERMES_SESSION_*") downstream — without this
+            // CronjobTools._originFromEnv returns null and IM-triggered cron jobs lose
+            // their origin (platform/chat_id/thread_id), breaking the cron→IM loop.
+            setSessionVars(
+                platform = event.source.platform,
+                chatId = event.source.chatId,
+                chatName = event.source.chatName ?: "",
+                threadId = event.source.threadId ?: "",
+                userId = event.source.userId,
+                userName = event.source.userName ?: "",
+                sessionKey = event.sessionKey,
+            )
+            setCronAutoDeliverVars(
+                platform = event.source.platform,
+                chatId = event.source.chatId,
+                threadId = event.source.threadId ?: "",
+            )
+
             // Get or create session
             val session = sessionStore.getOrCreate(
                 sessionKey = event.sessionKey,
@@ -584,6 +604,12 @@ class GatewayRunner(
         } catch (e: Exception) {
             Log.e(_TAG, "Error handling message: ${e.message}")
         } finally {
+            // R-AGENT-033 Bug A red-line: clear ThreadLocal session vars so a cancelled /
+            // exception-thrown coroutine doesn't leak this turn's origin into the next
+            // event reusing the same JVM thread. Mirrors Python `gateway/run.py:4772
+            // _clear_session_env`.
+            clearSessionVars()
+            clearCronAutoDeliverVars()
             _processingSessions.remove(event.sessionKey)
             _interruptFlags.remove(event.sessionKey)
             _pendingEvents.remove(event.sessionKey)

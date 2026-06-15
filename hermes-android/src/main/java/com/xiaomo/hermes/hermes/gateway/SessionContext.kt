@@ -34,6 +34,13 @@ private val SESSION_USER_ID = ThreadLocal.withInitial<Any> { _UNSET }
 private val SESSION_USER_NAME = ThreadLocal.withInitial<Any> { _UNSET }
 private val SESSION_KEY = ThreadLocal.withInitial<Any> { _UNSET }
 
+// R-AGENT-033: Cron auto-deliver per-thread vars.
+// Used by CronjobTools to capture origin (platform/chat_id/thread_id) when
+// `deliver` arg is omitted, so cron job fires back to the same IM chat.
+private val SESSION_CRON_AUTO_DELIVER_PLATFORM = ThreadLocal.withInitial<Any> { _UNSET }
+private val SESSION_CRON_AUTO_DELIVER_CHAT_ID = ThreadLocal.withInitial<Any> { _UNSET }
+private val SESSION_CRON_AUTO_DELIVER_THREAD_ID = ThreadLocal.withInitial<Any> { _UNSET }
+
 /** Python `_VAR_MAP` — HERMES_SESSION_* env name → backing ThreadLocal. */
 private val _VAR_MAP: Map<String, ThreadLocal<Any>> = mapOf(
     "HERMES_SESSION_PLATFORM" to SESSION_PLATFORM,
@@ -43,6 +50,9 @@ private val _VAR_MAP: Map<String, ThreadLocal<Any>> = mapOf(
     "HERMES_SESSION_USER_ID" to SESSION_USER_ID,
     "HERMES_SESSION_USER_NAME" to SESSION_USER_NAME,
     "HERMES_SESSION_KEY" to SESSION_KEY,
+    "HERMES_CRON_AUTO_DELIVER_PLATFORM" to SESSION_CRON_AUTO_DELIVER_PLATFORM,
+    "HERMES_CRON_AUTO_DELIVER_CHAT_ID" to SESSION_CRON_AUTO_DELIVER_CHAT_ID,
+    "HERMES_CRON_AUTO_DELIVER_THREAD_ID" to SESSION_CRON_AUTO_DELIVER_THREAD_ID,
 )
 
 /**
@@ -81,6 +91,36 @@ fun clearSessionVars(@Suppress("UNUSED_PARAMETER") tokens: List<Any?>? = null) {
     SESSION_USER_ID.set("")
     SESSION_USER_NAME.set("")
     SESSION_KEY.set("")
+}
+
+/**
+ * R-AGENT-033: Set cron auto-deliver session vars (per-thread).
+ *
+ * Called from `_handleMessage` after `setSessionVars` so that any `cronjob`
+ * tool call within this turn captures the inbound IM origin (platform / chat /
+ * thread) and stores it as the job's `origin` — letting the Scheduler later
+ * deliver the result back to that same chat.
+ */
+fun setCronAutoDeliverVars(
+    platform: String = "",
+    chatId: String = "",
+    threadId: String = "",
+) {
+    SESSION_CRON_AUTO_DELIVER_PLATFORM.set(platform)
+    SESSION_CRON_AUTO_DELIVER_CHAT_ID.set(chatId)
+    SESSION_CRON_AUTO_DELIVER_THREAD_ID.set(threadId)
+}
+
+/**
+ * R-AGENT-033: Clear cron auto-deliver session vars (per-thread).
+ *
+ * Must be called in the same finally block as [clearSessionVars] to avoid
+ * leaking origin from one inbound turn into a later thread reuse.
+ */
+fun clearCronAutoDeliverVars() {
+    SESSION_CRON_AUTO_DELIVER_PLATFORM.set("")
+    SESSION_CRON_AUTO_DELIVER_CHAT_ID.set("")
+    SESSION_CRON_AUTO_DELIVER_THREAD_ID.set("")
 }
 
 /**

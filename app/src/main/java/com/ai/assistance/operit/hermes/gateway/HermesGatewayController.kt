@@ -15,6 +15,8 @@ import com.ai.assistance.operit.util.ChatMarkupRegex
 import com.xiaomo.hermes.hermes.gateway.GatewayRunner
 import com.xiaomo.hermes.hermes.gateway.UndeliveredReplyNotifier
 import com.xiaomo.hermes.hermes.gateway.UndeliveredReplyStore
+import com.xiaomo.hermes.hermes.cron.cronOutboundDispatcher
+import org.json.JSONObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -93,6 +95,14 @@ class HermesGatewayController private constructor(private val appContext: Contex
             }
             runner = instance
             instance.start()
+            // R-AGENT-033 Bug C: inject the cron→IM dispatcher hook so that
+            // Scheduler.deliverResult can fan out cron job output back to the
+            // platform adapter that originated the job. `app→hermes-android`
+            // is single-direction, so `Scheduler.kt` exposes a top-level
+            // `var cronOutboundDispatcher` and we wire it here.
+            cronOutboundDispatcher = { platform, chatId, text, threadId ->
+                dispatchOutgoing(platform, chatId, text, threadId)
+            }
             _status.value = Status.RUNNING
             val msg = "gateway started with ${config.enabledPlatforms.size} platform(s)"
             Log.i(TAG, msg)
@@ -120,6 +130,11 @@ class HermesGatewayController private constructor(private val appContext: Contex
         } catch (e: Throwable) {
             Log.w(TAG, "stop() threw: ${e.message}")
         } finally {
+            // R-AGENT-033 Bug C: clear the cron→IM dispatcher hook so that
+            // a stale lambda does not leak into the next gateway start (which
+            // would re-inject) and so cron ticks while gateway is stopped
+            // record an explicit "no dispatcher injected" delivery error.
+            cronOutboundDispatcher = null
             runner = null
             _status.value = Status.STOPPED
         }
@@ -130,6 +145,67 @@ class HermesGatewayController private constructor(private val appContext: Contex
 
     /** Fire-and-forget stop used by service onDestroy. */
     fun stopAsync(): Job = _scope.launch { stop() }
+
+    /**
+     * R-AGENT-033 Bug C: cron → IM outbound dispatch entry point.
+     *
+     * Looks up the platform adapter by name from `runner.deliveryRouter` and
+     * invokes its `.send(chatId, content, replyTo, metadata)`. For Telegram,
+     * `threadId` is forwarded via the `message_thread_id` metadata key so
+     * the reply lands in the correct topic/thread.
+     *
+     * Mirrors Python `gateway/run.py` cron deliver loop: `adapters[platform].send(...)`.
+     *
+     * @return `true` if the adapter accepted the send, `false` otherwise.
+     */
+    suspend fun dispatchOutgoing(
+        platform: String,
+        chatId: String,
+        text: String,
+        threadId: String?
+    ): Boolean {
+        val instance = runner
+        if (instance == null) {
+            Log.w(TAG, "dispatchOutgoing: gateway not running, dropping platform=$platform chatId=$chatId")
+            GatewayFileLogger.w(TAG, "dispatchOutgoing: gateway not running, dropping platform=$platform chatId=$chatId")
+            return false
+        }
+        val adapter = instance.deliveryRouter.getAdapter(platform)
+        if (adapter == null) {
+            Log.w(TAG, "dispatchOutgoing: no adapter for platform=$platform")
+            GatewayFileLogger.w(TAG, "dispatchOutgoing: no adapter for platform=$platform")
+            return false
+        }
+        // Telegram routes thread replies via the `message_thread_id` metadata key.
+        val metadata: JSONObject? = if (platform == "telegram" && !threadId.isNullOrEmpty()) {
+            try {
+                JSONObject().put("message_thread_id", threadId.toInt())
+            } catch (e: NumberFormatException) {
+                JSONObject().put("message_thread_id", threadId)
+            }
+        } else {
+            null
+        }
+        return try {
+            val result = adapter.send(
+                chatId = chatId,
+                content = text,
+                replyTo = null,
+                metadata = metadata,
+            )
+            if (!result.success) {
+                Log.w(TAG, "dispatchOutgoing: adapter.send returned failure platform=$platform chatId=$chatId error=${result.error}")
+                GatewayFileLogger.w(TAG, "dispatchOutgoing: adapter.send failure platform=$platform chatId=$chatId error=${result.error}")
+            } else {
+                GatewayFileLogger.i(TAG, "dispatchOutgoing: delivered platform=$platform chatId=$chatId len=${text.length}")
+            }
+            result.success
+        } catch (e: Throwable) {
+            Log.w(TAG, "dispatchOutgoing: adapter.send threw platform=$platform chatId=$chatId: ${e.message}")
+            GatewayFileLogger.w(TAG, "dispatchOutgoing: adapter.send threw platform=$platform chatId=$chatId: ${e.message}")
+            false
+        }
+    }
 
     /**
      * Feed [text] through the same ChatServiceCore path the APP UI uses.

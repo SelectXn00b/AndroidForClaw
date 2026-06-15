@@ -1388,6 +1388,68 @@ R-AGENT-031 把 hermes-android 已存在的 cron 数据层（`Jobs.kt` CRUD / �
 
 ---
 
+## 域 AGENT — Cron→IM Delivery Loop (R-AGENT-033)
+
+R-AGENT-033 补 R-AGENT-031 设计层就没做的 cron→IM 投递回路。R-AGENT-031 验收 D 只要求"写 Room DB + 通知活动 chat UI"——结果飞书/Telegram bot 触发的 cron 任务到点后，回复永远到不了 IM。本 R 修 3 个独立 bug：(A) Run.kt::_handleMessage 没调 `setSessionVars`，(B) CronjobTools._originFromEnv 用 `System.getenv` 在 Android 永远返 null，(C) Scheduler.deliverResult 没人接 cron→IM 直投通道。
+
+**架构合规**：
+- **app→hermes-android 单向依赖**：Scheduler 在 hermes-android 不能 import app 的 HermesGatewayController；改用 hermes-android 顶层 `var cronOutboundDispatcher` 注入点，由 OperitApplication 启动时注入指向 `dispatchOutgoing` 的 lambda。这是对 R-AGENT-031 路径 1 决策"不引入注入点"的必要偏离。
+- **ThreadLocal finally-clear 红线**：所有 setSessionVars / setCronAutoDeliverVars 必须有对应 clear 在 finally 块里，避免协程切线程残留。
+- 复用既有 outbound 基础设施：`GatewayRunner.deliveryRouter.getAdapter` + 各 platform `send(...)` 已是 R-GW 系列稳定接口。
+
+测试策略：全部走源码扫描（unit-scan）—— ThreadLocal 行为与 platform adapter dispatch 是 Android Context-bound，纯 JVM 单测难起；与 R-AGENT-031 同策略，行为正确性靠 §3 E2E + 手测兜底。
+
+| TC ID | R-ID | 输入 / 触发 | 期望 | 测试类型 | 实现 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-033-a | R-AGENT-033 | 源码扫描：`Run.kt::_handleMessage` 函数体 | 必须含 `setSessionVars(` 调用，参数串内出现 `event.source.platform` + `event.source.chatId` + `event.source.threadId` 三处引用（对齐 Python `gateway/run.py:3964`）。 | unit-scan | `RunSessionVarsWiringTest#TC-AGENT-033-a _handleMessage sets session vars from event source` 🔴 |
+| TC-AGENT-033-b | R-AGENT-033 | 源码扫描：`Run.kt::_handleMessage` 函数体 | 必须含 `clearSessionVars()` 调用，且**位于 finally 块内**（`finally\s*\{[\s\S]{0,500}clearSessionVars` 跨行 regex 验证；对齐 Python `gateway/run.py:4772`）。 | unit-scan | `RunSessionVarsWiringTest#TC-AGENT-033-b clearSessionVars called in finally block` 🔴 |
+| TC-AGENT-033-c | R-AGENT-033 | 源码扫描：`hermes-android/.../gateway/SessionContext.kt` | 必须含 `HERMES_CRON_AUTO_DELIVER_PLATFORM` + `HERMES_CRON_AUTO_DELIVER_CHAT_ID` + `HERMES_CRON_AUTO_DELIVER_THREAD_ID` 三个字面值；必须含 `fun setCronAutoDeliverVars(` + `fun clearCronAutoDeliverVars(` 函数声明（对齐 Python `gateway/session_context.py:61-63,73-75`）。 | unit-scan | `SessionContextCronVarsWiringTest#TC-AGENT-033-c cron auto-deliver vars registered` 🔴 |
+| TC-AGENT-033-d | R-AGENT-033 | 源码扫描：`CronjobTools.kt::_originFromEnv` 函数体 | 必须含 `getSessionEnv(` 至少 3 次调用（platform / chat_id / thread_id 三个 session var 读取）；**不**得含 `System.getenv("HERMES_SESSION_` 字面值（红线：旧 OS env 路径必须移除，对齐 Python `cronjob_tools.py:73-86`）。 | unit-scan | `CronjobOriginFromEnvWiringTest#TC-AGENT-033-d _originFromEnv reads ThreadLocal not OS env` 🔴 |
+| TC-AGENT-033-e | R-AGENT-033 | 源码扫描：`hermes-android/.../cron/Scheduler.kt` 顶层 | 必须含 `cronOutboundDispatcher` 字面值，类型签名含 `suspend` + `Boolean`（顶层注入点变量声明）。 | unit-scan | `SchedulerCronOutboundDispatcherWiringTest#TC-AGENT-033-e Scheduler exposes cronOutboundDispatcher injection point` 🟡 [SUPERSEDED-BY-035 runtime path; 保险栓保留] |
+| TC-AGENT-033-f | R-AGENT-033 | 源码扫描：`Scheduler.kt::deliverResult` 函数体 | 必须含 `cronOutboundDispatcher` 引用 + `target.platform` + `target.chatId` 引用（按 platform+chatId 直投到 IM adapter）；**不**得含 `TODO: Route through Android platform adapters` 字面值（红线：原 stub TODO 必须移除）。 | unit-scan | `SchedulerCronOutboundDispatcherWiringTest#TC-AGENT-033-f deliverResult invokes dispatcher per target` 🟡 [SUPERSEDED-BY-035 runtime path; 源码层 true 但 Android runtime bypass，真实投递走 CronAgentRunner.deliver] |
+| TC-AGENT-033-g | R-AGENT-033 | 源码扫描：`app/.../hermes/HermesGatewayController.kt` | 必须含 `suspend fun dispatchOutgoing(` 函数声明，参数列表含 `platform` + `chatId` + `text` + `threadId` 四处；函数体含 `deliveryRouter.getAdapter(` 调用 + `adapter.send(` 调用；含 Telegram 分支 `message_thread_id` 字面值。 | unit-scan | `HermesGatewayControllerDispatchOutgoingWiringTest#TC-AGENT-033-g dispatchOutgoing exposed and threads metadata` 🔴 |
+| TC-AGENT-033-h | R-AGENT-033 | 源码扫描：`HermesGatewayController.kt` | 必须含 `cronOutboundDispatcher` 字面值至少 2 次（启动注入 set 为 lambda + stop 置空 null），证明回调生命周期管理对称。 | unit-scan | `HermesGatewayControllerDispatchOutgoingWiringTest#TC-AGENT-033-h dispatcher injected on start and cleared on stop` 🔴 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
+## 域 AGENT — Cronjob Tool LLM Registration (R-AGENT-034)
+
+R-AGENT-034 把 R-AGENT-031 已经接通底层 CRUD 的 `cronjob` 工具暴露给 LLM 工具表——`SystemToolPrompts.getAIAllCategoriesEn/Cn` 硬编码 4 个 category（basic/file/http/memory）漏了 cronjob，agent system prompt 提到工具但 OpenAI tools array 不下发 schema → dispatch 拒。本 R 改 2 个 app 模块文件接通注册。依赖 R-AGENT-033 已落地，否则 IM 触发场景仍是死信。
+
+**架构合规**：只动 app 模块；executor 桥接 try/catch 包围，dispatch 失败必返结构化 ToolResult。
+
+| TC ID | R-ID | 输入 / 触发 | 期望 | 测试类型 | 实现 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-034-a | R-AGENT-034 | 源码扫描：`app/.../core/config/SystemToolPrompts.kt` | `getAIAllCategoriesEn` 函数体或同 file 顶层含 `cronjob` 字面值；`getAIAllCategoriesCn` 函数体含 `cronjob` 字面值；文件含 `CRONJOB_SCHEMA` 引用（来自 hermes-android tools 包）或等价 schema-list 引用。 | unit-scan | `SystemToolPromptsCronjobWiringTest#TC-AGENT-034-a cronjob category appears in EN and CN tool registries` 🔴 |
+| TC-AGENT-034-b | R-AGENT-034 | 源码扫描：`app/.../core/tools/ToolRegistration.kt::registerAllTools` 函数体 | 必须含 `"cronjob"` 字面值（registerTool name 参数）；必须含 `com.xiaomo.hermes.hermes.tools.cronjob` 引用 或 `CronjobTools.cronjob` 引用；含 `try {` + `catch` 包围 dispatch（异常不炸 handler）；含 `ToolResult(` 构造（异常路径返回结构化错误）。 | unit-scan | `CronjobToolRegistrationWiringTest#TC-AGENT-034-b ToolRegistration registers cronjob executor with try-catch` 🔴 |
+| TC-AGENT-034-c | R-AGENT-034 | 源码扫描（红线）：`SystemToolPrompts.kt` 既有 4 个 category 不被误删 | `getAIAllCategoriesEn` / `getAIAllCategoriesCn` 函数体仍含 `basicTools` + `fileSystemTools` + `httpTools` + `memoryTools` 四个变量名（或既有 ToolCategory 引用），证本 R 是**追加**而非替换。 | unit-scan | `SystemToolPromptsCronjobWiringTest#TC-AGENT-034-c existing 4 categories preserved` 🔴 |
+| TC-AGENT-034-d | R-AGENT-034 | 端到端验证：飞书 bot 跟 agent 说"每 15 分钟提醒我喝水" | agent 真调 `cronjob(action="create", ...)` 成功（不再回"工具不可用"）；16 分钟后飞书原会话收到 ai 消息（证 R-AGENT-033+034 闭环）；同步验 `cronjob(action="list")` / `remove`。**Deferred to §3 E2E + 手测**。 | manual / E2E | `(no unit test; manual verification required)` 🔴 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
+## 域 AGENT — Cron Tick Real Path Origin Delivery (R-AGENT-035)
+
+R-AGENT-035 是 R-AGENT-033 落地后端到端测试发现的修补：R-AGENT-033 把 `cronOutboundDispatcher` 注入到 `Scheduler.kt::deliverResult`，但 Android 实际 cron tick 走 `CronTickWorker` → `CronAgentRunner.run()` → `CronAgentRunner.deliver()`，**完全 bypass** `Scheduler.deliverResult`（Scheduler.kt 头注释 line 6-8 已写明），导致 dispatcher 永不触达，飞书端永远收不到 cron 消息。本 R 把 origin → IM 投递分支搬到 `CronAgentRunner.deliver()`，复用 R-AGENT-033 已建好的 `HermesGatewayController.dispatchOutgoing` 链。
+
+**架构合规**：只动 1 个 app 模块文件 `CronAgentRunner.kt`；不破坏 R-AGENT-033 已落地的 4.1/4.3/4.4/4.5 改动；保留 `Scheduler.cronOutboundDispatcher` 作 Python 1:1 parity + 保险栓。
+
+**TC-AGENT-033-c/d/e/f 处理**：原断言"`Scheduler.deliverResult` 含 dispatcher 调用"在源码层为 true 但运行时不可达。**不删 TC**（ID 不回收），在表格状态列里加 `[SUPERSEDED-BY-035 runtime path]` 标注；真正的 runtime 投递断言转移到 TC-AGENT-035-a..d。`SchedulerCronOutboundDispatcherWiringTest` 不删（保险栓还在）。
+
+| TC ID | R-ID | 输入 / 触发 | 期望 | 测试类型 | 实现 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-035-a | R-AGENT-035 | 源码扫描：`app/.../core/cron/CronAgentRunner.kt::deliver` 函数体 | 必须能读 `job["origin"]`（含 `"origin"` 字面值或 job 参数引用）+ `job["deliver"]`（`"deliver"` 字面值）；必须含 `"local"` 和 `"origin"` 两个 deliver 模式字面值。 | unit-scan | `CronAgentRunnerOriginDeliveryWiringTest#TC-AGENT-035-a deliver reads origin and deliver fields` 🔴 |
+| TC-AGENT-035-b | R-AGENT-035 | 源码扫描：`CronAgentRunner.kt` 整文件 | 必须含 `HermesGatewayController` reference + `dispatchOutgoing(` 调用（origin 路径委托给 R-AGENT-033 已建的 IM 投递桥）。 | unit-scan | `CronAgentRunnerOriginDeliveryWiringTest#TC-AGENT-035-b deliver invokes HermesGatewayController dispatchOutgoing` 🔴 |
+| TC-AGENT-035-c | R-AGENT-035 | 源码扫描（红线）：`CronAgentRunner.kt::deliver` 函数体保留 ChatHistoryManager fallback | 函数体仍含 `ChatHistoryManager` reference + `addMessage(` 调用 + `GatewayChatEventBus` reference；证本 R 是**新增 origin 分支**而非删除本地 chat 写入路径（用户即便用 IM 也能在 app 里看到记录）。 | unit-scan | `CronAgentRunnerOriginDeliveryWiringTest#TC-AGENT-035-c local fallback path preserved` 🔴 |
+| TC-AGENT-035-d | R-AGENT-035 | 端到端验证：飞书 bot 跟 agent 说"每 15 分钟提醒我喝水" → 16 分钟后 | jobs.json 内对应 job 含 `origin = {platform: "feishu", chat_id: ..., thread_id: ...}` + `deliver = "origin"`；GatewayFileLogger 内出现 `dispatchOutgoing: delivered platform=feishu chatId=... len=...` INFO 行；**飞书原会话真的收到 ai 消息**（这是 R-AGENT-033 + R-AGENT-034 + R-AGENT-035 三 R 闭环的最终验收）。 | manual / E2E | `(no unit test; manual verification required)` 🔴 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — Telegram inbound voice/audio + STT (R-GW-008 + R-AGENT-032)
 
 R-GW-008 + R-AGENT-032 是一对孪生需求，目的是把 Telegram 入站的 voice / audio 消息**真正下载到本地**并通过 OpenAI Whisper STT **自动转写为文本**，让 agent 不再只看到 `[Voice: <fileId>]` 占位字符串。本轮**只动 voice / audio 两个分支**——photo / document / video / sticker 维持现状（继续塞 fileId），后续在新 R 中处理（用户决策："本轮只动 audio/voice STT，图片下次 R"）。

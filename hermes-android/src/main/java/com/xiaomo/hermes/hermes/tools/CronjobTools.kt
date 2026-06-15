@@ -11,6 +11,7 @@ import com.xiaomo.hermes.hermes.cron.removeJob
 import com.xiaomo.hermes.hermes.cron.resumeJob
 import com.xiaomo.hermes.hermes.cron.triggerJob
 import com.xiaomo.hermes.hermes.cron.updateJob
+import com.xiaomo.hermes.hermes.gateway.getSessionEnv
 
 /**
  * Android-side minimum cron interval, in minutes.
@@ -445,14 +446,14 @@ fun _scanCronPrompt(prompt: String): String {
  * are not both present.
  */
 fun _originFromEnv(): Map<String, String?>? {
-    val originPlatform = System.getenv("HERMES_SESSION_PLATFORM")?.takeIf { it.isNotEmpty() }
-    val originChatId = System.getenv("HERMES_SESSION_CHAT_ID")?.takeIf { it.isNotEmpty() }
+    val originPlatform = getSessionEnv("HERMES_SESSION_PLATFORM").takeIf { it.isNotEmpty() }
+    val originChatId = getSessionEnv("HERMES_SESSION_CHAT_ID").takeIf { it.isNotEmpty() }
     if (originPlatform != null && originChatId != null) {
-        val threadId = System.getenv("HERMES_SESSION_THREAD_ID")?.takeIf { it.isNotEmpty() }
+        val threadId = getSessionEnv("HERMES_SESSION_THREAD_ID").takeIf { it.isNotEmpty() }
         return mapOf(
             "platform" to originPlatform,
             "chat_id" to originChatId,
-            "chat_name" to System.getenv("HERMES_SESSION_CHAT_NAME")?.takeIf { it.isNotEmpty() },
+            "chat_name" to getSessionEnv("HERMES_SESSION_CHAT_NAME").takeIf { it.isNotEmpty() },
             "thread_id" to threadId
         )
     }

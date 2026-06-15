@@ -1186,3 +1186,271 @@ CONFIG 原先的三条 R-CONFIG-001..003（Preferences / ConfigBuilder / Control
   - 配 `VOICE_TOOLS_OPENAI_KEY` 后给 Telegram bot 发语音，logcat 应见 `TranscriptionTools` 调用 + multipart POST 到 `/audio/transcriptions`
   - 不配 key → 返回 `error="No STT API key configured..."`，Telegram chat 中显示降级文案
   - 用 26 MB 音频 → 返回 `error="File exceeds 25MB"` 或等价
+
+### R-AGENT-033: cron→IM 投递回路（origin 注入 + 平台 adapter dispatch）
+**来源**:
+- 用户 2026-06-15 直接指令链：① "做定时任务呢？比如每天10点给发新闻等等工作呢？" → ② agent 反馈"cronjob 工具在当前版本不可用"（Explore agent 确认 cronjob 真没接入 LLM 工具表）→ ③ AskUserQuestion 选 B（立项接入）→ ④ Stage 0 调研发现 cron 投递路径是死信，agent 跑完只写 Room DB，IM 用户永远收不到 → ⑤ 用户 "b 吧，后面的事情都由你来决定"（拆 R-AGENT-033 补投递回路 + R-AGENT-034 暴露工具入口，先做 033）
+- Python 上游 `reference/hermes-agent/cron/scheduler.py:269-452 _deliver_result` + `tools/cronjob_tools.py:71-88 _origin_from_env` + `gateway/run.py:3964 _set_session_env / :4772 _clear_session_env` + `gateway/session_context.py:61-63,73-75` 三块 contextvar 是 source of truth
+- R-AGENT-031 验收 D 设计层就只要求"写 Room DB + 通知 UI"，**没有要求**回投到 IM；本 R 补这个缺口
+
+**背景**:
+- **三个独立 bug 复合导致 IM 触发的 cron 完全收不到回复**：
+  - **Bug A**：IM 入站时 `Run.kt::_handleMessage` 没调 `SessionContext.setSessionVars(...)` —— 全 hermes-android `setSessionVars` 0 调用方，平台路由信息根本没写入 ThreadLocal。Python 上游 `gateway/run.py:3964` 在 `_handle_message` 里调 `_set_session_env(context)` 写 contextvar，`:4772` 在 `finally` 里 `_clear_session_env(tokens)` 配对清理。Kotlin 缺这两步。
+  - **Bug B**：`CronjobTools.kt:447 _originFromEnv` 用 `System.getenv("HERMES_SESSION_PLATFORM")` 读 OS 环境变量 —— Android 上永远返 null（OS 层没有暴露写入 env 的接口）。Python 同名函数 `cronjob_tools.py:73-86` 调 `get_session_env(...)`（contextvar-aware），Kotlin 应改读 `getSessionEnv(...)`（`SessionContext.kt:96` 已有该函数，已被 `SendMessageTool.kt:147-150,348` 使用）。
+  - **Bug C**：`CronAgentRunner.deliver` (app/.../core/cron/CronAgentRunner.kt:112-133) 不读 `job["origin"]` 也不读 `job["deliver"]`，HermesGatewayController 也没暴露按 platform+chatId 直投的接口；`Scheduler.kt:478` 的 `runJob` / `deliverResult` 路径有 `TODO: Route through Android platform adapters` 注释，但代码层面是 no-op log。
+- **R-AGENT-031 设计就没考虑 IM 投递**：验收 D（hermes-requirements.md:1014-1017）只要求 `addMessage` + `ProcessingCompleted` event 触发 UI reload；验收 I 手测项也只验"app 内 chat UI 出现 ai 消息"。结果是 app 前台用户能看到，IM 用户（飞书 bot 跟 agent 说"每天 10 点发新闻"）完全看不到。
+- **现有 outbound 基础设施可复用**：`GatewayRunner.deliveryRouter: DeliveryRouter` 已经是 public（`Run.kt:52`），含 `getAdapter(platformName): BasePlatformAdapter?`（`Delivery.kt:62`）+ `deliverText(platform, chatId, text, replyTo)` (`Delivery.kt:73`)。各 platform `send(chatId, content, replyTo, metadata)` 签名已统一在 `Base.kt:270`。`HermesGatewayController.runner` 是 private，需要新增一个公共 `dispatchOutgoing(...)` 方法对外暴露。
+- **MVP scope**：修这 3 个 bug 让 IM 触发的 cron 能真正发回去。**不**覆盖：HTTP standalone fallback（Python `_deliver_result:415-448` 的兜底，Android 不上线该路径）/ media strip 分支（Python `scheduler.py:336` 调 `extract_media` 处理图片标签，Kotlin 第一版只处理纯文本，含 media 标签时直接当文本发）/ deliver 字段 explicit `platform:chat_id[:thread_id]` 解析（已有 `DeliveryTarget.parse`，但本轮只走 `deliver=origin` 默认路径）。
+
+**架构合规**:
+- **不破坏 hermes-android → app 单向依赖**：`Scheduler.kt` 在 hermes-android，不能直接 import `app/` 的 HermesGatewayController。改用注入式回调：在 `Scheduler.kt` 顶层（或 companion object）放一个 `var cronOutboundDispatcher: (suspend (platform: String, chatId: String, text: String, threadId: String?) -> Boolean)? = null`，由 app 模块的 `OperitApplication.onCreate` 注入实际指向 `HermesGatewayController.dispatchOutgoing` 的 lambda。这与 R-AGENT-031 路径 1 决策（"hermes-android 不引入静态 var lambda"）有偏离 —— **但偏离是必要的**，因为不放注入点就只能让 cron 端 import HermesGatewayController（破坏依赖方向）或反射（更糟）；且 R-AGENT-031 当时是因为不需要 cron→IM 投递才避开注入点，现在需求变了，注入点是最小代价方案。
+- **ThreadLocal 配对原则**：所有 `setSessionVars` 必须有对应 `clearSessionVars()` in `finally` 块；`setCronAutoDeliverVars` 同理。避免协程切线程 + 上一轮残留导致跨会话污染。
+- **复用 R-AGENT-027 已写完的 origin schema**：`{"platform", "chat_id", "chat_name", "thread_id"}` Map<String, String?>；不引入 dataclass。
+- **threadId metadata 平台分支**：Telegram 用 `metadata.put("message_thread_id", threadId.toIntOrNull() ?: 0)`（`Telegram.kt:567` 既有读取点）；Feishu / Slack 暂用通用 `"thread_id"` key（`Feishu.kt::send` 当前不读，但写进 metadata 不影响行为，未来扩展时再加 read 点）。
+
+**行为**:
+- **Run.kt::_handleMessage 调用 setSessionVars + finally clearSessionVars**（`hermes-android/.../gateway/Run.kt:251-...`）：
+  1. 在 `_interruptFlags[event.sessionKey] = interruptFlag` 行后、`try {` 行之前，调：
+     ```
+     setSessionVars(
+         platform = event.source.platform,
+         chatId = event.source.chatId,
+         chatName = event.source.chatName,
+         threadId = event.source.threadId ?: "",
+         userId = event.source.userId,
+         userName = event.source.userName,
+         sessionKey = event.sessionKey,
+     )
+     ```
+  2. 把现有 try 体最末尾的 `_sessionSemaphore.release()` 包成 `try { ... } finally { clearSessionVars(); _sessionSemaphore.release(); }`（保留语义，新增 clear）
+- **SessionContext.kt 加 cron auto-deliver ThreadLocal + helper**（`hermes-android/.../gateway/SessionContext.kt`）：
+  1. `_VAR_MAP` 增加 3 项：
+     - `"HERMES_CRON_AUTO_DELIVER_PLATFORM"`
+     - `"HERMES_CRON_AUTO_DELIVER_CHAT_ID"`
+     - `"HERMES_CRON_AUTO_DELIVER_THREAD_ID"`
+     与现有 `HERMES_SESSION_*` 同形 ThreadLocal<Any>，`getSessionEnv(name, default)` 自动 dispatch
+  2. 新增 `fun setCronAutoDeliverVars(platform: String, chatId: String, threadId: String = "")` 函数，写入 3 个 ThreadLocal
+  3. 新增 `fun clearCronAutoDeliverVars()` 配对 clear
+  - 对齐 Python `gateway/session_context.py:61-63`（变量定义） + `:73-75`（exposed names）
+- **CronjobTools._originFromEnv 改读 ThreadLocal**（`hermes-android/.../tools/CronjobTools.kt:447-460`）：
+  1. import `getSessionEnv`（与 `SendMessageTool.kt:18` 同 import path）
+  2. 替换 4 处 `System.getenv("HERMES_SESSION_*")` 为 `getSessionEnv("HERMES_SESSION_*", "")`（4 个变量：PLATFORM / CHAT_ID / CHAT_NAME / THREAD_ID）
+  3. 保留 `takeIf { it.isNotEmpty() }` null 化语义不变
+- **Scheduler.deliverResult 接 cronOutboundDispatcher 回调**（`hermes-android/.../cron/Scheduler.kt`）：
+  1. 顶层（同 file `package` 下）新增：
+     ```
+     var cronOutboundDispatcher: (suspend (platform: String, chatId: String, text: String, threadId: String?) -> Boolean)? = null
+     ```
+  2. `deliverResult(job, content)` 函数体（line 446-...）：
+     - 调 `resolveDeliveryTargets(job)` 拿 `targets: List<DeliveryTarget>`
+     - 对每个 target：
+       - 调 `cronOutboundDispatcher?.invoke(target.platform, target.chatId, content, target.threadId)`
+       - 回调返回 `true` → log "cron deliver ok platform=$platform chatId=$chatId len=${content.length}"
+       - 回调返回 `false` 或 `null`（dispatcher 未注入）→ log "cron deliver fallback (no dispatcher or send failed) platform=$platform chatId=$chatId"
+     - **不**做 HTTP standalone fallback（Python `:415-448` 路径不上线第一版）
+  3. 移除原 `TODO: Route through Android platform adapters` 注释（line 478）
+- **HermesGatewayController.dispatchOutgoing + 注入回调**（`app/.../hermes/HermesGatewayController.kt`）：
+  1. 新增公共方法：
+     ```
+     suspend fun dispatchOutgoing(
+         platform: String,
+         chatId: String,
+         text: String,
+         threadId: String? = null,
+     ): Boolean {
+         val r = runner ?: return false
+         val adapter = r.deliveryRouter.getAdapter(platform) ?: return false
+         val metadata = threadId?.takeIf { it.isNotEmpty() }?.let {
+             when (platform.lowercase()) {
+                 "telegram" -> JSONObject().apply { put("message_thread_id", it.toIntOrNull() ?: 0) }
+                 else -> JSONObject().apply { put("thread_id", it) }
+             }
+         }
+         val result = adapter.send(chatId = chatId, content = text, replyTo = null, metadata = metadata)
+         return result.success
+     }
+     ```
+  2. 在已有 `start(...)` / 初始化路径（HermesGatewayController.kt:69-93 附近）注入：
+     ```
+     com.xiaomo.hermes.hermes.cron.cronOutboundDispatcher = { platform, chatId, text, threadId ->
+         dispatchOutgoing(platform, chatId, text, threadId)
+     }
+     ```
+  3. 在 `stop(...)` / cleanup 路径置空：`com.xiaomo.hermes.hermes.cron.cronOutboundDispatcher = null`
+
+**验收**:
+- **A. Run.kt setSessionVars + finally clearSessionVars 接通**：
+  - `Run.kt::_handleMessage` 函数体含 `setSessionVars(` 调用，参数串含 `event.source.platform` + `event.source.chatId` + `event.source.threadId` 三处引用
+  - 同函数体含 `clearSessionVars()` 调用，且**位于 finally 块**（用 `finally\s*\{[\s\S]{0,500}clearSessionVars` 跨行 regex 验证）
+- **B. SessionContext.kt cron auto-deliver vars 落盘**：
+  - `SessionContext.kt` 文件含 `HERMES_CRON_AUTO_DELIVER_PLATFORM` + `HERMES_CRON_AUTO_DELIVER_CHAT_ID` + `HERMES_CRON_AUTO_DELIVER_THREAD_ID` 三个字面值
+  - 含 `fun setCronAutoDeliverVars(` 函数声明
+  - 含 `fun clearCronAutoDeliverVars(` 函数声明
+  - 该 3 个变量名出现在 `_VAR_MAP` 注册区（即变量 ThreadLocal 已注册到 dispatcher）
+- **C. CronjobTools._originFromEnv 切到 getSessionEnv**：
+  - `CronjobTools.kt::_originFromEnv` 函数体含 `getSessionEnv(` 至少 3 次调用（platform / chat_id / thread_id 三个变量读取）
+  - 同函数体**不**含 `System.getenv("HERMES_SESSION_` 字面值（红线：旧 OS env 路径必须移除）
+- **D. Scheduler.deliverResult 接 cronOutboundDispatcher**：
+  - `Scheduler.kt` 文件顶层（package-level / companion / object）含 `cronOutboundDispatcher` 字面值 + 类型签名含 `suspend` + `Boolean` 字面值
+  - `Scheduler.kt::deliverResult` 函数体含 `cronOutboundDispatcher` 引用 + `target.platform` / `target.chatId` 引用
+  - **不**含原 `TODO: Route through Android platform adapters` 字面值（红线：TODO 必须移除）
+- **E. HermesGatewayController.dispatchOutgoing + 回调注入**：
+  - `HermesGatewayController.kt` 含 `suspend fun dispatchOutgoing(` 函数声明，参数列表含 `platform` + `chatId` + `text` + `threadId` 四处
+  - 函数体含 `deliveryRouter.getAdapter(` 调用 + `adapter.send(` 调用
+  - 同文件含 `cronOutboundDispatcher` 字面值（注入回调或置空 2 处）
+  - Telegram 分支含 `message_thread_id` 字面值（thread metadata）
+- **F. §2 四件套**：
+  - `verify_align`：维持零（不新增/删除文件，仅函数体修改）
+  - `scan_stubs`：维持零
+  - `deep_align`：维持零（cronOutboundDispatcher 是注入点而非 Python 上游字段；通过 Scheduler.kt 文件头 KDoc 说明"Android-only injection point for app→hermes-android dependency direction"豁免）
+  - `scan_functional_stubs`：减少（`Scheduler.deliverResult` 从 stub-log-only 变为真投递，至少 -1）
+- **G. 单元测试**：源码扫描 wiring tests，详见 TC-AGENT-033-a..h
+- **H. 手测验收**（依赖 R-AGENT-034 暴露工具入口后才能完整验）：
+  - 飞书 bot 跟 agent 说"每 15 分钟提醒我喝水"→ agent 调 cronjob 创建 → 16 分钟后**飞书原会话**收到 ai 消息（不是只在 app 内）
+  - 同上 Telegram 路径 / Telegram thread (super-group topic) 路径 thread_id 正确路由
+  - 切换会话不污染：A 会话发消息 → A 会话 cron job origin.chat_id=A；同期 B 会话发消息 → B 会话 cron job origin.chat_id=B（验 ThreadLocal finally-clear 隔离）
+
+### R-AGENT-034: 暴露 cronjob 工具入口给 LLM（SystemToolPrompts + ToolRegistration 桥接）
+**来源**:
+- 用户 2026-06-15 决策 "b" 第二阶段（R-AGENT-033 闭环 IM 投递落地后）：让 LLM 真能在对话里调 `cronjob(action="create", ...)` 创建定时任务
+- 上游对齐：Python `reference/hermes-agent/tools/cronjob_tools.py` 的 schema 暴露给 LLM 是默认行为；Android 因为 `SystemToolPrompts.getAIAllCategoriesEn/Cn` 硬编码 4 个 category（basic/file/http/memory）漏掉了 cronjob
+- R-AGENT-031 实现完成时 cronjob 工具底层 CRUD 已通（Jobs.kt + CronjobTools.cronjob 入口已 real），缺的只是 LLM tool registry 注册
+
+**背景**:
+- **两条 tool dispatch path 现状**：
+  - Gateway path（IM 入站，飞书/Telegram bot 触发）：`HermesAdapter.kt:77-86` 调 `SystemToolPrompts.getAIAllCategoriesEn/Cn` 拿 categories → 平铺 schema → 喂给 LLM
+  - APP UI path（用户直接在 app chat panel 里跟 agent 说话）：`EnhancedAIService.kt:1259` 调 `getAvailableToolsForFunction(...)` → 拿 schema 列表
+  - 两条 path 共享同一个 dispatcher（`OperitToolDispatcher.kt:38` → `AIToolHandler.executeTool`），所以 ToolRegistration 这层是单点
+- **漏注册的具体表现**：grep `cronjob` 在 `SystemToolPrompts.kt` 文件内 0 命中；agent 在 IM 里能在 system prompt 自我感知段（R-AGENT-031 验收 F 已加）看到"我有 cronjob 工具"，但 LLM 实际拿到的 OpenAI tools array 里没有 `cronjob` schema，调用时被 dispatcher 拒。这就是用户报 "agent 反馈 cronjob 工具在当前版本不可用" 的根因。
+- **schema 已现成**：`CronjobTools.kt` 内 `CRONJOB_SCHEMA`（line 357-...）已经是完整的 OpenAI function calling schema，直接复用
+- **executor 桥接**：`AIToolHandler` 注册的 executor lambda 需要把 `AITool` 的 parameters 反序列化为 `Map<String, Any?>` 喂给 `CronjobTools.cronjob(...)`；`cronjob(...)` 返回 `ToolResult`（已是 AIToolHandler 期望的形状）
+
+**架构合规**:
+- 只动 2 个 app 模块文件：`SystemToolPrompts.kt`（加 cronjob category）+ `ToolRegistration.kt`（注册 executor 桥接）
+- 不修改 hermes-android 模块（CronjobTools 已是上游对齐 1:1 翻译）
+- 不影响其他 4 个 category（basic/file/http/memory）的现有 schema
+- 工具 dispatch 失败必须返回**结构化** ToolResult（`success=false, error=...`），不抛异常炸 dispatcher
+
+**行为**:
+- **SystemToolPrompts.kt 加 cronjob category**（`app/.../core/config/SystemToolPrompts.kt`）：
+  1. 在 `getAIAllCategoriesEn()` 返回的 list 末尾追加 `cronjobToolsEn`（新建 ToolCategory 实例）
+  2. 同样在 `getAIAllCategoriesCn()` 返回的 list 末尾追加 `cronjobToolsCn`
+  3. 新建 `private val cronjobToolsEn = ToolCategory(name="cronjob", tools=listOf(<cronjob schema 引用>))` —— 这里 schema 直接 reference `com.xiaomo.hermes.hermes.tools.CRONJOB_SCHEMA`（已存在），通过 `OpenAiFunctionToToolDef` 之类的既有 helper 转成 ToolDef（必要时新增 helper 函数 `Map<String,Any?> -> ToolDef`，不动既有 4 category 的 schema 表）
+  4. CN 版同形（中文描述如有需要走 i18n / 既有翻译机制；若 cronjob schema 已是双语描述则复用）
+- **ToolRegistration.registerAllTools 加 cronjob executor 桥接**（`app/.../core/tools/ToolRegistration.kt:124`）：
+  1. 在 `registerAllTools` 函数体末尾追加：
+     ```
+     handler.registerTool(
+         name = "cronjob",
+         executor = { tool ->
+             try {
+                 val params = tool.parameters // Map<String, Any?>（既有形状）
+                 com.xiaomo.hermes.hermes.tools.cronjob(params)
+             } catch (e: Exception) {
+                 ToolResult(toolName = "cronjob", success = false, error = "cronjob dispatch error: ${e.message}", result = null)
+             }
+         }
+     )
+     ```
+  2. 不在 dispatcher 层做参数预校验（让 `CronjobTools.cronjob` 内部的 `when (action)` 自己处理 unknown action / missing param 的 toolError 返回；保持 single source of truth）
+
+**验收**:
+- **A. SystemToolPrompts cronjob category 落盘**：
+  - `SystemToolPrompts.kt::getAIAllCategoriesEn` 函数体或同 file 顶层含 `cronjob` 字面值（category name 或 ToolCategory 名字）
+  - 同样 `getAIAllCategoriesCn` 函数体含 `cronjob` 字面值
+  - 文件含 `CRONJOB_SCHEMA` 引用（来自 hermes-android 的 tools 包），或等价的 schema-list 引用
+- **B. ToolRegistration executor 桥接**：
+  - `ToolRegistration.kt::registerAllTools` 函数体含 `"cronjob"` 字符串字面值（registerTool name 参数）
+  - 同函数体含 `com.xiaomo.hermes.hermes.tools.cronjob` 引用 或 `CronjobTools.cronjob` 引用
+  - 含 `try {` + `catch` 包围（dispatch 异常不炸 handler）
+  - 含 `ToolResult(` 构造调用（异常路径返回结构化错误）
+- **C. §2 四件套**：维持零；`scan_functional_stubs` 不增（理想再 -0，因为 cronjob 入口在 R-AGENT-031 已经从 stub 切到 real，本 R 仅做"前端注册"）
+- **D. 单元测试**：源码扫描 wiring tests，详见 TC-AGENT-034-a..d
+- **E. 手测验收**（端到端，依赖 R-AGENT-033 已落地）：
+  - 飞书 bot 跟 agent 说 "每 15 分钟提醒我喝水" → agent 真调 `cronjob(action="create", ...)` 成功（不再回"工具不可用"）
+  - `cronjob(action="list")` agent 能列出已建任务
+  - `cronjob(action="remove", id=...)` agent 能删任务
+  - 16 分钟后飞书原会话收到 ai 消息（验证 R-AGENT-033 + R-AGENT-034 闭环）
+
+---
+
+### R-AGENT-035: cron tick 真实路径（CronAgentRunner）接入 origin → IM 投递分支
+**来源**:
+- 用户 2026-06-15 端到端测试 R-AGENT-033 + R-AGENT-034 时报失败：飞书 bot 让 agent 创建多个定时任务，cronjob 工具调用成功，但定时点到达后**飞书端始终收不到任何 ai 消息**。
+- 用户提供的 logcat / dumpsys 诊断（agent dump 给我）：`HermesGatewayController` / `dispatchOutgoing` / `Scheduler` / `cronOutboundDispatcher` 等关键 tag 在 logcat 中**零命中**；但 dumpsys jobscheduler 显示 WorkManager 的 15min 周期 tick job（`u0a517/1024`，`Minimum latency: +14m59s`）在 RUNNABLE 状态——证明 tick 调度本身在跑，但 R-AGENT-033 的 dispatcher 注入路径**根本没被触达**。
+- 后续源码审查发现：R-AGENT-033 把 dispatcher 注入到 `Scheduler.kt::deliverResult`，但 `Scheduler.kt` 头注释 line 6-8 明确写着"Android-side cron tick path enters via `CronAlarmReceiver.kt`/`CronTickWorker.kt` directly and dispatches to the agent runtime there, **bypassing this file's `runJob` / `deliverResult`** (kept here for 1:1 Python parity only)"——意味着 R-AGENT-033 的 dispatcher 注入点是**死代码路径**，运行时永远不会被调用。
+
+**背景**:
+- **cron 真实运行路径**：
+  ```
+  WorkManager 15min 周期
+    → CronTickWorker.doWork()           [app/core/cron/CronTickWorker.kt:33]
+      → getDueJobs() / advanceNextRun
+      → CronAgentRunner.run(job)         [app/core/cron/CronAgentRunner.kt:45]
+        → ExternalChatRequestExecutor.execute()   ← agent 跑完
+        → CronAgentRunner.deliver()      [app/core/cron/CronAgentRunner.kt:112]
+          → ChatHistoryManager.addMessage()       ← ★ 只写本地 Room DB
+          → GatewayChatEventBus.emit(ProcessingCompleted)  ← 只 ping 本地 UI
+  ```
+  即：`Scheduler.kt::deliverResult` **从未被 Android 运行时调用**——它只是 Python `hermes/cron/scheduler.py::deliver_result` 的 1:1 平移翻译，保留为 deep_align/对齐参考用。R-AGENT-033 把 `cronOutboundDispatcher` 注入到 `Scheduler.deliverResult`，结构上正确但接到了死路径。
+- **R-AGENT-033 链路里其他部分是对的**：
+  - 4.1 `SessionContext.kt` 加的 cron-auto-deliver ThreadLocals 正确
+  - 4.3 `CronjobTools._originFromEnv()` 改走 `getSessionEnv` 正确
+  - 4.4 `Run.kt::_handleMessage` 入站时 `setSessionVars` + `setCronAutoDeliverVars` 正确
+  - 4.5 `HermesGatewayController.dispatchOutgoing()` 实现正确
+  - **唯一断点**：dispatcher 必须从 `Scheduler.deliverResult`（死代码）迁移/复制到 `CronAgentRunner.deliver()`（真路径）
+- **origin 字段已在 jobs.json 持久化**（验证完毕）：
+  - `CronjobTools.kt:215` `_createCronJob` 调 `_originFromEnv()` 传给 `Jobs.kt::createJob`
+  - `Jobs.kt:471` `createJob` 把 `"origin" to origin` 落到 jobs.json
+  - `Jobs.kt:431` `createJob` 算 `effectiveDeliver = deliver ?: if (origin != null) "origin" else "local"`——origin 存在时 deliver 自动是 `"origin"`
+  - 即：cron job 数据结构上已经具备"知道自己要回投到哪个 IM 平台"的所有信息（`job["origin"]={platform, chat_id, chat_name, thread_id}` + `job["deliver"]="origin"`），缺的只是 `CronAgentRunner.deliver()` 的消费逻辑。
+- **WorkManager 15min 最小周期带来的二级问题**（不在本 R 范围）：
+  - 飞书用户 23:42 创建 23:45 单次任务，需要等下一个 tick 边界（最早 24:00），无法做到 3 分钟级精确触发。这是 R-AGENT-031 的设计约束（`ANDROID_CRON_MIN_INTERVAL_MINUTES = 15`），用户应被引导用 ≥15min 间隔。本 R **只解决"投递路径"问题**，"准时性"问题如有需要另起 R-AGENT-036+。
+- **dumpsys 看不到 23:45 entry 的原因**：23:45 单次任务**不**会成为独立 JobScheduler 条目，它只是 jobs.json 里的一行；CronTickWorker tick 时由 `getDueJobs()` 扫描 jobs.json 判定 due。
+
+**架构合规**:
+- 只动 1 个 app 模块文件：`CronAgentRunner.kt`
+- 不修改 hermes-android 模块（origin 持久化链路已就位）
+- 不修改 R-AGENT-033 已落地的 4.1/4.3/4.4/4.5 改动（这些都是必须的）
+- 保留 `Scheduler.cronOutboundDispatcher` 注入点 + `HermesGatewayController.dispatchOutgoing` 桥（4.2/4.5）：作为 Python 1:1 parity 留存，并在 `Scheduler.kt` 头注释里**追加说明** Android 实际通过 `CronAgentRunner.deliver()` 触达 dispatcher，这一注入点为防止上游 `Scheduler` 真的被调用时仍能正确投递（保险栓）。
+- 不破坏 hermes-android → app 单向依赖（`CronAgentRunner` 在 app 模块，可以直接 import `HermesGatewayController.dispatchOutgoing`，无需注入式回调）
+- Python 上游对齐：Python `gateway/run.py` cron deliver loop 里就是 `adapters[platform].send(...)`——`CronAgentRunner.deliver()` 调 `HermesGatewayController.dispatchOutgoing()` → `adapter.send()` 是同等语义
+
+**行为**:
+- **`CronAgentRunner.deliver()` 加 origin 路径分支**（`app/.../core/cron/CronAgentRunner.kt`）：
+  1. 函数签名增加 `job: Map<String, Any?>` 参数（或在 `run()` 里把 job 传进 `deliver()`），让 deliver 有访问 `job["origin"]` 和 `job["deliver"]` 的能力。
+  2. 进 deliver 后第一步：读 `job["deliver"] as? String`（默认 `"local"`）+ `job["origin"] as? Map<String, Any?>`。
+  3. **deliver = "local" 或 origin 缺失** → 走当前路径（写 ChatHistoryManager + 发 ProcessingCompleted UI 事件），与现状完全一致。
+  4. **deliver = "origin" 且 origin 完整**（`platform` + `chat_id` 都非空）→ 走新增 IM 路径：
+     - 调 `HermesGatewayController.getInstance(context).dispatchOutgoing(platform=origin["platform"], chatId=origin["chat_id"], text=body, threadId=origin["thread_id"])`
+     - 投递成功 → 仍可选写本地 ChatHistoryManager（让 app UI 也能看到 cron 输出）+ 发 `ProcessingCompleted`，与 IM 投递并行不冲突
+     - 投递失败（dispatchOutgoing 返 false）→ 把 error 写进 `markJobRun(deliveryError=...)`，**不**抛异常炸 worker；并 fallback 写本地 ChatHistoryManager（让用户至少能在 app 里看到）
+  5. **deliver = "platform:chat_id:thread_id"** 显式形式（Python 上游支持）→ 解析后走 dispatchOutgoing 同样路径。
+  6. 所有分支都通过 `AppLogger` + `GatewayFileLogger` 打日志（INFO 投递成功 / WARN 投递失败 / DEBUG 选择的分支），让下次 logcat 排查能看到链路。
+- **`Scheduler.kt` 头注释追加**（`hermes-android/.../cron/Scheduler.kt`）：
+  - 在现有"Android-side cron tick path enters via `CronAlarmReceiver.kt`/`CronTickWorker.kt`..."注释后追加一段说明：`cronOutboundDispatcher` var 在 Android 实际**也**由 `CronAgentRunner.deliver()` 直接消费 origin 字段并调 `HermesGatewayController.dispatchOutgoing`；保留本注入点是 Python parity + 保险栓。
+- **不修改的部分**（保留 R-AGENT-033 已落地）：
+  - `SessionContext.kt` cron-auto-deliver ThreadLocals → 留
+  - `Run.kt::_handleMessage` setSessionVars + setCronAutoDeliverVars + finally clear → 留
+  - `CronjobTools._originFromEnv` 改走 getSessionEnv → 留
+  - `HermesGatewayController.dispatchOutgoing` → 留（被 CronAgentRunner 调用）
+  - `Scheduler.kt::cronOutboundDispatcher` 顶层 var → 留（保险栓 + Python parity）
+  - `HermesGatewayController.start()/stop()` 注入/清空 dispatcher → 留（保险栓）
+
+**验收**:
+- **A. 编译自检**：`./gradlew :hermes-android:compileDebugKotlin :app:compileDebugKotlin :app:compileDebugUnitTestKotlin` 全绿
+- **B. 单测**：新增 `CronAgentRunnerOriginDeliveryWiringTest`（app 模块），断言：
+  - `CronAgentRunner.deliver` 函数体含 `job["origin"]` / `job["deliver"]` 字面读取
+  - 含 `HermesGatewayController` reference + `dispatchOutgoing(` 调用
+  - 含 `"local"` 和 `"origin"` deliver 字面值（防止后续 drift）
+  - origin 缺失分支 fallback 到 ChatHistoryManager.addMessage（防 origin 链路把本地 chat 写入误删）
+- **C. §2 四件套**：维持零；`scan_functional_stubs` 不增（理想再 -0，因为 R-AGENT-035 接入的是 R-AGENT-031 已计入的能力）
+- **D. TC-AGENT-033-c/d/e 处理**：原 TC 断言 `Scheduler.deliverResult` 含 dispatcher 调用，事实上不会 runtime 触达。处理方式：
+  - **不删 TC**（ID 不回收）
+  - 用例文档里标注 `[SUPERSEDED-BY R-AGENT-035]`，说明断言虽然源码层为 true 但运行时不可达；真正 runtime 验收转移到 TC-AGENT-035-a/b/c/d
+  - Wiring test 类（`SchedulerCronOutboundDispatcherWiringTest` 等）不删（保险栓还在），但加 KDoc 标注 R-AGENT-035 关系
+- **E. 手测验收**（端到端）：
+  - 飞书 bot 跟 agent 说 "每 15 分钟提醒我喝水"
+  - 在 jobs.json 里能看到 `origin = {platform: "feishu", chat_id: ..., thread_id: ...}` + `deliver = "origin"`
+  - 16 分钟后飞书原会话**真的**收到 ai 消息（这是 R-AGENT-033 + R-AGENT-034 + R-AGENT-035 三 R 闭环的最终验收）
+  - GatewayFileLogger 里能看到 `dispatchOutgoing: delivered platform=feishu chatId=... len=...` INFO 行
