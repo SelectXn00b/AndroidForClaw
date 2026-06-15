@@ -1875,20 +1875,21 @@ class MessageCoordinationDelegate(
         // SUMMARY_PROMPT 已要求模型在末尾输出 【保留判断】=值得/不值得 (中) / [Persistence Decision]=worth/not worth (英)。
         // 解析这个标记：
         //   - 值得 / worth：照常走 dedup → updateMemory 或 saveMemory
-        //   - 不值得 / not worth：跳过段落落库；仍跑 fact 抽取（精确事实 #auto_extracted 仍要保存）
+        //   - 不值得 / not worth：**整段 skip**（连 fact 抽取也不跑）—— 2026-06-15 收紧。
         //   - 解析不到：默认按"值得"处理（向后兼容旧模型 / 异常输出）
+        //
+        // 2026-06-15 R-AGENT-026 行为收紧（用户报"记忆库节点过多"优化的一部分）：
+        // 原行为为"跳父段落、仍跑 fact 抽取"，理由是"精确事实仍要保存"。但此设计有两个问题：
+        //   (1) 自相矛盾：AI 价值判官已判定整段"不值得"，从中抽出来的 bullet 当独立 fact
+        //       与判定逻辑冲突——"父不值，子不可信"；
+        //   (2) 后门效应：该路径绕过父 #auto_summary dedup（jaccard 0.75），变成 fact 雪球
+        //       的隐藏增长源（与 commit-a R-AGENT-016 dedup 升级目标冲突）。
+        // 改为整段 skip——记忆精简策略一致性。
         val keepDecision = parseAutoSummaryKeepDecision(strippedSummary)
         if (keepDecision == false) {
             AppLogger.d(
                 TAG,
-                "R-AGENT-026: AI judged auto_summary as 不值得/not worth, skip paragraph save (chatId=$chatId, len=${strippedSummary.length})"
-            )
-            extractAndPersistFacts(
-                summaryText = strippedSummary,
-                chatId = chatId,
-                parentMemoryId = -1L,
-                useEnglish = useEnglish,
-                repository = repository
+                "R-AGENT-026: AI judged auto_summary as 不值得/not worth, skip ENTIRE persistence (含 fact 抽取) (chatId=$chatId, len=${strippedSummary.length})"
             )
             return
         }

@@ -530,6 +530,20 @@ R-AGENT-012 是 R-AGENT-011 的 UI 兜底：R-011 已把 `#gateway:<platform>` t
 
 ---
 
+### R-AGENT-026: AI 价值判官 keepDecision=false 时**全段** skip（含 fact 抽取）（2026-06-15）
+
+**说明**：R-AGENT-026 是 R-AGENT-013 流程末尾的一个分支（解析 SUMMARY_PROMPT 末尾 `【保留判断】=不值得` / `[Persistence Decision]=not worth`），原本只跳父 `#auto_summary` 整段落库、保留 fact 抽取。**2026-06-15** 用户反馈"记忆库数量太多"——经盘点发现 keepDecision=false 路径是漏洞：AI 已判定整段不值得保存，从中抽 bullet 当独立 fact 自相矛盾，且让该路径变成绕过父 dedup 的后门。改为 keepDecision=false 时**整段 skip**（连 fact 抽取也不跑）。
+
+| TC ID | R-ID | 输入 / 触发 | 期望 | 测试类型 | 实现 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-026-a | R-AGENT-026 | 源码扫描：`MessageCoordinationDelegate.kt` `forcePersistSummaryToMemory` 函数体 | keepDecision=false 分支必须**只 log + return**，不得调用 `extractAndPersistFacts(`。窗口扫描：从 `keepDecision == false` 起到下一个 `}` 或 `return` 关闭块为止。 | unit-scan | `MessageCoordinationDelegateKeepDecisionWiringTest#TC-AGENT-026-a keepDecision false branch skips fact extraction` 🟢 |
+| TC-AGENT-026-b | R-AGENT-026 | 源码扫描：`MessageCoordinationDelegate.kt` | keepDecision=false 分支日志必须含 `chatId` + `len=` 字面值（保持原有诊断能力——用户报记忆库异常时能从 logcat 复原 AI 判定历史）。 | unit-scan | `MessageCoordinationDelegateKeepDecisionWiringTest#TC-AGENT-026-b keepDecision false branch log carries chatId and len` 🟢 |
+| TC-AGENT-026-c | R-AGENT-026 | 源码扫描：`MessageCoordinationDelegate.kt` | parseAutoSummaryKeepDecision 函数必须存在；`forcePersistSummaryToMemory` 必须调用它（保证 R-AGENT-026 入口存在）。 | unit-scan | `MessageCoordinationDelegateKeepDecisionWiringTest#TC-AGENT-026-c parser function exists and is invoked` 🟢 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — Orphan Tag Migration (R-AGENT-029)
 
 测试类:
