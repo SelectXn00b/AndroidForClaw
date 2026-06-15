@@ -4,6 +4,7 @@ import android.content.Context
 import com.ai.assistance.operit.data.model.ChatMessage
 import com.ai.assistance.operit.data.repository.ChatHistoryManager
 import com.ai.assistance.operit.hermes.gateway.GatewayChatEventBus
+import com.ai.assistance.operit.hermes.gateway.HermesGatewayController
 import com.ai.assistance.operit.integrations.externalchat.ExternalChatRequest
 import com.ai.assistance.operit.integrations.externalchat.ExternalChatRequestExecutor
 import com.ai.assistance.operit.util.AppLogger
@@ -24,6 +25,19 @@ import com.xiaomo.hermes.hermes.cron.saveJobOutput
  * bilingual `[CRON CONTEXT]` / `[CRON 上下文]` tags so the agent knows
  * the run was fired by cron and avoids registering more cron jobs in
  * this turn.
+ *
+ * R-AGENT-035: cron tick real-path origin → IM delivery.
+ *
+ * R-AGENT-033 wired `cronOutboundDispatcher` into `Scheduler.deliverResult`,
+ * but Android's actual cron tick goes through this file (`CronTickWorker` →
+ * `CronAgentRunner.run` → `CronAgentRunner.deliver`), bypassing
+ * `Scheduler.deliverResult`. So this file consumes `job["origin"]` /
+ * `job["deliver"]` directly and routes IM delivery through
+ * [HermesGatewayController.dispatchOutgoing] (which is the same target
+ * the dispatcher injection in `Scheduler.kt` would have hit). Local-only
+ * jobs (`deliver = "local"` or origin missing) keep the original
+ * [ChatHistoryManager] path so the user can still see cron output in the
+ * app UI.
  */
 object CronAgentRunner {
 
@@ -86,7 +100,14 @@ object CronAgentRunner {
         var deliveryError: String? = null
         if (resolvedChatId != null) {
             try {
-                deliver(context, chatId = resolvedChatId, jobName = jobName, jobId = jobId, body = output)
+                deliver(
+                    context = context,
+                    chatId = resolvedChatId,
+                    jobName = jobName,
+                    jobId = jobId,
+                    body = output,
+                    job = job,
+                )
             } catch (e: Exception) {
                 AppLogger.e(TAG, "delivery failed for job '$jobId'", e)
                 deliveryError = e.message ?: "delivery threw"
@@ -104,12 +125,91 @@ object CronAgentRunner {
     }
 
     /**
+     * R-AGENT-035: Append the cron output to the originating chat.
+     *
+     * Routing rules (mirrors Python `gateway/run.py` cron deliver loop):
+     * - `deliver = "origin"` and `origin` map present → invoke
+     *   [HermesGatewayController.dispatchOutgoing] for the IM platform
+     *   captured at job-creation time. Also writes to local
+     *   [ChatHistoryManager] so the user can see the same output in the
+     *   app UI (no information loss either way).
+     * - `deliver = "local"` (or any value when `origin` is missing) →
+     *   write only to [ChatHistoryManager] and emit
+     *   [GatewayChatEventBus.Event.ProcessingCompleted]. This is the
+     *   R-AGENT-031 baseline behavior, untouched by this change.
+     *
+     * `deliveryError` is bubbled up via the caller's `markJobRun(...)`
+     * so `last_delivery_error` is observable by the user via
+     * `cronjob(action="list")`.
+     */
+    private suspend fun deliver(
+        context: Context,
+        chatId: String,
+        jobName: String,
+        jobId: String,
+        body: String,
+        job: Map<String, Any?>,
+    ) {
+        val deliverMode = (job["deliver"] as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: "local"
+        @Suppress("UNCHECKED_CAST")
+        val origin = job["origin"] as? Map<String, Any?>
+
+        // Always write to local chat history so the user can review cron
+        // output in the app UI. R-AGENT-035 only ADDS the IM dispatch path;
+        // it does not replace R-AGENT-031's local persistence.
+        writeLocalChatNote(context, chatId, jobName, jobId, body)
+
+        // Decide whether to ALSO push to an IM platform.
+        val originMatched = deliverMode == "origin" && origin != null
+        if (!originMatched) {
+            AppLogger.d(TAG, "deliver: job '$jobId' deliver=$deliverMode origin=${origin != null}; local-only path")
+            return
+        }
+
+        val originPlatform = (origin!!["platform"] as? String)?.trim().orEmpty()
+        val originChatId = (origin["chat_id"] as? String)?.trim().orEmpty()
+        val originThreadId = (origin["thread_id"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
+        if (originPlatform.isEmpty() || originChatId.isEmpty()) {
+            AppLogger.w(
+                TAG,
+                "deliver: job '$jobId' deliver=origin but origin map missing platform/chat_id " +
+                    "(platform='$originPlatform' chat_id='$originChatId'); skipping IM dispatch"
+            )
+            return
+        }
+
+        AppLogger.d(
+            TAG,
+            "deliver: job '$jobId' dispatching to platform=$originPlatform chatId=$originChatId thread=$originThreadId len=${body.length}"
+        )
+        val gateway = HermesGatewayController.getInstance(context.applicationContext)
+        val ok = try {
+            gateway.dispatchOutgoing(
+                platform = originPlatform,
+                chatId = originChatId,
+                text = body,
+                threadId = originThreadId,
+            )
+        } catch (e: Throwable) {
+            AppLogger.e(TAG, "deliver: dispatchOutgoing threw for job '$jobId': ${e.message}", e)
+            throw e
+        }
+        if (!ok) {
+            // Surface to caller so markJobRun records last_delivery_error.
+            throw IllegalStateException(
+                "dispatchOutgoing returned false for platform=$originPlatform chatId=$originChatId " +
+                    "(gateway not running or adapter not registered)"
+            )
+        }
+    }
+
+    /**
      * Append a `[CRON]` delivery note to the chat via the persistence
      * layer ([ChatHistoryManager.addMessage]). Then emit
      * [GatewayChatEventBus.Event.ProcessingCompleted] so any active chat
      * panel reloads from DB.
      */
-    private suspend fun deliver(
+    private suspend fun writeLocalChatNote(
         context: Context,
         chatId: String,
         jobName: String,
