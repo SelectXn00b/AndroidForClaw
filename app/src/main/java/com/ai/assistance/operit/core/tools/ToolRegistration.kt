@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import com.ai.assistance.operit.util.AppLogger
+import com.xiaomo.hermes.hermes.tools.cronjob
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -2326,6 +2327,55 @@ fun registerAllTools(handler: AIToolHandler, context: Context) {
                     }
                 }
             }
+    )
+
+    // R-AGENT-034 (TC-AGENT-034-b): cronjob executor bridge.
+    // Exposes the hermes-android `cronjob(...)` Python-aligned tool to the
+    // app's AIToolHandler dispatch table so the LLM can actually fire it.
+    // Args (Map<String, String>) are unpacked into the typed Kotlin function;
+    // exceptions are wrapped into a structured ToolResult so a malformed call
+    // doesn't crash the agent loop.
+    handler.registerTool(
+        name = "cronjob",
+        descriptionGenerator = { tool ->
+            val action = tool.parameters.find { it.name == "action" }?.value ?: "?"
+            "cronjob(action=$action)"
+        },
+        executor = { tool ->
+            try {
+                val params: Map<String, String> = tool.parameters.associate { it.name to it.value }
+                val output: String = com.xiaomo.hermes.hermes.tools.cronjob(
+                    action = params["action"] ?: "",
+                    jobId = params["job_id"]?.takeIf { it.isNotEmpty() },
+                    prompt = params["prompt"]?.takeIf { it.isNotEmpty() },
+                    schedule = params["schedule"]?.takeIf { it.isNotEmpty() },
+                    name = params["name"]?.takeIf { it.isNotEmpty() },
+                    repeat = params["repeat"]?.toIntOrNull(),
+                    deliver = params["deliver"]?.takeIf { it.isNotEmpty() },
+                    skill = params["skill"]?.takeIf { it.isNotEmpty() },
+                    skills = params["skills"]?.takeIf { it.isNotEmpty() },
+                    model = params["model"]?.takeIf { it.isNotEmpty() },
+                    provider = params["provider"]?.takeIf { it.isNotEmpty() },
+                    baseUrl = params["base_url"]?.takeIf { it.isNotEmpty() },
+                    reason = params["reason"]?.takeIf { it.isNotEmpty() },
+                    script = params["script"]?.takeIf { it.isNotEmpty() },
+                    taskId = params["task_id"]?.takeIf { it.isNotEmpty() },
+                )
+                ToolResult(
+                    toolName = tool.name,
+                    success = true,
+                    result = StringResultData(output)
+                )
+            } catch (e: Exception) {
+                AppLogger.w("ToolRegistration", "cronjob executor threw: ${e.message}")
+                ToolResult(
+                    toolName = tool.name,
+                    success = false,
+                    result = StringResultData(""),
+                    error = e.message ?: "cronjob failed"
+                )
+            }
+        }
     )
 }
 

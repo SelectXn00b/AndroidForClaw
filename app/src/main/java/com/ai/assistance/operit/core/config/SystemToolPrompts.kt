@@ -5,6 +5,10 @@ import com.ai.assistance.operit.core.chat.hooks.PromptHookRegistry
 import com.ai.assistance.operit.data.model.SystemToolPromptCategory
 import com.ai.assistance.operit.data.model.ToolPrompt
 import com.ai.assistance.operit.data.model.ToolParameterSchema
+// R-AGENT-034 (TC-AGENT-034-a): trace-tag — the cronjob ToolPrompt below mirrors
+// `com.xiaomo.hermes.hermes.tools.CronjobTools.CRONJOB_SCHEMA` so the LLM-side
+// schema stays in sync with the executor's actual accepted args.
+import com.xiaomo.hermes.hermes.tools.CRONJOB_SCHEMA
 
 /**
  * 系统工具提示词管理器
@@ -556,6 +560,74 @@ object SystemToolPrompts {
 
     private val internalToolCategoriesEn: List<SystemToolPromptCategory> = SystemToolPromptsInternal.internalToolCategoriesEn
     private val internalToolCategoriesCn: List<SystemToolPromptCategory> = SystemToolPromptsInternal.internalToolCategoriesCn
+
+    /**
+     * R-AGENT-034 (TC-AGENT-034-a/b): expose the `cronjob` tool to the LLM.
+     *
+     * The single-action cronjob tool covers create/list/update/pause/resume/remove/run.
+     * Schema mirrors `com.xiaomo.hermes.hermes.tools.CronjobTools.CRONJOB_SCHEMA` so
+     * the on-device executor accepts whatever the LLM emits. The compile-time reference
+     * to CRONJOB_SCHEMA below acts as a drift guard: if the upstream schema is renamed
+     * or removed, this file fails to compile, forcing the prompt to stay in sync.
+     */
+    private val cronjobSchemaTraceTag: String =
+        (CRONJOB_SCHEMA["name"] as? String) ?: "cronjob"
+
+    val cronjobTools = SystemToolPromptCategory(
+        categoryName = "Cron Job Tools",
+        tools = listOf(
+            ToolPrompt(
+                name = cronjobSchemaTraceTag,
+                description = "Manage scheduled cron jobs with a single compressed tool. " +
+                    "Use action='create' to schedule a new job from a self-contained prompt; " +
+                    "action='list' to inspect; action='update'/'pause'/'resume'/'remove'/'run' to manage by job_id. " +
+                    "Always list before remove — never guess job IDs. " +
+                    "If you omit `deliver`, the job auto-delivers its result back to the originating chat (recommended). " +
+                    "Cron-run sessions are stateless: the prompt must be fully self-contained and must not recursively schedule more jobs.",
+                parametersStructured = listOf(
+                    ToolParameterSchema(name = "action", type = "string", description = "Required. One of: create, list, update, pause, resume, remove, run.", required = true),
+                    ToolParameterSchema(name = "job_id", type = "string", description = "Required for update/pause/resume/remove/run.", required = false),
+                    ToolParameterSchema(name = "prompt", type = "string", description = "For create: the full self-contained prompt the cron run should execute.", required = false),
+                    ToolParameterSchema(name = "schedule", type = "string", description = "For create/update: e.g. '30m', 'every 2h', '0 9 * * *', or an ISO timestamp.", required = false),
+                    ToolParameterSchema(name = "name", type = "string", description = "Optional human-friendly name for the job.", required = false),
+                    ToolParameterSchema(name = "repeat", type = "integer", description = "Optional repeat count. Omit for defaults (once for one-shot, forever for recurring).", required = false),
+                    ToolParameterSchema(name = "deliver", type = "string", description = "Omit to auto-deliver back to the current chat/topic (recommended). Values: 'origin', 'local', or 'platform:chat_id:thread_id'.", required = false),
+                    ToolParameterSchema(name = "skills", type = "array", description = "Optional ordered list of skill names to load before executing the prompt. Pass an empty array on update to clear.", required = false),
+                    ToolParameterSchema(name = "model", type = "object", description = "Optional per-job model override, with 'provider' and 'model' fields.", required = false),
+                    ToolParameterSchema(name = "script", type = "string", description = "Optional path to a Python script run before each execution; its stdout is injected into the prompt as context.", required = false)
+                )
+            )
+        ),
+        categoryFooter = "\nNote: cron jobs run autonomously with no user present, so they cannot ask follow-up questions. Put the user-facing answer in the agent's final response."
+    )
+
+    val cronjobToolsCn = SystemToolPromptCategory(
+        categoryName = "定时任务工具",
+        tools = listOf(
+            ToolPrompt(
+                name = cronjobSchemaTraceTag,
+                description = "用一个压缩工具统一管理定时任务。" +
+                    "action='create' 创建（提示词需自包含）；action='list' 列出；" +
+                    "action='update'/'pause'/'resume'/'remove'/'run' 按 job_id 管理。" +
+                    "删除前必须先 list 拿到准确 job_id —— 不要猜。" +
+                    "省略 `deliver` 时，结果自动投回触发该任务的聊天（推荐）。" +
+                    "定时执行环境是无状态的：提示词必须自包含，且不允许在定时会话里继续创建新的定时任务。",
+                parametersStructured = listOf(
+                    ToolParameterSchema(name = "action", type = "string", description = "必填。create / list / update / pause / resume / remove / run。", required = true),
+                    ToolParameterSchema(name = "job_id", type = "string", description = "update/pause/resume/remove/run 时必填。", required = false),
+                    ToolParameterSchema(name = "prompt", type = "string", description = "create 时使用：完整、自包含的执行提示词。", required = false),
+                    ToolParameterSchema(name = "schedule", type = "string", description = "create/update 时使用：例如 '30m'、'every 2h'、'0 9 * * *' 或 ISO 时间戳。", required = false),
+                    ToolParameterSchema(name = "name", type = "string", description = "可选：易读的任务名称。", required = false),
+                    ToolParameterSchema(name = "repeat", type = "integer", description = "可选：重复次数。省略时默认（单次任务为一次，循环任务为永久）。", required = false),
+                    ToolParameterSchema(name = "deliver", type = "string", description = "省略以自动投回当前聊天/话题（推荐）。可选 'origin' / 'local' / 'platform:chat_id:thread_id'。", required = false),
+                    ToolParameterSchema(name = "skills", type = "array", description = "可选：执行前依序加载的 skill 名称列表。update 时传空数组清空。", required = false),
+                    ToolParameterSchema(name = "model", type = "object", description = "可选：按任务覆盖模型，含 'provider' 与 'model' 字段。", required = false),
+                    ToolParameterSchema(name = "script", type = "string", description = "可选：每次执行前运行的 Python 脚本路径，stdout 会被注入进提示词上下文。", required = false)
+                )
+            )
+        ),
+        categoryFooter = "\n注意：定时任务在无人值守环境运行，无法二次确认。把对用户可见的答案放在 agent 最终回复里。"
+    )
     
     /**
      * 获取所有英文工具分类
@@ -608,7 +680,8 @@ object SystemToolPrompts {
             basicTools,
             adjustedFileSystemTools,
             httpTools,
-            memoryTools
+            memoryTools,
+            cronjobTools
         )
     }
 
@@ -683,7 +756,8 @@ object SystemToolPrompts {
             basicToolsCn,
             adjustedFileSystemTools,
             httpToolsCn,
-            memoryToolsCn
+            memoryToolsCn,
+            cronjobToolsCn
         )
     }
 
