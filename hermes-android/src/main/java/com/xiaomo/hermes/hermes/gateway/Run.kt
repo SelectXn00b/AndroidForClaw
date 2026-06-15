@@ -561,7 +561,17 @@ class GatewayRunner(
                     status.countersFor(platformName).recordSent()
                 } else {
                     status.countersFor(platformName).recordError()
-                    Log.w(_TAG, "Pending delivery failed after retry: ${pendingResult.error}")
+                    Log.w(
+                        _TAG,
+                        "Pending delivery failed after retry: chatId=${pendingEvent.source.chatId} " +
+                            "len=${responseText.length} error=${pendingResult.error}"
+                    )
+                    onSendFailed?.invoke(
+                        platformName,
+                        pendingEvent.source.chatId,
+                        responseText,
+                        pendingResult.error ?: "unknown"
+                    )
                 }
                 // Clear typing indicator for the pending event
                 try {

@@ -1206,6 +1206,8 @@ inline `<think>` 提取仅作 fallback（兼容老历史）。
 | TC-GW-173-c | R-GW-003 | `Store.clear()` 后 `read()` | 返回空列表；文件被截断或删除 | unit | `UndeliveredReplyStoreTest#TC-GW-173-c clear truncates store` 🟢 |
 | TC-GW-174-a | R-GW-003 | `UndeliveredReplyNotifier.kt` 源码 | 必须创建 NotificationChannel id 含 `undelivered`；必须用 `NotificationManager.notify` 弹通知；点击 PendingIntent 必须把 text 写入剪贴板（`ClipboardManager`） | unit/source | `UndeliveredReplyNotifierTest#TC-GW-174-a notifies on local channel and copies text on click` 🟢 |
 | TC-GW-175-a | R-GW-003 | `HermesGatewayController.start()` 源码 | `agentRunner = ...` 后必须紧跟设置 `instance.onSendFailed`，内部调用 Store.append + Notifier.notify | unit/source | `HermesGatewayControllerSendFailedWiringTest#TC-GW-175-a wires Store and Notifier into onSendFailed` 🟢 |
+| TC-GW-176-a | R-GW-003 | 源码扫描：`Run.kt` pending-event 失败分支 | 与正常分支对称，必须调 `onSendFailed?.invoke(platformName, pendingEvent.source.chatId, pendingResult` —— 否则 pending 路径上发送失败时静默丢消息（不进 UndeliveredReplyStore，用户永远收不到 agent 回复）。 | unit/source | `RunPendingSendFailureWiringTest#TC-GW-176-a pending failure branch invokes onSendFailed` 🟢 |
+| TC-GW-176-b | R-GW-003 | 源码扫描：`Run.kt` pending-event 失败分支 `Log.w` | 与正常分支对称，必须含 `chatId` + `len=` + `error=` 字面值（不只是错误字符串） —— 对齐 TC-GW-170-a 的 release 包诊断要求。 | unit/source | `RunPendingSendFailureWiringTest#TC-GW-176-b pending failure log carries chatId and length` 🟢 |
 
 ### Stub adapters (Signal/Slack/Matrix/WhatsApp/SMS/Email/Homeassistant/Mattermost/Webhook/BlueBubbles)
 
