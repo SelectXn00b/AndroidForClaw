@@ -752,6 +752,72 @@ HermesApp 作为网关把 agent 能力接到外部 IM / 协作平台（飞书、
   - 多轮对话不残留、不串号；同一 chat 中断后再发新消息也能重新出现 typing。
   - Feishu / Weixin / 其他平台**不**出现任何"奇怪的输入提示"（默认 no-op，无副作用）。
 
+### R-GW-013: Telegram 出站对齐 Python 的 retry_after / Markdown fallback / 长消息分段
+**来源**:
+- 用户 2026-06-15 直接报告："gateway 有时候飞书和 telegram 无法收到结果"——用户视角偶发"agent 处理完了但 chat 没收到回复"。
+- Python 上游 `reference/hermes-agent/gateway/platforms/telegram.py:1023-1106` 的 `send` 单 chunk 内部循环 3 次重试 + 显式抓 `RetryAfter` / `"retry after"` 字符串、读 `retry_after` 字段按服务端要求 sleep + `BadRequest` 内分流（thread_not_found / reply_target_deleted 自愈）+ Markdown 解析失败 → 自动 strip 重发 plain text + `TimedOut` 视为可能已送达不重试（防重复）+ 长消息走 `truncate_message` 多 chunk + chunk 后缀提示。
+- Kotlin 现状 `Telegram.kt:552-591` 仅 1 次 HTTP POST，HTTP 不 200 直接 `SendResult(success=false, error="HTTP ${resp.code}")`：429（flood control）不读 `Retry-After`、Markdown parse 失败无 plain-text fallback、>4096 字符走 `take(MAX_MESSAGE_LENGTH)` 静默截断、reply_to_message_not_found 不退到 direct send。
+- 真正丢消息的 Top-2 路径：(1) 群活跃→Telegram 429 + `retry_after: 10` → Run.kt 外层只 sleep 2s → 第二次仍 429 → 最终失败；(2) agent 输出含未配对 `_`/`*`/`[`（特别是 LLM 思考输出穿插代码块时）→ HTTP 400 "can't parse entities" → Run.kt 重试同样的 Markdown → 又 400。
+
+**背景**:
+- Python 上游 `_RETRYABLE_ERROR_PATTERNS`（`base.py:832-842`）+ `_send_with_retry`（`base.py:1565-1665`）+ telegram.py 内部三段式策略是 Python 侧统一的网络错误处理框架。Kotlin 把这层降级成 Run.kt 外层裸 1 次 retry，每个平台 adapter 内部又各自实现部分策略——结果是 retry 时机点（外层 2s 固定 vs 内层指数 + jitter）不对齐、错误归类（retryable / timeout / format）缺失。
+- 本 R **只在 Telegram 适配器内**对齐 Python `telegram.py:1023-1106` 的 send 内部 retry 策略；Run.kt 外层那 1 次 retry 暂保留（属于 R-GW-001 的"简化版" `_send_with_retry`），未来另立 R-GW 把 base.py 的 `_send_with_retry` 整套搬过来时再统一。
+- Markdown fallback 用 `parse_mode=null` + plain-text 内容（剥离 `_*[]()` 等需要转义的字符）；不引入 MarkdownV2 严格转义，对齐当前 Python `_strip_mdv2`。
+- 长消息切分（>4096）按 Telegram 服务端硬限切成多 chunk，每 chunk 末尾加 ` (1/N)` 提示，对齐 Python `truncate_message` 行为。本 R **只**做切分循环，不做"先切到 \n / 段落边界"的智能切分（Python 上游也只做基础切）。
+- `TimedOut` 在 Kotlin 层用 OkHttp 的 `SocketTimeoutException` 等价物识别，不重试（防重复发）。
+- HTTP 429 的 `retry_after` 来源：Telegram Bot API 把它放在 response body JSON `{"ok":false, "error_code":429, "description":"...", "parameters":{"retry_after":10}}`，**不在** HTTP `Retry-After` header 里。本 R 解析 response body 的 `parameters.retry_after`。
+
+**架构合规**:
+- 复用既有 `TelegramAdapter._httpClient`，不新建 OkHttpClient 实例。
+- 不动 `Base.kt` / 其他平台 / `Run.kt`：本 R 只改 `Telegram.kt::send`，把单次 POST 升级为 3 次内部重试 + Markdown fallback + 长消息切分。
+- 不引入 feature flag / 配置开关——直接行为升级；现有调用点（`Run.kt::_handleMessage` / `_sendBusyAck` / 任意 controller 入口）无须改动，行为透明。
+- 不改 `SendResult` 接口——内部 retry 失败时仍返回 `SendResult(success=false, error=...)`；Run.kt 的外层 1 次 retry 保留作最终保险。
+
+**行为**:
+- **Telegram.kt::send 单 chunk 重试循环**（line 552-591 改造）：
+  - for `attempt in 0 until 3`：
+    1. 构造 payload（含 `parse_mode=Markdown` if `_parseMarkdown`），POST `/sendMessage`。
+    2. **HTTP 200 + `ok:true`** → 成功，返回 `SendResult(success=true, messageId=...)`。
+    3. **HTTP 200 + `ok:false`**：检查 `description`：
+       - 含 `"can't parse"` / `"can not parse"` / `"parse_entities"` / `"parse error"` → Markdown fallback：去掉 `parse_mode`、`text` 用 `_stripMarkdownToPlain(content)`、retry 同 attempt（不 break），continue 一次特殊 retry。
+       - 含 `"message thread not found"` 且 metadata 有 thread_id → 清掉 thread，continue retry。
+       - 含 `"replied message not found"` 且 replyTo 非 null → 清掉 replyTo，continue retry。
+       - 其他 → 返回 `SendResult(success=false, error=description)`，**不**重试（永久错误）。
+    4. **HTTP 429**：解析 response body `parameters.retry_after`（默认 1.0 秒），`if attempt < 2: delay(retry_after_ms); continue`，否则返回失败。
+    5. **HTTP 5xx 或 IO/SocketTimeoutException**：
+       - `SocketTimeoutException` → 直接返回失败（不重试，防重复发，对齐 Python `TimedOut`）。
+       - 其他网络错误：`if attempt < 2: delay(2 ** attempt seconds); continue`，否则返回失败。
+    6. **HTTP 4xx 其他**：返回失败，不重试。
+- **Telegram.kt::send 长消息切分**：
+  - `_splitForTelegram(content)` helper：按 `MAX_MESSAGE_LENGTH = 4096`（Telegram bot API 硬限）切成多段；段数 N≥2 时每段末尾追加 ` (k/N)`（k 从 1 起）；N=1 时不加。
+  - send 顶层把 `content` 切成 chunks，for chunk in chunks 各跑上面的 3 次内部重试。某 chunk 失败 → 直接返回失败（不再继续后续 chunks，等同 Python 上游 raise）。
+- **`_stripMarkdownToPlain` helper**（Telegram 私有版本，对齐 Python `_strip_mdv2`）：
+  - 移除 markdown emphasis / link / code 字符：`_` `*` `~` `\`` `[` `]` `(` `)` `>` `#`（保留普通文字与换行）。
+  - 用作 `parse_mode=null` 的 fallback text。
+
+**验收**:
+- **A. Telegram.kt::send 函数体含 3 次重试循环**：
+  - `Telegram.kt::send` 函数体含 `for` 循环字面值 + `attempt` 变量 + 至少出现 3 次的 attempt-bounded 字面值（`< 3` 或 `until 3`）。
+  - 含 `retry_after` 字面值（解析 Telegram 限流字段）+ `parameters` 字面值（response body 路径）。
+  - 含 `429` 字面值 + `parse` / `markdown` / `parse_entities` 字面值（Markdown fallback 检测）。
+  - 含 `message thread not found` 或 `thread_not_found` 字面值（thread 自愈）+ `replied message not found` 字面值（reply 自愈）。
+- **B. Telegram.kt 含 _stripMarkdownToPlain helper 函数声明**：
+  - `private fun _stripMarkdownToPlain(` 函数声明出现一次。
+- **C. Telegram.kt::send 不再用 `take(MAX_MESSAGE_LENGTH)` 静默截断**：
+  - 函数体中**不**含 `content.take(MAX_MESSAGE_LENGTH)` 字面值（红线，防回归）。
+  - 长消息切分使用 `_splitForTelegram` helper（含函数声明）+ 在多 chunk 时追加 ` (1/N)` 标记字面值。
+  - `MAX_MESSAGE_LENGTH` 常量值仍为 `4096`（Telegram 服务端硬限，不动）。
+- **D. SocketTimeoutException 不重试（红线）**：
+  - send 函数体含 `SocketTimeoutException` 字面值，且**不**走 retry 循环（直接 return 失败）；防止 timeout 后重复发送同消息导致 chat 出现两条相同回复。
+- **E. §2 四件套**：`verify_align / scan_stubs / deep_align / scan_functional_stubs` 维持基线（本 R 增的 `_stripMarkdownToPlain` / `_splitForTelegram` 是 Python `_strip_mdv2` / `truncate_message` 的等价 Kotlin helper，属于 platform difference 允许的本地等价物，不引入新 stub）。
+- **F. 单元测试**（`*Test.kt`）：源码扫描守 wiring（TC-GW-013-a..c）。运行时行为（"群活跃时不丢消息"）由 §3 E2E + 手测兜底（hermes-android testImpl 无 MockWebServer 依赖）。
+- **G. 手测验收**：
+  - 配好 Telegram bot + 启用 gateway，在群里给 bot 连发 ≥10 条 trigger 消息（触发 Telegram flood control）。
+  - 每条消息的回复都应送达 chat（即使有些消息间隔 10s+ 因 retry_after），无任何静默丢消息。
+  - 让 agent 输出含 ` ``` ` / `_` / `*` 的 markdown 内容（如代码块），chat 应能收到（Markdown 渲染或 plain text fallback 都算成功），不能因 `can't parse entities` 丢消息。
+  - 让 agent 输出 ≥5000 字符长回复，chat 内应看到 ` (1/N)` ... ` (N/N)` 多段消息，不能因 `take()` 静默截断。
+  - 真机 Telegram chat 不出现两条完全相同的回复（timeout 防重复有效）。
+
 ---
 
 ## 域 STATE — 会话状态 / trajectory

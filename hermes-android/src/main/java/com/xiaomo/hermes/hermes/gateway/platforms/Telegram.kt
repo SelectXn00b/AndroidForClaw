@@ -25,6 +25,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.File
+import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -554,41 +555,140 @@ class TelegramAdapter(
         content: String,
         replyTo: String?,
         metadata: JSONObject?): SendResult = withContext(Dispatchers.IO) {
-        try {
-            val payload = JSONObject().apply {
-                put("chat_id", chatId)
-                put("text", content.take(MAX_MESSAGE_LENGTH))
-                if (_parseMarkdown) put("parse_mode", "Markdown")
-                if (replyTo != null) put("reply_to_message_id", replyTo.toInt())
-            }
-
-            val body = payload.toString()
-                .toRequestBody("application/json; charset=utf-8".toMediaType())
-
-            val request = Request.Builder()
-                .url("$API_BASE/bot$_token/sendMessage")
-                .post(body)
-                .build()
-
-            _httpClient.newCall(request).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    val errorBody = resp.body?.string() ?: ""
-                    Log.e(_TAG, "Send failed: HTTP ${resp.code}: $errorBody")
-                    return@withContext SendResult(success = false, error = "HTTP ${resp.code}")
+        // R-GW-013: split long content into chunks (Telegram hard limit 4096),
+        // each chunk goes through the 3-attempt retry loop with retry_after /
+        // Markdown fallback / thread+reply self-healing. Aligned with Python
+        // `gateway/platforms/telegram.py:1023-1106` `for _send_attempt in range(3)`.
+        val chunks = _splitForTelegram(content)
+        var lastMessageId: String? = null
+        var currentReplyTo: String? = replyTo
+        for (chunk in chunks) {
+            var useMarkdown = _parseMarkdown
+            var threadId: Int? = metadata?.optInt("message_thread_id", -1)?.takeIf { it >= 0 }
+            var attempt = 0
+            var chunkResult: SendResult? = null
+            for (a in 0 until 3) {
+                attempt = a
+                val payload = JSONObject().apply {
+                    put("chat_id", chatId)
+                    put("text", if (useMarkdown) chunk else _stripMarkdownToPlain(chunk))
+                    if (useMarkdown) put("parse_mode", "Markdown")
+                    if (currentReplyTo != null) put("reply_to_message_id", currentReplyTo!!.toInt())
+                    if (threadId != null) put("message_thread_id", threadId)
                 }
-
-                val data = JSONObject(resp.body!!.string())
-                if (!data.optBoolean("ok", false)) {
-                    return@withContext SendResult(success = false, error = data.optString("description"))
+                val body = payload.toString()
+                    .toRequestBody("application/json; charset=utf-8".toMediaType())
+                val request = Request.Builder()
+                    .url("$API_BASE/bot$_token/sendMessage")
+                    .post(body)
+                    .build()
+                try {
+                    _httpClient.newCall(request).execute().use { resp ->
+                        val rawBody = resp.body?.string() ?: ""
+                        if (resp.code == 429) {
+                            // Telegram flood control — body has parameters.retry_after seconds
+                            val retryAfterSec = try {
+                                JSONObject(rawBody).optJSONObject("parameters")?.optDouble("retry_after", 1.0) ?: 1.0
+                            } catch (_: Exception) { 1.0 }
+                            Log.w(_TAG, "Telegram flood control on send (attempt ${attempt + 1}/3) chatId=$chatId retry_after=${retryAfterSec}s")
+                            if (attempt < 2) {
+                                kotlinx.coroutines.delay((retryAfterSec * 1000).toLong().coerceAtLeast(0L))
+                                return@use
+                            }
+                            chunkResult = SendResult(success = false, error = "HTTP 429 retry_after=$retryAfterSec")
+                            return@use
+                        }
+                        if (!resp.isSuccessful) {
+                            Log.e(_TAG, "Send failed: HTTP ${resp.code}: $rawBody")
+                            chunkResult = SendResult(success = false, error = "HTTP ${resp.code}")
+                            return@use
+                        }
+                        val data = JSONObject(rawBody)
+                        if (data.optBoolean("ok", false)) {
+                            val messageId = data.getJSONObject("result").getString("message_id")
+                            chunkResult = SendResult(success = true, messageId = messageId)
+                            return@use
+                        }
+                        // ok=false — analyze description for self-heal vs Markdown fallback vs permanent
+                        val description = data.optString("description")
+                        val errLower = description.lowercase()
+                        if (errLower.contains("can't parse") || errLower.contains("can not parse") ||
+                            errLower.contains("parse_entities") || errLower.contains("parse error")) {
+                            // Markdown parse failed → fallback to plain text and retry the same attempt slot
+                            if (useMarkdown) {
+                                Log.w(_TAG, "Markdown parse failed, falling back to plain text: $description")
+                                useMarkdown = false
+                                return@use
+                            }
+                            chunkResult = SendResult(success = false, error = description)
+                            return@use
+                        }
+                        if (errLower.contains("message thread not found") && threadId != null) {
+                            Log.w(_TAG, "Thread $threadId not found, retrying without message_thread_id")
+                            threadId = null
+                            return@use
+                        }
+                        if (errLower.contains("replied message not found") && currentReplyTo != null) {
+                            Log.w(_TAG, "Reply target deleted, retrying without reply_to: $description")
+                            currentReplyTo = null
+                            return@use
+                        }
+                        // Other ok=false errors are permanent — don't retry
+                        chunkResult = SendResult(success = false, error = description)
+                    }
+                } catch (e: SocketTimeoutException) {
+                    // TimedOut may have reached server — retrying risks duplicate delivery (Python `telegram.py:1083-1084`).
+                    Log.w(_TAG, "Send timeout (no retry to avoid duplicate): ${e.message}")
+                    chunkResult = SendResult(success = false, error = "timeout: ${e.message}")
+                    return@withContext chunkResult!!
+                } catch (e: Exception) {
+                    if (attempt < 2) {
+                        val wait = (1L shl attempt) * 1000L  // 1s, 2s
+                        Log.w(_TAG, "Network error on send (attempt ${attempt + 1}/3), retrying in ${wait}ms: ${e.message}")
+                        kotlinx.coroutines.delay(wait)
+                    } else {
+                        chunkResult = SendResult(success = false, error = e.message)
+                    }
                 }
-
-                val messageId = data.getJSONObject("result").getString("message_id")
-                SendResult(success = true, messageId = messageId)
+                if (chunkResult?.success == true) break
+                if (chunkResult != null && chunkResult?.success == false) break
             }
-        } catch (e: Exception) {
-            SendResult(success = false, error = e.message)
+            val res = chunkResult ?: SendResult(success = false, error = "send loop exhausted")
+            if (!res.success) return@withContext res
+            lastMessageId = res.messageId
+            // Subsequent chunks are not replies (avoid spamming reply markers)
+            currentReplyTo = null
         }
+        SendResult(success = true, messageId = lastMessageId)
     }
+
+    /**
+     * Split text into Telegram-sized chunks (4096 char limit). When N >= 2,
+     * append " (k/N)" suffix to each chunk. Aligned with Python
+     * `gateway/platforms/telegram.py:951-1020` truncate_message behavior.
+     */
+    private fun _splitForTelegram(content: String): List<String> {
+        if (content.length <= MAX_MESSAGE_LENGTH) return listOf(content)
+        // Reserve ~12 chars for " (k/N)" suffix
+        val effective = MAX_MESSAGE_LENGTH - 12
+        val raw = mutableListOf<String>()
+        var i = 0
+        while (i < content.length) {
+            val end = (i + effective).coerceAtMost(content.length)
+            raw.add(content.substring(i, end))
+            i = end
+        }
+        val total = raw.size
+        return raw.mapIndexed { idx, chunk -> "$chunk (${idx + 1}/$total)" }
+    }
+
+    /**
+     * Strip Markdown emphasis / link / code chars so plain-text fallback is safe.
+     * Aligned with Python `_strip_mdv2` in `gateway/platforms/telegram.py`.
+     */
+    private fun _stripMarkdownToPlain(text: String): String =
+        text.replace(Regex("""[_*~`\[\]()>#]"""), "")
+
 
     override suspend fun sendImage(
         chatId: String,
