@@ -1503,6 +1503,28 @@ R-GATEWAY-035 给 `GatewayRunner` 加 `_busyInputMode: String` 字段（默认 `
 
 ---
 
+## 域 GATEWAY — Command Routing (R-GATEWAY-036)
+
+R-GATEWAY-036 在 active session busy 期间识别 slash 命令。最小骨架：3 个直接服务于"插话功能"的命令（`/steer`、`/queue`、`/stop`）走具体路径；其它 11 个 `ACTIVE_SESSION_BYPASS_COMMANDS` 命令礼貌拒绝；非命令文本 fall-through 到既有 busy 路径。对齐 Python `hermes_cli/commands.py:267-284` 与 `gateway/run.py:3225-3395`。
+
+| TC-ID | 关联 R | 输入 | 期望输出 | 测试类型 | 状态 |
+|---|---|---|---|---|---|
+| TC-GATEWAY-036-a | R-GATEWAY-036 | `resolveCommand("/steer hello world")` | 返 `("steer", "hello world")` | unit | `GatewayCommandRoutingTest#TC-GATEWAY-036-a resolveCommand parses slash plus args` 🟢 |
+| TC-GATEWAY-036-b | R-GATEWAY-036 | `resolveCommand("hello /steer x")` / `resolveCommand("")` / `resolveCommand("/unknownCmd")` | 全部返 null（不以 `/` 开头 / 空 / 不在白名单） | unit | `GatewayCommandRoutingTest#TC-GATEWAY-036-b resolveCommand rejects non-bypass tokens` 🟢 |
+| TC-GATEWAY-036-c | R-GATEWAY-036 | `resolveCommand("  /STEER   Hello  ")`（前导空白 + 大写 + 多空白） | 返 `("steer", "Hello")`（lowercase + trim） | unit | `GatewayCommandRoutingTest#TC-GATEWAY-036-c resolveCommand normalizes case and whitespace` 🟢 |
+| TC-GATEWAY-036-d | R-GATEWAY-036 | active busy session 收到 `/steer 加个限制`，回调 `steerActiveAgent` 返 true | 调 `steerActiveAgent(sessionKey, "加个限制")` 一次；不入 `_pendingEvents`；不打断 | unit | `GatewayCommandRoutingTest#TC-GATEWAY-036-d steer dispatches to callback` 🟢 |
+| TC-GATEWAY-036-e | R-GATEWAY-036 | active busy session 收到 `/queue 待会儿处理` | 入 `_pendingEvents`；不调 `steerActiveAgent`；不调 `cancelActiveAgent` | unit | `GatewayCommandRoutingTest#TC-GATEWAY-036-e queue merges into pending events` 🟢 |
+| TC-GATEWAY-036-f | R-GATEWAY-036 | active busy session 收到 `/stop`，回调 `cancelActiveAgent` 返 true | 调 `cancelActiveAgent(sessionKey)` 一次；不入 `_pendingEvents` | unit | `GatewayCommandRoutingTest#TC-GATEWAY-036-f stop dispatches to callback` 🟢 |
+| TC-GATEWAY-036-g | R-GATEWAY-036 | active busy session 收到 `/agents`（已识别但本 R 未实现） | 不调 steer/cancel；不入 `_pendingEvents`；不打断（礼貌拒绝） | unit | `GatewayCommandRoutingTest#TC-GATEWAY-036-g unhandled bypass commands are rejected` 🟢 |
+
+跑已落地 TC：
+
+```bash
+./gradlew :hermes-android:testDebugUnitTest --tests "com.xiaomo.hermes.hermes.gateway.GatewayCommandRoutingTest"
+```
+
+---
+
 ## 域 AGENT — Telegram inbound voice/audio + STT (R-GW-008 + R-AGENT-032)
 
 R-GW-008 + R-AGENT-032 是一对孪生需求，目的是把 Telegram 入站的 voice / audio 消息**真正下载到本地**并通过 OpenAI Whisper STT **自动转写为文本**，让 agent 不再只看到 `[Voice: <fileId>]` 占位字符串。本轮**只动 voice / audio 两个分支**——photo / document / video / sticker 维持现状（继续塞 fileId），后续在新 R 中处理（用户决策："本轮只动 audio/voice STT，图片下次 R"）。

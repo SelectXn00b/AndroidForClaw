@@ -1593,3 +1593,96 @@ Python 上游有 6 个消费点（parallel 路径 2 个 + sequential 路径 2 �
 - **B. 单测**：新增 `GatewayBusyInputModeTest`（hermes-android 模块），覆盖 TC-GATEWAY-035-a..d
 - **C. §2 四件套**：维持零；`scan_functional_stubs` 不增
 - **D. 不破坏既有 drain 行为**：`queueDuringDrainEnabled()` 默认依然返 false（默认 mode = interrupt）；既有调用方无需改
+
+### R-GATEWAY-036: gateway 命令路由 + Commands.kt + steerActiveAgent 回调
+
+**Python 上游**：`hermes_cli/commands.py:267-284`（`ACTIVE_SESSION_BYPASS_COMMANDS`）+ `gateway/run.py:3225-3395`（`_handle_message` 大量命令分发）。
+
+**目标 (本 R 范围)**：让 gateway 在 active session busy 期间识别 slash 命令并按命令名分流。**最小可用范围**——只接入与"插话功能"直接相关的 3 个命令，其它已识别命令礼貌拒绝；非命令文本沿用现状（fall-through 到 R-GATEWAY-035 的 busy 路径）：
+
+| 命令 | 动作 | Python 对齐 |
+|---|---|---|
+| `/steer <text>` | 调 `steerActiveAgent(sessionKey, text)` 回调 → R-AGENT-036 的 `loop.steer()` | `gateway/run.py:3290-3334` |
+| `/queue <text>` | 仅入 `_pendingEvents`，不打断 | `gateway/run.py:3261-3282` |
+| `/stop` | 调 `cancelActiveAgent(sessionKey)` 回调 | `gateway/run.py:3225-3245` |
+| 其它已识别命令（`/agents` `/approve` `/deny` `/help` `/new` `/profile` `/restart` `/status` `/update` `/background` `/commands`） | 礼貌拒绝："Agent is running — `/${cmd}` can't run mid-turn"；不打断、不入队 | `gateway/run.py:3340-3395` |
+
+**未来扩展**：`/yolo` `/verbose` 内联开关、`/approve` `/deny` 工具批准、其它命令的实际语义留给后续 R（不在本 R 范围）。
+
+**改动**:
+
+1. **新建 `hermes-android/.../gateway/Commands.kt`**：
+   ```kotlin
+   /** R-GATEWAY-036: command names that bypass busy gate. Mirrors Python
+    * `hermes_cli/commands.py:267-284`. */
+   internal val ACTIVE_SESSION_BYPASS_COMMANDS = setOf(
+       "agents", "approve", "background", "commands", "deny", "help", "new",
+       "profile", "queue", "restart", "status", "steer", "stop", "update",
+   )
+
+   /** R-GATEWAY-036: parse a leading slash command from `text`. Returns
+    * (cmdName, argText) or null if `text` does not start with a recognized
+    * `/<cmd>` token. Mirrors Python `hermes_cli/commands.py:resolve_command`. */
+   internal fun resolveCommand(text: String): Pair<String, String>? { ... }
+   ```
+   语义：
+   - 必须以 `/` 开头（位置 0；前导空白允许）
+   - 第一个 token（`\s` 切分）去掉前导 `/`，lowercase，trim
+   - 必须落在 `ACTIVE_SESSION_BYPASS_COMMANDS` 集合
+   - 余下文本作为 argText（trim）
+   - 不在集合 → 返 null（让 fall-through 走非命令路径）
+
+2. **`Run.kt::GatewayRunner` 加 2 个回调字段（构造参数）**：
+   ```kotlin
+   /** R-GATEWAY-036: forward `/steer <text>` to the active agent loop.
+    * Returns true if accepted, false if no active agent or steer rejected. */
+   private val steerActiveAgent: (suspend (sessionKey: String, text: String) -> Boolean)? = null,
+   /** R-GATEWAY-036: forward `/stop` to the active agent loop.
+    * Returns true if cancellation was issued. */
+   private val cancelActiveAgent: (suspend (sessionKey: String) -> Boolean)? = null,
+   ```
+
+3. **`Run.kt::_handleMessage` busy 分支顶部插入命令路由**（在现有 busy guard 之前）：
+   ```kotlin
+   val cmd = resolveCommand(event.text)
+   if (cmd != null) {
+       when (cmd.first) {
+           "steer" -> {
+               val argText = cmd.second
+               if (argText.isBlank()) { _sendAck(sessionKey, "/steer needs a message"); return }
+               val ok = steerActiveAgent?.invoke(sessionKey, argText) ?: false
+               _sendAck(sessionKey, if (ok) "Steered: $argText" else "No active agent to steer")
+               return
+           }
+           "queue" -> {
+               mergePendingMessageEvent(_pendingEvents, sessionKey, event.copy(text = cmd.second))
+               _sendAck(sessionKey, "⏳ Queued for the next turn")
+               return
+           }
+           "stop" -> {
+               val ok = cancelActiveAgent?.invoke(sessionKey) ?: false
+               _sendAck(sessionKey, if (ok) "🛑 Stopping current task" else "No active agent to stop")
+               return
+           }
+           else -> {
+               // Other recognized commands: reject mid-turn (don't interrupt, don't queue).
+               _sendAck(sessionKey, "Agent is running — `/${cmd.first}` can't run mid-turn")
+               return
+           }
+       }
+   }
+   // fall through to existing busy interrupt/queue path (R-GATEWAY-035)
+   ```
+
+4. **`_sendAck(sessionKey, text)`** 复用现有 `_sendBusyAck` 的发送通道（gateway IM ack）。如已有则复用；否则抽出来。
+
+**约束**:
+- **本 R 不接入 caller 端 wiring** —— `steerActiveAgent` / `cancelActiveAgent` 默认 null。caller 端（`HermesGatewayController` 等）的弱引用注册留到 R-UI-062。
+- **本 R 不动 Python `_handle_message` 的命令大块翻译** —— 太大。本 R 是"骨架 + 3 命令"，剩余命令的实际语义留给后续 R。
+- **不破坏现状**：当 callback 为 null（如本 R 单测构造），`/steer` `/stop` 返"No active agent" ack；不抛错；不影响其它消息路径。
+
+**验收**:
+- **A. 编译自检** 全绿
+- **B. 单测**：`GatewayCommandRoutingTest`（覆盖 TC-GATEWAY-036-a..f）全绿
+- **C. §2 四件套** 维持零；`scan_functional_stubs` 不增
+- **D. 既有 busy 行为不变**：非 `/<cmd>` 文本 fall through，与 R-GATEWAY-035 之前完全一致

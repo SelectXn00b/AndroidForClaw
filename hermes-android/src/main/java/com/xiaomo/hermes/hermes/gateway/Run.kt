@@ -119,6 +119,31 @@ class GatewayRunner(
     fun busyInputMode(): String = _busyInputMode
 
     /**
+     * R-GATEWAY-036: forward `/steer <text>` to the active agent loop for the
+     * given session. Returns true if accepted (an active loop was found and
+     * the steer was queued). Returns false if there is no active agent or the
+     * steer was rejected (e.g. blank text after trim — caller already filters,
+     * but defensive false is allowed).
+     *
+     * Wired post-construction by the app layer (R-UI-062). When null (default),
+     * `/steer` falls back to a "no active agent" ack — the gateway never throws.
+     *
+     * Mirrors Python `gateway/run.py:3290-3334` (steer dispatch path).
+     */
+    @Volatile var steerActiveAgent: (suspend (sessionKey: String, text: String) -> Boolean)? = null
+
+    /**
+     * R-GATEWAY-036: forward `/stop` to the active agent loop for the given
+     * session. Returns true if cancellation was issued.
+     *
+     * Wired post-construction by the app layer. When null (default), `/stop`
+     * falls back to a "no active agent" ack.
+     *
+     * Mirrors Python `gateway/run.py:3225-3245` (stop dispatch path).
+     */
+    @Volatile var cancelActiveAgent: (suspend (sessionKey: String) -> Boolean)? = null
+
+    /**
      * Bridge into the Android [HermesAgentLoop]. Set by the app-side controller
      * after construction. Text in, full assistant reply out. When null (or it
      * throws), the gateway falls back to the placeholder string.
@@ -293,6 +318,16 @@ class GatewayRunner(
         // Per-session guard: if this session already has an agent running,
         // store the new message as a pending event and signal interrupt.
         if (!_processingSessions.add(event.sessionKey)) {
+            // R-GATEWAY-036: command routing — slash commands (e.g. `/steer`,
+            // `/queue`, `/stop`) get dispatched via meta-control paths instead
+            // of falling into the regular interrupt/queue. Mirrors Python
+            // `gateway/run.py:3225-3395` (subset: steer/queue/stop concrete +
+            // other ACTIVE_SESSION_BYPASS_COMMANDS politely rejected).
+            val cmd = resolveCommand(event.text)
+            if (cmd != null) {
+                _handleBypassCommand(event, cmd.first, cmd.second)
+                return
+            }
             Log.i(_TAG, "Session ${event.sessionKey} busy — storing pending event and signaling interrupt")
             @Suppress("UNCHECKED_CAST")
             mergePendingMessageEvent(
@@ -1296,6 +1331,76 @@ Removed: "X"""
                 replyTo = event.message_id)
         } catch (e: Exception) {
             Log.d(_TAG, "Failed to send busy-ack: ${e.message}")
+        }
+    }
+
+    /**
+     * R-GATEWAY-036: send a one-line ack reply for a bypass-command path.
+     * Reply-to the originating message so the user sees which command was
+     * acknowledged. Failures are swallowed (logged at debug) — the command
+     * routing must not throw out of `_handleMessage`.
+     */
+    private suspend fun _sendCommandAck(event: MessageEvent, text: String) {
+        val adapter = _adapters[event.source.platform] ?: return
+        try {
+            adapter.send(event.source.chatId, text, replyTo = event.message_id)
+        } catch (e: Exception) {
+            Log.d(_TAG, "Failed to send command-ack: ${e.message}")
+        }
+    }
+
+    /**
+     * R-GATEWAY-036: dispatch a recognized slash command for an active-session
+     * busy event. Only `steer` / `queue` / `stop` have concrete handlers in
+     * this R; other ACTIVE_SESSION_BYPASS_COMMANDS commands are politely
+     * rejected (no interrupt, no queue) so the user gets a clear "can't run
+     * mid-turn" reply. Mirrors Python `gateway/run.py:3225-3395` (subset).
+     *
+     * Side-effect contract:
+     * - `steer`: invoke [steerActiveAgent] callback if set; never touches
+     *   `_pendingEvents` or `_interruptFlags`. Empty arg → reject ack.
+     * - `queue`: append to `_pendingEvents` (replacing arg text); never
+     *   interrupts, never invokes any callback. Empty arg uses original event.
+     * - `stop`: invoke [cancelActiveAgent] callback if set; no interrupt-flag
+     *   manipulation here (callback owns cancellation semantics).
+     * - other recognized commands: reject ack only.
+     */
+    internal suspend fun _handleBypassCommand(event: MessageEvent, cmd: String, argText: String) {
+        when (cmd) {
+            "steer" -> {
+                if (argText.isBlank()) {
+                    _sendCommandAck(event, "⚠️ /steer needs a message")
+                    return
+                }
+                val cb = steerActiveAgent
+                val ok = if (cb != null) cb.invoke(event.sessionKey, argText) else false
+                _sendCommandAck(
+                    event,
+                    if (ok) "🛟 Steered: $argText"
+                    else "ℹ️ No active agent to steer right now",
+                )
+            }
+            "queue" -> {
+                val queuedEvent = if (argText.isNotBlank()) event.copy(text = argText) else event
+                @Suppress("UNCHECKED_CAST")
+                mergePendingMessageEvent(
+                    _pendingEvents as MutableMap<String, MessageEvent>,
+                    event.sessionKey, queuedEvent)
+                _sendCommandAck(event, "⏳ Queued for the next turn")
+            }
+            "stop" -> {
+                val cb = cancelActiveAgent
+                val ok = if (cb != null) cb.invoke(event.sessionKey) else false
+                _sendCommandAck(
+                    event,
+                    if (ok) "🛑 Stopping current task"
+                    else "ℹ️ No active agent to stop right now",
+                )
+            }
+            else -> {
+                // Recognized but not wired in this R — polite reject.
+                _sendCommandAck(event, "ℹ️ Agent is running — `/$cmd` can't run mid-turn")
+            }
         }
     }
 
