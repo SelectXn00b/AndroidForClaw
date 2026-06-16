@@ -1771,3 +1771,54 @@ Python 上游有 6 个消费点（parallel 路径 2 个 + sequential 路径 2 �
 - **B. 单测**：`GatewayDrainBehaviorTest`（TC-GATEWAY-037-a..d）+ `GatewayBusyInputModeTest`（修订后的 TC-035 全绿）+ `GatewayCommandRoutingTest`（不退化）
 - **C. §2 四件套** 维持零；`scan_functional_stubs` 不增
 - **D. 行为保持**：`_draining=false` 时 `_handleMessage` 一行不变（R-036 命令路由 + 既有 interrupt/queue）
+
+### R-UI-061: app 内对话默认 cancel-then-resend（替换静默丢弃）
+
+**Python 上游**: 无 —— 仅 Android UI 体验。Gateway 侧的等价行为由 R-GATEWAY-035 `_busyInputMode="interrupt"` 默认覆盖；本 R 把 app 内对话路径对齐到同样的 mid-turn 接力体验。
+
+**背景**: `MessageProcessingDelegate.sendUserMessage:452-459` 当 `chatRuntime.isLoading=true`（agent 还在跑）时**静默丢弃**新消息——用户体感 = "我发了消息但 app 没反应"。本 R 改成 cancel-then-resend：先取消当前回合，等取消生效，再走正常的发送流程。
+
+**改动 `MessageProcessingDelegate.kt`**:
+
+1. **替换 busy 早返**（`:453-459`）。原代码：
+   ```kotlin
+   if (chatRuntime.isLoading.value) {
+       AppLogger.w(TAG, "sendUserMessage忽略: chat正在处理中, ...")
+       return
+   }
+   ```
+   改为：
+   ```kotlin
+   if (chatRuntime.isLoading.value) {
+       AppLogger.i(TAG, "sendUserMessage: chat busy → cancel-then-resend, chatId=$chatId")
+       // R-UI-061: cancel current turn, wait for it to settle, then re-enter
+       // sendUserMessage with the same args. coroutineScope is the delegate's
+       // own scope, so cancellation is bound to delegate lifetime.
+       val resendArgs = capturedSendArgs(/* all current params */)
+       coroutineScope.launch {
+           kotlinx.coroutines.withTimeoutOrNull(10_000) {
+               cancelMessageInternal(chatId, keepPartialResponse = true)
+           }
+           // After cancel, isLoading must be false; recurse via the public entry.
+           sendUserMessage(/* unpack resendArgs */)
+       }
+       return
+   }
+   ```
+
+2. **参数转发**：`sendUserMessage` 有 ~16 个参数。最简策略是直接在 launch 块内显式调用 `sendUserMessage(...)` 把所有参数重传一遍——不引入新的数据类。
+
+3. **超时保护**：`withTimeoutOrNull(10_000)` 防止极端情况下 cancel 卡住。超时则跳过 resend（log warn），不抛异常，不影响后续消息。
+
+**约束**:
+- **不动**任何对外 API 签名（`sendUserMessage(...)` 参数列表保持，调用方不需要改）。
+- **不动** `pendingQueueMessages`（`AIChatScreen.kt`）UI 队列——那是用户主动入队的体验，与本 R "直接发新消息但 agent 在跑"是两个独立 UX，必须并存。
+- **不动** gateway 路径——本 R 仅影响 app 内 chat（`MessageProcessingDelegate` 这条路径）。
+- 早返条件保持：`isBlank && empty attachments && !autoContinuation && !isGroupOrchestrationTurn` 还是先返回，cancel-then-resend 只在 `isLoading=true` 且消息非空的场景触发。
+
+**验收**:
+- **A. 编译自检** 全绿
+- **B. 单测**：`MessageProcessingDelegateInsertTest`（TC-UI-061-a..c）全绿
+- **C. §2 四件套** 维持零（不动 `hermes-android/`）
+- **D. 行为保持**：`isLoading=false` 时与之前完全一致
+

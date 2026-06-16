@@ -1541,6 +1541,23 @@ R-GATEWAY-037 把 R-GATEWAY-035 漏掉的 `_restart_requested` 守卫补齐（Py
 ./gradlew :hermes-android:testDebugUnitTest --tests "com.xiaomo.hermes.hermes.gateway.GatewayDrainBehaviorTest"
 ```
 
+## 域 UI — Cancel-then-resend (R-UI-061)
+
+R-UI-061 把 `MessageProcessingDelegate.sendUserMessage:452-459` 的"isLoading 时静默丢弃"改成"先 cancel 再 send"。同时保留：空消息/无附件早返、`isLoading=false` 时正常路径。无 Python 上游（仅 Android UI 体验）。
+
+| TC-ID | 关联 R | 输入 / 操作 | 期望 | 类型 | 实现 |
+|---|---|---|---|---|---|
+| TC-UI-061-a | R-UI-061 | `isLoading=false` 时调 `sendUserMessage(text="hi")` | 走正常路径：`_userMessage` 清空、`isLoading=true`、`sendJob` 启动；不调 cancelMessageInternal | unit | `MessageProcessingDelegateInsertTest#TC-UI-061-a idle path unchanged` 🔴 |
+| TC-UI-061-b | R-UI-061 | `isLoading=true` 时调 `sendUserMessage(text="new")` | 1) 调 `cancelMessageInternal` 一次；2) 等取消生效（`isLoading=false`）；3) 重新进入 sendUserMessage 处理 "new"（最终 `isLoading=true`，sendJob 启动） | unit | `MessageProcessingDelegateInsertTest#TC-UI-061-b busy triggers cancel then resend` 🔴 |
+| TC-UI-061-c | R-UI-061 | 模拟 `cancelMessageInternal` 卡 15s（>10s 超时） | 不挂起调用方；超时分支 log warn；不抛；不重发（避免在 cancel 没完成的情况下并发跑两个 send） | unit | `MessageProcessingDelegateInsertTest#TC-UI-061-c cancel timeout drops resend` 🔴 |
+| TC-UI-061-d | R-UI-061 | `isLoading=true` + 空消息 + 空附件 + 非 autoContinuation/group | 走原本的早返（空消息丢弃），不触发 cancel-then-resend | unit | `MessageProcessingDelegateInsertTest#TC-UI-061-d empty message still early returns` 🔴 |
+
+跑已落地 TC：
+
+```bash
+./gradlew :app:testDebugUnitTest --tests "com.ai.assistance.operit.services.core.MessageProcessingDelegateInsertTest"
+```
+
 ---
 
 ## 域 AGENT — Telegram inbound voice/audio + STT (R-GW-008 + R-AGENT-032)

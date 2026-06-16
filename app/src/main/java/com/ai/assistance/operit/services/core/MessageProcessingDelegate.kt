@@ -451,10 +451,58 @@ class MessageProcessingDelegate(
         }
         val chatRuntime = runtimeFor(chatId)
         if (chatRuntime.isLoading.value) {
-            AppLogger.w(
+            // R-UI-061: cancel current turn, wait for it to settle, then re-enter
+            // sendUserMessage with the same args. Replaces the previous "silent
+            // drop" behavior where messages typed during agent processing were
+            // discarded. cancelMessageInternal joins all relevant jobs so by
+            // the time it returns isLoading==false. withTimeoutOrNull guards
+            // against pathological cases where a job refuses to cancel; on
+            // timeout we drop the resend (logged) rather than risk concurrent
+            // sends. coroutineScope is the delegate's own scope so cancellation
+            // is bound to delegate lifetime.
+            AppLogger.i(
                 TAG,
-                "sendUserMessage忽略: chat正在处理中, chatId=$chatId, roleCardId=$roleCardId, override=${!messageTextOverride.isNullOrBlank()}, suppressUserMessageInHistory=$suppressUserMessageInHistory"
+                "sendUserMessage: chat busy → cancel-then-resend (R-UI-061), chatId=$chatId, roleCardId=$roleCardId, override=${!messageTextOverride.isNullOrBlank()}, suppressUserMessageInHistory=$suppressUserMessageInHistory"
             )
+            // Capture all parameters for the resend by name (Kotlin closure).
+            coroutineScope.launch {
+                val cancelled = kotlinx.coroutines.withTimeoutOrNull(10_000) {
+                    cancelMessageInternal(chatId, keepPartialResponse = true)
+                    true
+                }
+                if (cancelled == null) {
+                    AppLogger.w(
+                        TAG,
+                        "sendUserMessage R-UI-061: cancelMessageInternal timed out after 10s; dropping resend, chatId=$chatId"
+                    )
+                    return@launch
+                }
+                sendUserMessage(
+                    attachments = attachments,
+                    chatId = chatId,
+                    messageTextOverride = messageTextOverride,
+                    proxySenderNameOverride = proxySenderNameOverride,
+                    workspacePath = workspacePath,
+                    workspaceEnv = workspaceEnv,
+                    promptFunctionType = promptFunctionType,
+                    roleCardId = roleCardId,
+                    enableThinking = enableThinking,
+                    thinkingGuidance = thinkingGuidance,
+                    enableMemoryQuery = enableMemoryQuery,
+                    enableWorkspaceAttachment = enableWorkspaceAttachment,
+                    maxTokens = maxTokens,
+                    tokenUsageThreshold = tokenUsageThreshold,
+                    replyToMessage = replyToMessage,
+                    isAutoContinuation = isAutoContinuation,
+                    enableSummary = enableSummary,
+                    chatModelConfigIdOverride = chatModelConfigIdOverride,
+                    chatModelIndexOverride = chatModelIndexOverride,
+                    suppressUserMessageInHistory = suppressUserMessageInHistory,
+                    isGroupOrchestrationTurn = isGroupOrchestrationTurn,
+                    groupParticipantNamesText = groupParticipantNamesText,
+                    isSubTask = isSubTask,
+                )
+            }
             return
         }
 
