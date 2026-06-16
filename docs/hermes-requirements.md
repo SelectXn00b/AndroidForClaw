@@ -1772,6 +1772,27 @@ Python 上游有 6 个消费点（parallel 路径 2 个 + sequential 路径 2 �
 - **C. §2 四件套** 维持零；`scan_functional_stubs` 不增
 - **D. 行为保持**：`_draining=false` 时 `_handleMessage` 一行不变（R-036 命令路由 + 既有 interrupt/queue）
 
+### R-GATEWAY-038: busy default-path abort+replay 对齐守护（gateway 层"不带前缀也能插话"）
+
+**Python 上游**: `gateway/run.py:1547-1559`（`_handle_active_session_busy_message` default 分支：merge_pending_message_event + running_agent.interrupt + busy ack）+ `gateway/run.py:10437-10470`（pending event 在 interrupt sentinel 之后被消费为下一 turn user input）
+
+**背景**: 本 R **不引入任何新代码**——它只把 Kotlin 一直已经实现的"busy default path"（`Run.kt:328-356` 的 default busy 分支 + `Run.kt:596-688` 的 pending-event 循环）正式立项纳入对齐守护。这条路径过去被 R-GW-001 / R-GW-003 / R-GW-011 / R-GATEWAY-036 / R-GATEWAY-037 各切了一刀（API-level interrupt / pending 失败 callback / typing wiring / 命令路由 / drain ack），但**没有任何 R 直接守住**"agent busy 时收到非命令文本 → 当前 turn 通过 INTERRUPTED_SENTINEL abort → 新消息作为下一 turn user input replay 出去"这条端到端语义。
+
+**为什么现在立**: 用户对照飞书时引出"为什么微信要带 `/steer`？"——核对代码后实际答案是"**不需要带**，这条路径早已支持"。但既然没有任何 TC / R 守住这一行为，下次重构（任何动 `_handleMessage` busy 分支或 pending-event 循环的改动）有可能无意打破而不被对齐工具发现。本 R 把它列为显式守护点。
+
+**改动 `Run.kt`**: **无**（行为已实现，本 R 仅声明 + 加测试）。
+
+**约束**:
+- **行为冻结**：`_draining=false` 时 busy session 收到非命令文本 → 必须按 `Run.kt:349-354` 入 `_pendingEvents` + 设 `_interruptFlags[key].set(true)` + 发 busy ack；agentRunner 返回 `INTERRUPTED_SENTINEL` 时必须按 `Run.kt:599-688` 用 pending 的 `text` 重新调一次 agentRunner 并 deliver 回 adapter。
+- **R-036 命令路由优先级不变**：drain → 命令路由 → default busy 路径，三层先后顺序（已由 R-037 TC-d 守住）。
+- **MAX_INTERRUPT_DEPTH=3 保持**：连续 4+ 条 busy 消息时第 4 条之后被 break，由 `Run.kt:601-604` 兜底。
+
+**验收**:
+- **A. 编译自检** 全绿
+- **B. 单测**：`GatewayBusyPendingReplayTest`（TC-GATEWAY-038-a..c）端到端覆盖 abort+replay 链路
+- **C. §2 四件套** 维持零；`scan_functional_stubs` 不增
+- **D. 行为保持**：`_handleMessage` / pending-event 循环源码一行不动（本 R 是测试守护，不是重构）
+
 ### R-UI-061: app 内对话默认 cancel-then-resend（替换静默丢弃）
 
 **Python 上游**: 无 —— 仅 Android UI 体验。Gateway 侧的等价行为由 R-GATEWAY-035 `_busyInputMode="interrupt"` 默认覆盖；本 R 把 app 内对话路径对齐到同样的 mid-turn 接力体验。

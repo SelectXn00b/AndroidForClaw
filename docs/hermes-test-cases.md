@@ -1554,6 +1554,22 @@ R-GATEWAY-037 把 R-GATEWAY-035 漏掉的 `_restart_requested` 守卫补齐（Py
 ./gradlew :hermes-android:testDebugUnitTest --tests "com.xiaomo.hermes.hermes.gateway.GatewayDrainBehaviorTest"
 ```
 
+## 域 GATEWAY — Busy Default Path Replay (R-GATEWAY-038)
+
+R-GATEWAY-038 守住"agent busy 时收到非命令文本 → 当前 turn 通过 `INTERRUPTED_SENTINEL` abort → 新消息作为下一 turn user input replay 出去"这条端到端语义。Kotlin 早已实现（`Run.kt:328-356` default busy 分支 + `Run.kt:596-688` pending-event 循环），过去被 R-GW-001 / R-GW-011 / R-036 / R-037 各切一刀，本 R 把它当显式对齐守护点立项，让任何后续重构动这两段时第一时间被测试守护拉住。**无生产代码改动**，纯测试守护。
+
+| TC-ID | 关联 R | 输入 | 期望输出 | 测试类型 | 状态 |
+|---|---|---|---|---|---|
+| TC-GATEWAY-038-a | R-GATEWAY-038 | session 已 busy（`_processingSessions` 已含 sessionKey）+ 收到非命令文本"二号消息"；agentRunner 第一次返回 `INTERRUPTED_SENTINEL`，第二次返回正常 reply | agentRunner 被调 2 次；第二次 `text` 参数 = "二号消息"；adapter 收到 1 条最终 reply（content=正常 reply、replyTo=二号消息的 message_id）；`_pendingEvents` 最终为空 | unit | `GatewayBusyPendingReplayTest#TC-GATEWAY-038-a busy non-command text aborts current turn and replays as next turn user input` 🟢 |
+| TC-GATEWAY-038-b | R-GATEWAY-038 | busy 期间 `mergePendingMessageEvent` 入队 + `_interruptFlags[key].set(true)` 路径完整存在（源码扫描守住） | `Run.kt` busy 分支必须包含 `mergePendingMessageEvent(_pendingEvents` + `_interruptFlags[event.sessionKey]?.set(true)` + `_sendBusyAck(event)` 三行，且全部位于 drain 检查与命令路由之后、return 之前 | unit (源码扫描) | `GatewayBusyPendingReplayTest#TC-GATEWAY-038-b busy default branch wires pending+interrupt+ack` 🟢 |
+| TC-GATEWAY-038-c | R-GATEWAY-038 | pending-event 循环：连续 5 条 busy 消息（每次 agentRunner 返 `INTERRUPTED_SENTINEL` 并塞下一条 pending） | agentRunner 总调用次数被封顶 = 1 (initial) + `MAX_INTERRUPT_DEPTH=3` = 4；finally 块清空 `_pendingEvents`（深度溢出消息直接丢，不残留供重启复活，对齐 Python `gateway/run.py:601-604`） | unit | `GatewayBusyPendingReplayTest#TC-GATEWAY-038-c pending replay caps at MAX_INTERRUPT_DEPTH` 🟢 |
+
+跑已落地 TC：
+
+```bash
+./gradlew :hermes-android:testDebugUnitTest --tests "com.xiaomo.hermes.hermes.gateway.GatewayBusyPendingReplayTest"
+```
+
 ## 域 UI — Cancel-then-resend (R-UI-061)
 
 R-UI-061 把 `MessageProcessingDelegate.sendUserMessage:452-459` 的"isLoading 时静默丢弃"改成"先 cancel 再 send"。同时保留：空消息/无附件早返、`isLoading=false` 时正常路径。无 Python 上游（仅 Android UI 体验）。
