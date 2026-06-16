@@ -1498,3 +1498,40 @@ CONFIG 原先的三条 R-CONFIG-001..003（Preferences / ConfigBuilder / Control
 - **B. 单测**：新增 `HermesAgentLoopSteerTest`（hermes-android 模块），覆盖 TC-AGENT-036-a..i 全套
 - **C. §2 四件套**：维持零；`scan_functional_stubs` 不增（本 R 是新功能，不改既有 stub）
 - **D. 不接入消费点**：本 R 故意不调 `_applyPendingSteerToToolResults` —— 验收通过 unit-call 直接触发，不走 turn-loop。turn-loop 接入在 R-AGENT-037
+
+### R-AGENT-037: HermesAgentLoop 接入 4 个 steer 消费点 + leftover handoff
+
+**来源**:
+- Python `run_agent.py:8029-8032`（per-tool drain — parallel）
+- Python `run_agent.py:8040-8045`（post-batch drain — parallel）
+- Python `run_agent.py:8397-8401`（per-tool drain — sequential，Kotlin 无 sequential fallback，对齐合并到 §1）
+- Python `run_agent.py:8432-8436`（post-batch drain — sequential，同上合并）
+- Python `run_agent.py:9032-9080`（pre-API-call drain）
+- Python `run_agent.py:11828-11833`（leftover handoff via `result["pending_steer"]`）
+
+**背景**:
+R-AGENT-036 给 `HermesAgentLoop` 加了 `steer()` 内核（field + apply + drain + clear），但故意没接到 turn-loop —— `_applyPendingSteerToToolResults` 必须由 loop 主体在每个 tool batch 边界 / 每次 API call 之前调用，否则 steer 进来就石沉大海。
+
+Python 上游有 6 个消费点（parallel 路径 2 个 + sequential 路径 2 个 + pre-API 1 个 + leftover handoff 1 个）。当前 Kotlin `AgentLoop.kt` 只实现 parallel-or-single 一条路径（line 611-667，valid_preps.size <= 1 走单 tool 同步、>= 2 走 coroutineScope async + awaitAll），**没有独立的 sequential fallback**，所以 6 个 Python 点在 Kotlin 里映射成 4 个：per-tool drain、post-batch drain、pre-API drain、leftover handoff。
+
+**架构合规**:
+- Python `run_agent.py` 是 source of truth，4 个消费点的语义/位置对齐其 6 个调用点
+- 不引入新 abstraction、不改 turn-loop 边界、不动 ChatCompletionServer / ToolDispatcher 接口
+- `AgentResult` 加 `val pendingSteer: String? = null` 字段对齐 Python `result["pending_steer"]`（仅在 leftover-handoff 路径非空，否则 null）
+
+**行为**:
+1. **B.1 Per-tool drain**：`for (prep in preps)` 循环内每个 `messages.add(role:"tool", ...)`（line 714-717）后立即调 `_applyPendingSteerToToolResults(messages, 1)`。语义：steer 期间正好夹在一个 tool 跑完和下一个 tool 派发之间，本 tool 结果就吃到 marker，不必等整批。对齐 Python `:8029-8032` + `:8397-8401`（合并）。
+2. **B.2 Post-batch drain**：`for (prep in preps)` 循环结束后（line 718 之后，turnElapsed 日志之前）调 `_applyPendingSteerToToolResults(messages, preps.size)`。语义：兜底 —— 如果 steer 进来时 batch 已经全部 append 完，post-batch 这次 drain 把它落到最后一个 tool 上。对齐 Python `:8040-8045` + `:8432-8436`（合并）。
+3. **B.5 Pre-API-call drain**：`server.chatCompletion(...)` 调用之前（line 475 之前）从 `_drainPendingSteer()` 取一次：
+   - 反向扫 `messages`，找最后一个 `role:"tool"`，找到则 append marker `"\n\nUser guidance: $text"`（同 `_applyPendingSteerToToolResults` 一致的多模态分支）
+   - 找不到（如 turn 1 还没出过 tool）→ 文本回填 `_pendingSteer`（同 `_applyPendingSteerToToolResults` 的回填分支，保证下一轮 tool batch 后能 drain 到）
+   对齐 Python `:9044-9080`。语义：API 长 call 期间用户 steer 进来，下次 API call 之前先 drain 一次让模型这一轮就看到，不必等下个 tool batch（如果模型直接 final response 就再没 tool batch 可 drain 了）。
+4. **B.6 Leftover handoff**：每个 `return AgentResult(...)` 退出之前（包括 4 个错误退出 + final 自然退出 + maxTurns 退出共 6 处）调 `_drainPendingSteer()`，结果赋给 `AgentResult.pendingSteer` 字段。对齐 Python `:11828-11833`。语义：所有 turn 跑完后还有未投递的 steer（罕见，如 final response 之后才进来）由 caller 决定怎么处理（可作为下一轮 user message 注入）。
+5. **`AgentResult` 加字段**：`val pendingSteer: String? = null` —— 仅 R-AGENT-037 写、caller 读，本 R 不要求 caller 立刻消费（caller 改造在后续 R-GATEWAY-036 做）。
+
+**验收**:
+- **A. 编译自检**：`./gradlew :hermes-android:compileDebugKotlin :hermes-android:compileDebugUnitTestKotlin` 全绿
+- **B. 单测**：新增 `HermesAgentLoopSteerLoopTest`（hermes-android 模块），用 fake `ChatCompletionServer` + fake `ToolDispatcher` 跑完 1-2 个 turn，覆盖 TC-AGENT-037-a..e
+- **C. §2 四件套**：维持零；`scan_functional_stubs` 不增
+- **D. 不破坏 R-AGENT-036**：`HermesAgentLoopSteerTest` 全套保持绿
+- **E. 不破坏既有 turn-loop**：`_pendingSteer == null` 时所有消费点 short-circuit 零开销，既有行为完全不变

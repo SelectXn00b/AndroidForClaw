@@ -1464,6 +1464,18 @@ R-AGENT-036 给 `HermesAgentLoop` 加 `steer()` 接口和 `_pendingSteer` 字段
 | TC-AGENT-036-h | R-AGENT-036 | tool message content 是 `List<Map>`（多模态 block）：`[{type:"text", text:"r1"}]`；`loop.steer("hi")`；调 `_applyPendingSteerToToolResults(messages, 1)` | tool message content 仍为 List；新增了一个 `{type:"text", text:"User guidance: hi"}` block | unit | `HermesAgentLoopSteerTest#TC-AGENT-036-h apply preserves multimodal content blocks` 🟢 |
 | TC-AGENT-036-i | R-AGENT-036 | `loop.steer("x")` 后调 `loop.clearPendingSteer()` | `_drainPendingSteer()` 返 null（hard cancel 清掉 pending steer） | unit | `HermesAgentLoopSteerTest#TC-AGENT-036-i clearPendingSteer drops pending text` 🟢 |
 
+## 域 AGENT — Steer Loop Consumption Points (R-AGENT-037)
+
+R-AGENT-037 把 R-AGENT-036 的 `_applyPendingSteerToToolResults` / `_drainPendingSteer` 接到 turn-loop 的 4 个消费点：per-tool drain、post-batch drain、pre-API-call drain、leftover handoff（via `AgentResult.pendingSteer`）。对齐 Python `run_agent.py:8029, 8040, 8397, 8432, 9032, 11828`（6 点 → Kotlin 4 点合并）。
+
+| ID | 来源 | 输入 | 期望输出 | 类型 | 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-037-a | R-AGENT-037 | fake server 第 1 turn 返 1 个 tool_call；fake dispatcher 在执行 tool 前 `loop.steer("hi")`；第 2 turn 返 final response | per-tool drain 落地：messages 中第一个 `role:"tool"` 的 content 末尾含 `"\n\nUser guidance: hi"`；`AgentResult.pendingSteer` == null | unit | `HermesAgentLoopSteerLoopTest#TC-AGENT-037-a per-tool drain injects steer mid-batch` 🟢 |
+| TC-AGENT-037-b | R-AGENT-037 | 源码扫描：`AgentLoop.kt` 内 tool 派发循环必须同时含 per-tool drain (`_applyPendingSteerToToolResults(messages, 1)` 在 `for (prep in preps)` 循环体内) 和 post-batch drain (`_applyPendingSteerToToolResults(messages, preps.size)` 在循环外，且被 `preps.isNotEmpty()` 守卫) | 两个 drain 调用都存在；纯单测无法精确驱动"per-tool 全空 + post-batch 才捕获"的瞬时窗口（无 yield 点 + 并行派发 timing 不确定），post-batch drain 是冗余 safety net，对齐 Python 8040-8045 + 8432-8436 即可 | unit-scan | `HermesAgentLoopSteerLoopTest#TC-AGENT-037-b post-batch drain catches late steer` 🟢 |
+| TC-AGENT-037-c | R-AGENT-037 | fake server 第 1 turn 返 1 个 tool；fake dispatcher 在 tool 跑完之后但 server 第 2 次 chatCompletion 之前 `loop.steer("pre-api")`；第 2 turn 返 final | pre-API-call drain 落地：第 2 turn 进 chatCompletion 前 messages 中最后一个 `role:"tool"` 的 content 末尾含 `"\n\nUser guidance: pre-api"`；`pendingSteer` == null | unit | `HermesAgentLoopSteerLoopTest#TC-AGENT-037-c pre-API-call drain injects before next chatCompletion` 🟢 |
+| TC-AGENT-037-d | R-AGENT-037 | fake server 第 1 turn 直接返 final response（无 tool_calls）；run() 完成前 `loop.steer("orphan")` | 所有 turn 跑完时 messages 中无 `role:"tool"`，无地方 inject；`AgentResult.pendingSteer == "orphan"`（leftover handoff，对齐 Python `:11828-11833`） | unit | `HermesAgentLoopSteerLoopTest#TC-AGENT-037-d leftover steer surfaces in pendingSteer` 🟢 |
+| TC-AGENT-037-e | R-AGENT-037 | fake server 第 1 turn 返 1 个 tool；fake dispatcher 在 tool 跑完前 `loop.steer("doomed")` + 立刻 `loop.clearPendingSteer()`；第 2 turn 返 final | hard-cancel 清空：messages 任何 `role:"tool"` content 都不含 `"User guidance: doomed"`；`pendingSteer` == null（对齐 Python hard-interrupt 路径，clear 优先于所有 drain） | unit | `HermesAgentLoopSteerLoopTest#TC-AGENT-037-e clearPendingSteer beats all drain points` 🟢 |
+
 跑已落地 TC：
 
 状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿

@@ -38,7 +38,14 @@ data class AgentResult(
     /** Extracted reasoning content per turn. */
     val reasoningPerTurn: List<String?> = emptyList(),
     /** Tool errors encountered during the loop. */
-    val toolErrors: List<ToolError> = emptyList())
+    val toolErrors: List<ToolError> = emptyList(),
+    /**
+     * R-AGENT-037: Leftover `/steer` text that arrived after the final tool
+     * batch (no place left to inject it). Caller (e.g. gateway) may deliver
+     * this as the next user turn. Mirrors Python `result["pending_steer"]`
+     * (run_agent.py:11828-11833). Null when no leftover.
+     */
+    val pendingSteer: String? = null)
 
 /**
  * Interface for a server that can make chat completion calls.
@@ -320,6 +327,56 @@ class HermesAgentLoop(
         }
     }
 
+    /**
+     * R-AGENT-037: Pre-API-call drain.
+     *
+     * Aligns with Python `run_agent.py:9032-9080`. Drains pending steer
+     * BEFORE the next chatCompletion call so the model sees the steer text
+     * THIS iteration rather than waiting for a future tool batch (which may
+     * never come if the model returns a final response).
+     *
+     * Scans the WHOLE message list (not just tail) for the last `role:"tool"`
+     * message. If found, the marker is appended. If not (e.g. turn 1, no
+     * tools yet), the steer is re-stashed for a future drain — injecting it
+     * into a user message would break role alternation.
+     */
+    private fun _preApiCallSteerDrain(messages: MutableList<Map<String, Any?>>) {
+        val steerText = _drainPendingSteer() ?: return
+        var injectedIdx = -1
+        for (i in messages.size - 1 downTo 0) {
+            val msg = messages[i]
+            if (msg["role"] == "tool") {
+                val marker = "\n\nUser guidance: $steerText"
+                val existing = msg["content"]
+                val newContent: Any = when (existing) {
+                    is String -> existing + marker
+                    is List<*> -> {
+                        val blocks = existing.toMutableList()
+                        blocks.add(mapOf("type" to "text", "text" to marker.trimStart()))
+                        blocks.toList()
+                    }
+                    null -> marker
+                    else -> "$existing$marker"
+                }
+                val rebuilt = msg.toMutableMap().also { it["content"] = newContent }
+                messages[i] = rebuilt.toMap()
+                injectedIdx = i
+                break
+            }
+        }
+        if (injectedIdx < 0) {
+            // No tool message to inject into — re-stash so the next post-tool
+            // drain catches it.
+            synchronized(_pendingSteerLock) {
+                val existing = _pendingSteer
+                _pendingSteer = if (existing.isNullOrEmpty()) steerText else "$existing\n$steerText"
+            }
+        } else {
+            val preview = if (steerText.length > 120) steerText.take(120) + "..." else steerText
+            Log.i(_TAG, "Pre-API-call steer drain: injected at idx=$injectedIdx (${steerText.length} chars): $preview")
+        }
+    }
+
     private suspend fun emit(event: AgentEvent) {
         val sink = eventSink ?: return
         try {
@@ -465,16 +522,26 @@ class HermesAgentLoop(
                         turnsUsed = turn,
                         finishedNaturally = false,
                         reasoningPerTurn = reasoningPerTurn,
-                        toolErrors = toolErrors)
+                        toolErrors = toolErrors,
+                        pendingSteer = _drainPendingSteer())
                 }
             }
 
             // Build chat completion request
             val chatMessages = messages.toList() // snapshot for API
 
+            // R-AGENT-037: Pre-API-call /steer drain. If a steer arrived during
+            // tool execution / between turns, inject it into the last role:tool
+            // message NOW so the model sees it on this iteration. Mirrors
+            // Python run_agent.py:9032-9080.
+            _preApiCallSteerDrain(messages)
+
+            // Refresh snapshot after potential pre-API drain mutation.
+            val apiMessages = messages.toList()
+
             val response = try {
                 server.chatCompletion(
-                    messages = chatMessages,
+                    messages = apiMessages,
                     tools = if (toolSchemas.isNotEmpty()) toolSchemas else null,
                     temperature = temperature,
                     maxTokens = maxTokens,
@@ -487,7 +554,8 @@ class HermesAgentLoop(
                     turnsUsed = turn + 1,
                     finishedNaturally = false,
                     reasoningPerTurn = reasoningPerTurn,
-                    toolErrors = toolErrors)
+                    toolErrors = toolErrors,
+                    pendingSteer = _drainPendingSteer())
             }
 
             if (response == null || response.choices.isEmpty()) {
@@ -498,7 +566,8 @@ class HermesAgentLoop(
                     turnsUsed = turn + 1,
                     finishedNaturally = false,
                     reasoningPerTurn = reasoningPerTurn,
-                    toolErrors = toolErrors)
+                    toolErrors = toolErrors,
+                    pendingSteer = _drainPendingSteer())
             }
 
             val assistantMsg = response.choices[0].message
@@ -715,6 +784,21 @@ class HermesAgentLoop(
                         "role" to "tool",
                         "tool_call_id" to prep.tc.id,
                         "content" to persistedResult))
+
+                    // R-AGENT-037 B.1: Per-tool /steer drain. Drain pending
+                    // steer immediately after each tool result is appended so
+                    // the marker lands as soon as a tool finishes — not just
+                    // after the entire batch. Mirrors Python
+                    // run_agent.py:8029-8032 (parallel) + 8397-8401 (sequential).
+                    _applyPendingSteerToToolResults(messages, 1)
+                }
+
+                // R-AGENT-037 B.2: Post-batch /steer drain. Catches any steer
+                // that arrived after the last per-tool drain finished — last
+                // tool message gets the marker. Mirrors Python
+                // run_agent.py:8040-8045 (parallel) + 8432-8436 (sequential).
+                if (preps.isNotEmpty()) {
+                    _applyPendingSteerToToolResults(messages, preps.size)
                 }
 
                 val turnElapsed = (System.nanoTime() - turnStart) / 1_000_000_000.0
@@ -759,7 +843,8 @@ class HermesAgentLoop(
                         turnsUsed = turn + 1,
                         finishedNaturally = true,
                         reasoningPerTurn = reasoningPerTurn,
-                        toolErrors = toolErrors)
+                        toolErrors = toolErrors,
+                        pendingSteer = _drainPendingSteer())
                 }
 
                 val msgDict = mutableMapOf<String, Any?>(
@@ -781,7 +866,8 @@ class HermesAgentLoop(
                     turnsUsed = turn + 1,
                     finishedNaturally = true,
                     reasoningPerTurn = reasoningPerTurn,
-                    toolErrors = toolErrors)
+                    toolErrors = toolErrors,
+                    pendingSteer = _drainPendingSteer())
             }
         }
 
@@ -799,7 +885,8 @@ class HermesAgentLoop(
             turnsUsed = maxTurns,
             finishedNaturally = false,
             reasoningPerTurn = reasoningPerTurn,
-            toolErrors = toolErrors)
+            toolErrors = toolErrors,
+            pendingSteer = _drainPendingSteer())
     }
 
     /**
