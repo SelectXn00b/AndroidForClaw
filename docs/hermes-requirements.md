@@ -666,16 +666,79 @@ R-AGENT-040 把这些散节点**一次性合并**到对应 root 节点的 `conte
 
 ---
 
-### R-AGENT-041: MemoryScreen UI 改造支持 root 节点 + chip 过滤族（占位）
+### R-AGENT-041: MemoryScreen UI 改造 + 删除散节点（拆 a/b/c 三子项）
 
-**来源**: R-AGENT-038 阶段 1 后续工程。
+**来源**: R-AGENT-038 阶段 2 后续工程（040 之后顺位）。
 
-**性质**: 占位条目。当前记录工程意图：
+**总目标**: R-AGENT-040 把存量散 `#auto_summary` / `#auto_extracted` / `#auto_summary_id:NNN`
+节点的 content 迁进了 3 个 root 节点，旧散节点保留作保险。041 接力把"用户可见 / ObjectBox 占用"
+两件事一起治掉，让 root 节点成为 MemoryScreen 上的一等公民。
+
+拆三个子项分 commit ship：
+
+---
+
+#### R-AGENT-041-a: 启动一次性删除存量散 auto-* 节点
+
+**触发**: app cold start。`OperitApplication.onCreate` 加 `launchLegacyAutoNodeDeletionIfNeeded()`，
+仿 R-AGENT-029 / R-AGENT-040 的范式：`applicationScope.launch { Dispatchers.IO + try/catch }`。
+**调用顺序**: 必须在 `launchAutoNodeArchiverMigrationIfNeeded()`（040）之后挂；运行时通过
+**前置 done flag 检查** 保证 040 全清后才允许 041-a 动手（040 没跑完不删，避免数据丢）。
+
+**幂等键**: `R_AGENT_041_legacy_node_deletion_done` ∈ `hermes_data_migrations` SharedPreferences
+（与 R-AGENT-029 / R-AGENT-040 共用同一文件）。已置 true → 早返回。
+
+**前置守门**: 同函数体内必须先读 `R_AGENT_040_auto_node_consolidation_done`，**未** true 则
+本次跳过（不写 041 done flag），下次冷启重试。理由：041 的输入正确性强依赖 040 已经把所有
+散节点 content 迁完；040 失败→041 立即上场会丢数据。
+
+**作用域**: 多 profile 全遍历（`preferencesManager.profileListFlow.first()`），每 profile 独立
+`MemoryRepository(applicationContext, profileId)`。任一 profile 异常 → 仅该 profile 跳过
+（`AppLogger.w` 记录）+ 整次不写 done flag，下次启动重试。
+
+**删除算法**（每 profile 内部）:
+1. **SUMMARY 散节点**: `repo.deleteByTag("#auto_summary")` —— 该 tag exact-match，root 节点
+   挂的是 `#auto_summary_root` 不在命中范围，天然安全。
+2. **EXTRACTED 散节点**: `repo.deleteByTag("#auto_extracted")` —— 同理。
+3. **SUMMARY_ID 散节点**: 变长后缀走两步：
+   a. `repo.findTagsByNamePrefix("#auto_summary_id:")` 拿到所有 `#auto_summary_id:NNN` tag
+   b. 收集所有挂这些 tag 的 Memory id（`tag.memories.toList()`），**排除任何挂 `#auto_root` 的节点**
+      （防御：理论上 root 不会挂这些 prefix tag，但 archiver 行为变化时多一层保险）
+   c. `repo.deleteMemories(idsToDelete)`
+   d. `repo.cleanupOrphanTagsByPrefix("#auto_summary_id:")` 把删空的 tag 实体回收
+
+**不动**: 写入侧（archiver / delegate / repository 一行不动）；MemoryScreen UI（041-b/c 才动）。
+
+**日志**: `AppLogger.d` 输出每 profile 删除条数 + 总删条数 + 总耗时。失败路径
+`AppLogger.w("R-AGENT-041-a: ...failed, will retry next launch")`。
+
+**手测验收**: 装带历史 `#auto_summary` 散节点的旧 APK → 升级到 R-AGENT-040 APK 启动一次（040
+done flag 置位）→ 再升级到 R-AGENT-041-a APK 启动一次 → logcat 见 `R-AGENT-041-a: deletion done`；
+MemoryScreen `#auto_summary` 列表为空（root 节点保留）；`#auto_summary_id:` prefix 的 tag 全无。
+
+**对应测试**: `OperitApplicationLegacyAutoNodeDeletionWiringTest`（TC-AGENT-041-a-a..f，源码扫描 wiring）。
+运行时正确性由 §3 E2E + 手测兜底。
+
+**前置依赖**: R-AGENT-040 已 ship（cf8dc48f）。
+
+---
+
+#### R-AGENT-041-b: MemoryScreen chip 过滤族 + root 配色（占位）
+
+**性质**: 占位。当前记录工程意图：
 - MemoryScreen 加 chip 过滤族 `#auto_root`（默认隐藏 / 仅看自动 / 全部三态）。
-- root 节点详情页查归档 jsonl 列表（按日期分组展示冷归档行）。
 - 节点配色 `pickNodeColorByAttributes` 增加 root 节点专属颜色（与普通节点视觉区分）。
 
-**前置依赖**: R-AGENT-040 完成（存量迁移到 root 之后 chip 过滤才有意义）。
+**前置依赖**: R-AGENT-041-a 完成（散节点删干净后 chip 过滤的视觉效果才纯净）。
+
+---
+
+#### R-AGENT-041-c: root 节点详情页查归档 jsonl（占位）
+
+**性质**: 占位。当前记录工程意图：
+- root 节点详情页查归档 jsonl 列表（按日期分组展示冷归档行）。
+
+**前置依赖**: R-AGENT-041-b 完成。
 
 ---
 

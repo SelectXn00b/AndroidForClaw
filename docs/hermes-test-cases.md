@@ -642,6 +642,25 @@ R-AGENT-040 = R-AGENT-038 phase 2 第一步。app cold start 时一次性把旧 
 
 ---
 
+## 域 AGENT — 启动迁移：删除存量散 auto-* 节点 (R-AGENT-041-a)
+
+R-AGENT-041-a = R-AGENT-038 phase 2 第二步，紧跟 R-AGENT-040 之后。app cold start 时一次性把已被 R-AGENT-040 合并到 root 的旧 `#auto_summary` / `#auto_extracted` / `#auto_summary_id:NNN` 散节点从 ObjectBox 删除（root 节点身上挂的是 `#auto_summary_root` / `#auto_extracted_root` / `#auto_summary_id_root` + `#auto_root` 标识 tag，与散节点 tag 字面不同；SUMMARY_ID 走 prefix 扫，必须排除带 `#auto_root` 的 root，防止误删）。**前置门禁**：必须先确认 R-AGENT-040 done flag (`R_AGENT_040_auto_node_consolidation_done`) 为 `true`，否则跳过本次执行（不写 041-a done flag），下次冷启再试，避免在合并完成前就把数据删掉。
+
+测试策略：仿 R-AGENT-029 / R-AGENT-040 同款，全部 source-scan。`OperitApplication.onCreate` 触发的 IO 协程涉及 ObjectBox + SharedPreferences，纯 JVM mock ROI 极低；运行时正确性由 §3 E2E + 用户带历史散节点设备的手测兜底（升级 → logcat `R-AGENT-041-a: deletion done` + MemoryScreen 看散节点已消失，root 节点保留）。
+
+| TC ID | 关联 R | 输入 / 现状 | 期望 | 测试类型 | 测试落地 |
+|---|---|---|---|---|---|
+| TC-AGENT-041-a-a | R-AGENT-041-a | 源码扫描：`OperitApplication.kt` | 必须含 `launchLegacyAutoNodeDeletionIfNeeded` 字面值（方法名）+ `R_AGENT_041_legacy_node_deletion_done` 字面（done flag key）+ `"hermes_data_migrations"` 字面（SharedPreferences 名，与 R-AGENT-029 / R-AGENT-040 共用）。 | unit-scan | `OperitApplicationLegacyAutoNodeDeletionWiringTest#TC-AGENT-041-a-a application source declares deletion migration constants` 🔴 |
+| TC-AGENT-041-a-b | R-AGENT-041-a | 源码扫描：`OperitApplication.kt::onCreate` 函数体 | `onCreate` 函数体内必须调用 `launchLegacyAutoNodeDeletionIfNeeded()`，并且这次调用必须出现在 `launchAutoNodeArchiverMigrationIfNeeded()` 之后（顺序：先合并、再删除；用 indexOf 比较两个调用字面位置）。 | unit-scan | `OperitApplicationLegacyAutoNodeDeletionWiringTest#TC-AGENT-041-a-b onCreate invokes deletion hook after archiver migration hook` 🔴 |
+| TC-AGENT-041-a-c | R-AGENT-041-a | 源码扫描：`OperitApplication.kt::launchLegacyAutoNodeDeletionIfNeeded` 函数体 | 必须含前置门禁：(1) `getBoolean(` + `R_AGENT_040_auto_node_consolidation_done` 字面（读 040 done flag）；(2) 040 done flag 为 `false` 时短路 `return` 且**不**写 041-a done flag（041-a done flag 写入语句必须出现在「040 done flag = true」分支内）；(3) 041-a 自己的短路：`getBoolean(` + `R_AGENT_041_legacy_node_deletion_done` 字面 + 早 return；(4) 后台协程 `applicationScope.launch`；(5) `getSharedPreferences("hermes_data_migrations"` 字面；(6) 成功路径写 `putBoolean(R_AGENT_041_legacy_node_deletion_done, true)`。 | unit-scan | `OperitApplicationLegacyAutoNodeDeletionWiringTest#TC-AGENT-041-a-c deletion hook gates on R-AGENT-040 done flag and uses background scope` 🔴 |
+| TC-AGENT-041-a-d | R-AGENT-041-a | 源码扫描：`launchLegacyAutoNodeDeletionIfNeeded` 函数体 | 必须含三段删除动作：(1) `deleteByTag("#auto_summary")` 字面调用（root 标识是 `#auto_summary_root`，字面不同所以安全）；(2) `deleteByTag("#auto_extracted")` 字面调用；(3) SUMMARY_ID 走 `findTagsByNamePrefix("#auto_summary_id:")` + `deleteMemories(` + `cleanupOrphanTagsByPrefix("#auto_summary_id:")` 三步组合（变长后缀必须 prefix 扫）。必须 `MemoryRepository(` 构造（per-profile 实例化）。 | unit-scan | `OperitApplicationLegacyAutoNodeDeletionWiringTest#TC-AGENT-041-a-d deletion scans three tag families and deletes via repository` 🔴 |
+| TC-AGENT-041-a-e | R-AGENT-041-a | 源码扫描：`launchLegacyAutoNodeDeletionIfNeeded` 函数体 | 必须含：(1) `profileListFlow.first()` 调用（遍历所有 profile）；(2) `try {` + `catch (` 包住主体；(3) catch 路径含 `AppLogger.w(` 调用；(4) 每个 catch 块**之内**不得出现 `putBoolean(R_AGENT_041_legacy_node_deletion_done, true)`（done flag 失败路径不置位，下次冷启重试）。 | unit-scan | `OperitApplicationLegacyAutoNodeDeletionWiringTest#TC-AGENT-041-a-e deletion iterates profiles guards exceptions and skips done flag on failure` 🔴 |
+| TC-AGENT-041-a-f | R-AGENT-041-a | 源码扫描：`launchLegacyAutoNodeDeletionIfNeeded` SUMMARY_ID 删除分支 | 函数体必须含 `#auto_root` 字面值，且必须出现 `none {` / `!` + `any {` / `filter` 等价排除表达式（即"持有 `#auto_root` tag 的节点不进入待删 id 列表"）—— 防御性守门：万一 `#auto_summary_id_root` 标识 tag 也以 `#auto_summary_id:` 开头（实际上不是，但任何未来命名漂移都不能误删 root），强制以 `#auto_root` 二级 tag 排除。**反向红线**：函数体不得无条件把 `findTagsByNamePrefix` 返回的所有 owner ids 直接传给 `deleteMemories`。 | unit-scan | `OperitApplicationLegacyAutoNodeDeletionWiringTest#TC-AGENT-041-a-f deletion excludes nodes carrying auto_root tag from SUMMARY_ID prefix scan` 🔴 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — App Self-Awareness Prompt Injection (R-AGENT-030)
 
 R-AGENT-030 让主 agent 的 system prompt 注入「应用自我感知」段，告诉 agent HermesApp 内置了哪些用户视角的 UI 入口（工具箱 / Memory hub / Settings / Skill Recorder / Terminal 等），方便 agent 在被问"我去哪里 X"时给出导航式回答而非自己代劳或瞎猜。

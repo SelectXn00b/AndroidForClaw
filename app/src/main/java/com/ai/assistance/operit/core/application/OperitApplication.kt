@@ -154,6 +154,9 @@ class OperitApplication : Application(), ImageLoaderFactory, WorkConfiguration.P
         launchAutoNodeArchiverMigrationIfNeeded()
         AppLogger.d(TAG, "【启动计时】R-AGENT-040 自动节点归档迁移任务已提交（异步IO） - ${System.currentTimeMillis() - startTime}ms")
 
+        launchLegacyAutoNodeDeletionIfNeeded()
+        AppLogger.d(TAG, "【启动计时】R-AGENT-041-a 散节点删除迁移任务已提交（异步IO） - ${System.currentTimeMillis() - startTime}ms")
+
         // R-AGENT-031: enqueue the WorkManager-driven cron tick (15-minute period, KEEP policy).
         // Must be after launchOrphanTagMigrationsIfNeeded so memory-side maintenance runs first.
         CronTickWorker.enqueue(this)
@@ -488,7 +491,7 @@ class OperitApplication : Application(), ImageLoaderFactory, WorkConfiguration.P
      * 不阻塞主线程。SharedPreferences 防重入键 `R_AGENT_040_auto_node_consolidation_done`（位于
      * `hermes_data_migrations` 文件，与 R-AGENT-029 共用）。失败不写完成标记，下次启动重试。
      *
-     * **不删旧节点**：保险起见 phase 2 留着，R-AGENT-041 才删。
+     * **不删旧节点**：保险起见 phase 2 留着，R-AGENT-041-a 才删。
      * **chatId**：Memory 实体无 chatId 字段，旧节点的 chatId 是作为 `#chat:<id>` tag 挂在节点上的，
      * 迁移时从 tags ToMany 找 `#chat:` 前缀的 tag 取后缀；找不到传 `""`。
      */
@@ -605,6 +608,112 @@ class OperitApplication : Application(), ImageLoaderFactory, WorkConfiguration.P
                 )
             } catch (e: Exception) {
                 AppLogger.w(TAG, "R-AGENT-040: auto node consolidation failed, will retry next launch: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * R-AGENT-041-a: 一次性把已被 R-AGENT-040 合并到 root 的旧 `#auto_summary` / `#auto_extracted` /
+     * `#auto_summary_id:NNN` 散节点从 ObjectBox 删除（root 节点 tag 字面是 `_root` 后缀 + `#auto_root`
+     * 标识 tag，与散节点不同所以安全）。
+     *
+     * **前置门禁**：必须先确认 R-AGENT-040 done flag (`R_AGENT_040_auto_node_consolidation_done`)
+     * 为 `true`，否则跳过本次执行（不写 041-a done flag），下次冷启重试，避免在合并完成前就把数据删掉。
+     *
+     * 自己的防重入键 `R_AGENT_041_legacy_node_deletion_done`（位于 `hermes_data_migrations` 文件，
+     * 与 R-AGENT-029 / R-AGENT-040 共用）。失败不写完成标记，下次启动重试。
+     *
+     * 删除算法（每个 profile）：
+     *  - SUMMARY: `repo.deleteByTag("#auto_summary")` —— root 是 `#auto_summary_root`，字面不同安全
+     *  - EXTRACTED: `repo.deleteByTag("#auto_extracted")`
+     *  - SUMMARY_ID: 走 `findTagsByNamePrefix("#auto_summary_id:")` 收集 owner ids，**排除带 `#auto_root`
+     *    的节点**（防御性，防止任何未来命名漂移误删 root），再 `deleteMemories(ids)` +
+     *    `cleanupOrphanTagsByPrefix("#auto_summary_id:")` 清扫变长后缀孤儿 tag。
+     */
+    private fun launchLegacyAutoNodeDeletionIfNeeded() {
+        applicationScope.launch {
+            val migrationStartTime = System.currentTimeMillis()
+            val prefs = getSharedPreferences("hermes_data_migrations", Context.MODE_PRIVATE)
+            val gateKey = "R_AGENT_040_auto_node_consolidation_done"
+            val key = "R_AGENT_041_legacy_node_deletion_done"
+
+            // 自己的短路：041-a 已跑过则跳过
+            if (prefs.getBoolean(key, false)) {
+                return@launch
+            }
+            // 前置门禁：R-AGENT-040 还没把数据合并到 root 之前，绝对不能删散节点
+            if (!prefs.getBoolean(gateKey, false)) {
+                AppLogger.d(TAG, "R-AGENT-041-a: gating on R-AGENT-040 not yet done, skip this run")
+                return@launch
+            }
+
+            try {
+                val profiles = preferencesManager.profileListFlow.first()
+                if (profiles.isEmpty()) {
+                    AppLogger.d(TAG, "R-AGENT-041-a: no profiles yet, skip deletion this run")
+                    return@launch
+                }
+                var totalDeleted = 0
+                var totalOrphanTagsCleaned = 0
+                for (profileId in profiles) {
+                    val repo = com.ai.assistance.operit.data.repository.MemoryRepository(
+                        applicationContext,
+                        profileId
+                    )
+
+                    // SUMMARY: deleteByTag("#auto_summary") —— root 是 `#auto_summary_root`，字面不同所以安全
+                    val deletedSummary = try {
+                        repo.deleteByTag("#auto_summary")
+                    } catch (e: Exception) {
+                        AppLogger.w(TAG, "R-AGENT-041-a: profile=$profileId SUMMARY deleteByTag failed: ${e.message}")
+                        0
+                    }
+
+                    // EXTRACTED: deleteByTag("#auto_extracted")
+                    val deletedExtracted = try {
+                        repo.deleteByTag("#auto_extracted")
+                    } catch (e: Exception) {
+                        AppLogger.w(TAG, "R-AGENT-041-a: profile=$profileId EXTRACTED deleteByTag failed: ${e.message}")
+                        0
+                    }
+
+                    // SUMMARY_ID: prefix 扫 + 排除 #auto_root + 批删 + 清孤儿 tag
+                    var deletedSummaryId = 0
+                    var orphanTagsCleaned = 0
+                    try {
+                        val summaryIdTags = repo.findTagsByNamePrefix("#auto_summary_id:")
+                        val candidateNodes = mutableListOf<com.ai.assistance.operit.data.model.Memory>()
+                        for (tag in summaryIdTags) {
+                            candidateNodes.addAll(tag.memories.toList())
+                        }
+                        // 防御性：排除任何带 `#auto_root` 二级 tag 的节点（root 节点不删）
+                        val idsToDelete = candidateNodes
+                            .filter { node -> node.tags.none { it.name == "#auto_root" } }
+                            .map { it.id }
+                            .distinct()
+                        if (idsToDelete.isNotEmpty()) {
+                            deletedSummaryId = repo.deleteMemories(idsToDelete)
+                        }
+                        // 节点删完后清扫变长后缀的孤儿 tag（与 R-AGENT-029 同款）
+                        orphanTagsCleaned = repo.cleanupOrphanTagsByPrefix("#auto_summary_id:")
+                    } catch (e: Exception) {
+                        AppLogger.w(TAG, "R-AGENT-041-a: profile=$profileId SUMMARY_ID delete failed: ${e.message}")
+                    }
+
+                    totalDeleted += deletedSummary + deletedExtracted + deletedSummaryId
+                    totalOrphanTagsCleaned += orphanTagsCleaned
+                    AppLogger.d(
+                        TAG,
+                        "R-AGENT-041-a: profile=$profileId deleted summary=$deletedSummary extracted=$deletedExtracted summaryId=$deletedSummaryId orphanTags=$orphanTagsCleaned"
+                    )
+                }
+                prefs.edit().putBoolean(key, true).apply()
+                AppLogger.d(
+                    TAG,
+                    "R-AGENT-041-a: deletion done, totalDeleted=$totalDeleted orphanTagsCleaned=$totalOrphanTagsCleaned across ${profiles.size} profile(s), 耗时${System.currentTimeMillis() - migrationStartTime}ms"
+                )
+            } catch (e: Exception) {
+                AppLogger.w(TAG, "R-AGENT-041-a: legacy node deletion failed, will retry next launch: ${e.message}")
             }
         }
     }
