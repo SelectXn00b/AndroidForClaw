@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.outlined.VolumeOff
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -159,6 +160,7 @@ fun AgentChatInputSection(
     onSendMessage: () -> Unit,
     onQueueMessage: () -> Unit,
     onCancelMessage: () -> Unit,
+    onInsertMessage: () -> Unit = {},
     isLoading: Boolean,
     inputState: InputProcessingState = InputProcessingState.Idle,
     allowTextInputWhileProcessing: Boolean = false,
@@ -926,6 +928,39 @@ fun AgentChatInputSection(
 
                         Spacer(modifier = Modifier.width(6.dp))
 
+                        // R-UI-062: insert ("插话") button — only visible while
+                        // the agent is processing. Lets the user steer the
+                        // current turn (short text) or fall back to the
+                        // R-UI-061 cancel-then-resend path (long/multi-line)
+                        // without having to cancel manually first. The
+                        // visibility gate is `showCancelAction || showQueueAction`,
+                        // i.e. the union of the two `isProcessing`-derived flags.
+                        if (showCancelAction || showQueueAction) {
+                            Box(
+                                modifier =
+                                    Modifier
+                                        .size(36.dp)
+                                        .background(
+                                            MaterialTheme.colorScheme.secondaryContainer,
+                                            CircleShape,
+                                        )
+                                        .clickable(
+                                            enabled = sendButtonEnabled,
+                                            onClick = { onInsertMessage() },
+                                        ),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription =
+                                        context.getString(R.string.chat_insert_message),
+                                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+
                         val actionButtonBackground =
                             when {
                                 showCancelAction -> MaterialTheme.colorScheme.error
@@ -1224,6 +1259,35 @@ fun AgentChatInputSection(
                             }
 
                             Spacer(modifier = Modifier.width(6.dp))
+
+                            // R-UI-062: insert ("插话") button — only visible
+                            // while the agent is processing. See the
+                            // transparent-mode counterpart above for full doc.
+                            if (showCancelAction || showQueueAction) {
+                                Box(
+                                    modifier =
+                                        Modifier
+                                            .size(36.dp)
+                                            .background(
+                                                MaterialTheme.colorScheme.secondaryContainer,
+                                                CircleShape,
+                                            )
+                                            .clickable(
+                                                enabled = sendButtonEnabled,
+                                                onClick = { onInsertMessage() },
+                                            ),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription =
+                                            context.getString(R.string.chat_insert_message),
+                                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(6.dp))
+                            }
 
                             val actionButtonBackground =
                                 when {

@@ -265,6 +265,21 @@ class ChatServiceCore(
         messageProcessingDelegate.cancelMessage(chatId)
     }
 
+    /**
+     * R-UI-062: forward a `/steer` text to the currently-running
+     * `HermesAgentLoop` driving this chat instance. Returns `true` iff the
+     * `EnhancedAIService` is initialized AND the active loop weakref is
+     * still alive AND the text is non-blank. On `false`, callers (UI insert
+     * button, gateway `/steer` handler) should fall back to the
+     * cancel-then-resend semantics in R-UI-061.
+     *
+     * Mirrors Python `run_agent.py:3608-3642`.
+     */
+    fun steerActiveLoop(chatId: String, text: String): Boolean {
+        val service = enhancedAiService ?: return false
+        return service.steerActiveLoop(text)
+    }
+
     /** 更新用户消息 */
     fun updateUserMessage(message: String) {
         messageProcessingDelegate.updateUserMessage(message)

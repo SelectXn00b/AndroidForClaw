@@ -1558,6 +1558,28 @@ R-UI-061 把 `MessageProcessingDelegate.sendUserMessage:452-459` 的"isLoading �
 ./gradlew :app:testDebugUnitTest --tests "com.ai.assistance.operit.services.core.MessageProcessingDelegateInsertTest"
 ```
 
+## 域 UI — Insert button + active-loop weakref + gateway wiring (R-UI-062)
+
+R-UI-062 是本组合特性的终端整合：把 R-AGENT-036/037 做的 `HermesAgentLoop.steer()` 内核 + R-GATEWAY-036 的 `steerActiveAgent`/`cancelActiveAgent` 回调骨架真正接到 caller 端。涉及 4 个文件：`EnhancedAIService` 加 weakref + `steerActiveLoop` + 在 `cancelConversation` 调 `clearPendingSteer`；`ChatServiceCore` 透传；`HermesGatewayController.start()` 把两个回调接到 GATEWAY-slot core；`AgentChatInputSection` 加插话按钮（仅 `isProcessing=true` 可见）。Python 上游 `gateway/run.py:3290-3334` + `:3225-3245`。测试是源码扫描——SUT 实例化太重（Service + 数十依赖 + Compose），结构性保证用 source-scan 锁定即可。
+
+| TC-ID | 关联 R | 输入 / 操作 | 期望 | 类型 | 实现 |
+|---|---|---|---|---|---|
+| TC-UI-062-a | R-UI-062 | EnhancedAIService 源码扫描 | `activeAgentLoopRef: WeakReference<HermesAgentLoop>?` 字段存在；`runAgentLoopViaHermes` 内 `loop.run(` 之前出现 `activeAgentLoopRef = WeakReference(loop)`；`finally` 块内出现 `activeAgentLoopRef = null` | unit | `EnhancedAIServiceSteerWiringTest#TC-UI-062-a weakref field and lifecycle` 🟢 |
+| TC-UI-062-b | R-UI-062 | EnhancedAIService 源码扫描 | `fun steerActiveLoop(text: String): Boolean` 存在；body 解 weakref `?.get()` 并调 `loop.steer(text)`；缺 loop 返 false | unit | `EnhancedAIServiceSteerWiringTest#TC-UI-062-b steerActiveLoop method` 🟢 |
+| TC-UI-062-c | R-UI-062 | EnhancedAIService 源码扫描 | `cancelConversation()` body 末尾包含 `activeAgentLoopRef?.get()?.clearPendingSteer()` 对齐 Python `:3599-3606` | unit | `EnhancedAIServiceSteerWiringTest#TC-UI-062-c cancelConversation clears pending steer` 🟢（外加 `TC-UI-062 clearPendingSteer is only reached from cancelConversation` 反向断言）|
+| TC-UI-062-d | R-UI-062 | ChatServiceCore 源码扫描 | `fun steerActiveLoop(chatId: String, text: String): Boolean` 存在；委托到 `enhancedAiService?.steerActiveLoop(text)`；`enhancedAiService == null` 时返 false | unit | `ChatServiceCoreSteerLoopTest#TC-UI-062-d steerActiveLoop delegates` 🟢 |
+| TC-UI-062-e | R-UI-062 | HermesGatewayController.start() 源码扫描 | `instance.steerActiveAgent = ` 与 `instance.cancelActiveAgent = ` 两个赋值都出现；都出现在 `runner = instance` 之前；body 引用 `ChatRuntimeHolder` + `ChatRuntimeSlot.GATEWAY` + `steerActiveLoop`/`cancelMessage` | unit | `HermesGatewayControllerSteerWiringTest#TC-UI-062-e start wires both callbacks` 🟢（外加 `TC-UI-062-e-2 callback guards against session mismatch`）|
+| TC-UI-062-f | R-UI-062 | AgentChatInputSection 源码扫描 | Composable 参数包含 `onInsertMessage`；body 使用 `Icons.Default.Edit`（或等价 insert 图标）+ `contentDescription` 引用 `R.string.chat_insert_message`；点击体调 `onInsertMessage`；visibility 在 `isProcessing` 为 true 时显示（即 `showCancelAction \|\| showQueueAction`） | unit | `AgentChatInputSectionInsertButtonTest#TC-UI-062-f *`（5 子测试：参数存在 / Edit 图标 import / 图标 + 文案 / 点击体 / 可见性门控）🟢 |
+
+跑已落地 TC：
+
+```bash
+./gradlew :app:testDebugUnitTest --tests "com.ai.assistance.operit.api.chat.EnhancedAIServiceSteerWiringTest"
+./gradlew :app:testDebugUnitTest --tests "com.ai.assistance.operit.services.ChatServiceCoreSteerLoopTest"
+./gradlew :app:testDebugUnitTest --tests "com.ai.assistance.operit.hermes.gateway.HermesGatewayControllerSteerWiringTest"
+./gradlew :app:testDebugUnitTest --tests "com.ai.assistance.operit.ui.features.chat.components.style.input.agent.AgentChatInputSectionInsertButtonTest"
+```
+
 ---
 
 ## 域 AGENT — Telegram inbound voice/audio + STT (R-GW-008 + R-AGENT-032)

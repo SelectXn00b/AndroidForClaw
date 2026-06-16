@@ -1651,6 +1651,44 @@ private fun ChatInputBottomBar(
         }
     }
 
+    /**
+     * R-UI-062: insert-button handler. Short single-line drafts (≤200 chars,
+     * no newlines) go through the mid-turn `/steer` path so the running
+     * HermesAgentLoop picks up the user's nudge in its next tool-result /
+     * pre-API drain. Longer or multi-line drafts fall back to the
+     * cancel-then-resend semantics from R-UI-061 (handled by `sendMessage`,
+     * which under R-UI-061 cancels first when `isLoading=true`).
+     *
+     * Mirrors the gateway-side UX in `gateway/run.py:3290-3334`.
+     */
+    val insertMessage = remember(
+        currentChatId,
+        actualViewModel,
+        focusManager,
+    ) {
+        {
+            val draft = actualViewModel.userMessage.value.text
+            val trimmed = draft.trim()
+            val isShortSingleLine = trimmed.length in 1..200 && !trimmed.contains('\n')
+            val accepted = if (isShortSingleLine) {
+                actualViewModel.steerCurrentTurn(trimmed)
+            } else {
+                false
+            }
+            if (accepted) {
+                // Steer succeeded — clear the draft so the user sees their
+                // nudge was consumed. The agent will pick it up in the next
+                // drain point.
+                actualViewModel.updateUserMessage(TextFieldValue(""))
+                focusManager.clearFocus()
+            } else {
+                // Fall back to cancel-then-resend (R-UI-061 path).
+                sendMessage()
+            }
+            Unit
+        }
+    }
+
     if (inputStyle == UserPreferencesManager.INPUT_STYLE_AGENT) {
         AgentChatInputSection(
                 actualViewModel = actualViewModel,
@@ -1660,6 +1698,7 @@ private fun ChatInputBottomBar(
                 onSendMessage = sendMessage,
                 onQueueMessage = { enqueueDraftToPendingQueue() },
                 onCancelMessage = actualViewModel::cancelCurrentMessage,
+                onInsertMessage = insertMessage,
                 isLoading = isLoading,
                 inputState = inputState,
                 allowTextInputWhileProcessing = true,

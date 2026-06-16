@@ -93,6 +93,37 @@ class HermesGatewayController private constructor(private val appContext: Contex
                     }
                 })
             }
+            // R-UI-062: forward gateway /steer + /stop commands into the
+            // GATEWAY-slot ChatServiceCore so they hit the running
+            // HermesAgentLoop (registered via EnhancedAIService.activeAgentLoopRef).
+            //
+            // Mapping: runHermesAgent feeds chats with historyChatId =
+            //   "gw:<sessionKey>:<chatId>" (see line ~230). The GATEWAY-slot
+            // core's currentChatId tracks the most recently switched chat,
+            // which is the one currently being driven. We only honor the
+            // callback when the prefix matches `gw:<sessionKey>:` so a
+            // command arriving for one session does not steer another.
+            instance.steerActiveAgent = { sessionKey, text ->
+                val core = ChatRuntimeHolder.getInstance(appContext)
+                    .getCore(ChatRuntimeSlot.GATEWAY)
+                val historyChatId = core.currentChatId.value
+                if (historyChatId != null && historyChatId.startsWith("gw:$sessionKey:")) {
+                    core.steerActiveLoop(historyChatId, text)
+                } else {
+                    false
+                }
+            }
+            instance.cancelActiveAgent = { sessionKey ->
+                val core = ChatRuntimeHolder.getInstance(appContext)
+                    .getCore(ChatRuntimeSlot.GATEWAY)
+                val historyChatId = core.currentChatId.value
+                if (historyChatId != null && historyChatId.startsWith("gw:$sessionKey:")) {
+                    core.cancelMessage(historyChatId)
+                    true
+                } else {
+                    false
+                }
+            }
             runner = instance
             instance.start()
             // R-AGENT-033 Bug C: inject the cron→IM dispatcher hook so that

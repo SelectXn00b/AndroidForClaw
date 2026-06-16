@@ -392,6 +392,17 @@ class EnhancedAIService private constructor(private val context: Context) {
     private val activeExecutionContexts = ConcurrentHashMap<Int, MessageExecutionContext>()
     private val nextExecutionContextId = AtomicInteger(0)
 
+    /**
+     * R-UI-062: weak reference to the currently-running [com.xiaomo.hermes.hermes.HermesAgentLoop]
+     * for this chat instance. Set when [runAgentLoopViaHermes] enters the
+     * loop (around `loop.run(...)`) and cleared in the surrounding `finally`.
+     * Used by [steerActiveLoop] to dispatch mid-turn `/steer` text and by
+     * [cancelConversation] to drop pending steer on hard cancel — mirrors
+     * Python `run_agent.py:3599-3606`.
+     */
+    @Volatile
+    private var activeAgentLoopRef: java.lang.ref.WeakReference<com.xiaomo.hermes.hermes.HermesAgentLoop>? = null
+
     private fun registerExecutionContext(context: MessageExecutionContext) {
         activeExecutionContexts[context.executionId] = context
     }
@@ -1322,45 +1333,58 @@ class EnhancedAIService private constructor(private val context: Context) {
             eventSink = sink,
             beforeNextTurn = beforeNextTurnLambda
         )
+        // R-UI-062: register weakref so that ChatServiceCore.steerActiveLoop /
+        // GatewayRunner.steerActiveAgent can dispatch mid-turn /steer text
+        // straight to this loop. Cleared in the finally below to avoid leaking
+        // a stale reference into the next chat turn.
+        activeAgentLoopRef = java.lang.ref.WeakReference(loop)
 
-        loop.run(openAiMessages)
-
-        while (pendingWaitForUserNeed && !tokenLimitHit && continueCount < maxContinues
-            && isExecutionContextActive(execContext)) {
-            continueCount++
-            pendingWaitForUserNeed = false
-            // Re-activate the execution context (it may have been deactivated
-            // by the token-limit check in beforeNextTurn during the previous
-            // loop iteration).
-            execContext.isConversationActive.set(true)
-            AppLogger.i(TAG, "isSubTask auto-continue $continueCount/$maxContinues: " +
-                "injecting continuation message (openAiMessages=${openAiMessages.size})")
-            GatewayFileLogger.i(TAG, "auto-continue $continueCount/$maxContinues (msgs=${openAiMessages.size})")
-            // Inject a synthetic user message that nudges the AI to keep working
-            openAiMessages.add(mapOf(
-                "role" to "user",
-                "content" to "Continue executing the task. Do NOT stop or ask for help. " +
-                    "If the previous step completed, proceed to the next step. " +
-                    "If you are waiting for content to appear (e.g., an AI response), " +
-                    "use sleep(duration_ms=3000) then get_page_info to check. " +
-                    "Repeat the wait-and-check cycle until content appears. " +
-                    "When the entire task is finished, use <status type=\"complete\">."
-            ))
-            // Reset the stream buffer for this new round so we track fresh content
-            execContext.streamBuffer.clear()
-            execContext.roundManager.startNewRound()
-
-            loop = HermesAgentLoop(
-                server = server,
-                toolSchemas = openAiToolSchemas,
-                validToolNames = extractToolNames(openAiToolSchemas),
-                toolDispatcher = dispatcher,
-                maxTurns = configuredMaxTurns,
-                taskId = taskIdValue,
-                eventSink = sink,
-                beforeNextTurn = beforeNextTurnLambda
-            )
+        try {
             loop.run(openAiMessages)
+
+            while (pendingWaitForUserNeed && !tokenLimitHit && continueCount < maxContinues
+                && isExecutionContextActive(execContext)) {
+                continueCount++
+                pendingWaitForUserNeed = false
+                // Re-activate the execution context (it may have been deactivated
+                // by the token-limit check in beforeNextTurn during the previous
+                // loop iteration).
+                execContext.isConversationActive.set(true)
+                AppLogger.i(TAG, "isSubTask auto-continue $continueCount/$maxContinues: " +
+                    "injecting continuation message (openAiMessages=${openAiMessages.size})")
+                GatewayFileLogger.i(TAG, "auto-continue $continueCount/$maxContinues (msgs=${openAiMessages.size})")
+                // Inject a synthetic user message that nudges the AI to keep working
+                openAiMessages.add(mapOf(
+                    "role" to "user",
+                    "content" to "Continue executing the task. Do NOT stop or ask for help. " +
+                        "If the previous step completed, proceed to the next step. " +
+                        "If you are waiting for content to appear (e.g., an AI response), " +
+                        "use sleep(duration_ms=3000) then get_page_info to check. " +
+                        "Repeat the wait-and-check cycle until content appears. " +
+                        "When the entire task is finished, use <status type=\"complete\">."
+                ))
+                // Reset the stream buffer for this new round so we track fresh content
+                execContext.streamBuffer.clear()
+                execContext.roundManager.startNewRound()
+
+                loop = HermesAgentLoop(
+                    server = server,
+                    toolSchemas = openAiToolSchemas,
+                    validToolNames = extractToolNames(openAiToolSchemas),
+                    toolDispatcher = dispatcher,
+                    maxTurns = configuredMaxTurns,
+                    taskId = taskIdValue,
+                    eventSink = sink,
+                    beforeNextTurn = beforeNextTurnLambda
+                )
+                // R-UI-062: refresh weakref to the new auto-continue loop instance.
+                activeAgentLoopRef = java.lang.ref.WeakReference(loop)
+                loop.run(openAiMessages)
+            }
+        } finally {
+            // R-UI-062: clear weakref so the next turn does not pick up a stale
+            // ref. Runs on both natural completion + exception paths.
+            activeAgentLoopRef = null
         }
 
         // If we exhausted auto-continues and the AI still hasn't completed,
@@ -1826,7 +1850,25 @@ class EnhancedAIService private constructor(private val context: Context) {
         // 停止AI服务并关闭屏幕常亮
         stopAiService()
 
+        // R-UI-062: drop any pending /steer text so it does not bleed into the
+        // next turn (which will own a fresh HermesAgentLoop instance). Mirrors
+        // Python `run_agent.py:3599-3606`.
+        activeAgentLoopRef?.get()?.clearPendingSteer()
+
         AppLogger.d(TAG, "Conversation cancellation complete")
+    }
+
+    /**
+     * R-UI-062: dispatch a `/steer` text to the currently-running [com.xiaomo.hermes.hermes.HermesAgentLoop]
+     * for this chat instance. Returns true iff the loop accepted the steer
+     * (text non-blank + loop alive); false otherwise (no active loop or
+     * weakref already GC'd or blank text). Caller may fall back to a
+     * cancel-then-resend path (R-UI-061) on false. Mirrors Python
+     * `run_agent.py:3608-3642`.
+     */
+    fun steerActiveLoop(text: String): Boolean {
+        val loop = activeAgentLoopRef?.get() ?: return false
+        return loop.steer(text)
     }
 
     /** Cancel all tool executions */

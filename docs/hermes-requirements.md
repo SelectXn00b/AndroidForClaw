@@ -1822,3 +1822,73 @@ Python 上游有 6 个消费点（parallel 路径 2 个 + sequential 路径 2 �
 - **C. §2 四件套** 维持零（不动 `hermes-android/`）
 - **D. 行为保持**：`isLoading=false` 时与之前完全一致
 
+### R-UI-062: 输入框"插话"按钮 + active-loop 弱引用注册 + gateway 双向 wiring
+
+**Python 上游**: `gateway/run.py:3290-3334`（`/steer` 与 active loop 的 dispatch 语义）+ `:3225-3245`（`/stop` 与 active loop 的 cancel dispatch 语义）—— UX 对齐：app 内对话与 gateway IM 接力体验一致。
+
+**背景**: R-AGENT-036/037 已经把 `HermesAgentLoop.steer(text)` 内核做完，R-GATEWAY-036 已经把 `GatewayRunner.steerActiveAgent` / `cancelActiveAgent` 回调骨架挂出，R-UI-061 让 app UI 默认对 busy 走 cancel-then-resend——但目前没有任何 caller 真的把"当前 active 的 `HermesAgentLoop` 实例"暴露给 gateway 或 app UI。本 R 是**终端整合**：
+
+1. 在 `EnhancedAIService` 内部用 `WeakReference<HermesAgentLoop>` 跟踪当前正在跑的 loop（per-chat instance），在 `loop.run()` 进入前注册、退出（finally）时清除
+2. 在 `ChatServiceCore` 暴露 `steerActiveLoop(chatId, text)` 给 caller 使用
+3. 在 `HermesGatewayController.start()` 把 `runner.steerActiveAgent` / `cancelActiveAgent` 双向回调接到 `ChatServiceCore` 的 GATEWAY slot 上
+4. 在 `AgentChatInputSection` / `ClassicChatInputSection` 加一个"插话"图标按钮，仅在 `isProcessing == true` 时显示
+
+**改动 `EnhancedAIService.kt`**:
+
+1. 新增字段（与 `activeExecutionContexts` 紧邻）：
+   ```kotlin
+   /**
+    * R-UI-062: weak reference to the currently-running HermesAgentLoop for
+    * this chat instance, set when [runAgentLoopViaHermes] enters the loop
+    * and cleared in the finally block. Used by [steerActiveLoop] for
+    * mid-turn steer dispatch + by [cancelConversation] to drop pending
+    * steer text on hard cancel (mirrors Python `run_agent.py:3599-3606`).
+    */
+   @Volatile
+   private var activeAgentLoopRef: java.lang.ref.WeakReference<com.xiaomo.hermes.hermes.HermesAgentLoop>? = null
+   ```
+
+2. 在 `runAgentLoopViaHermes` 第一次 `loop.run(openAiMessages)` 之前 `activeAgentLoopRef = WeakReference(loop)`，在包住整个 turn-loop + auto-continue 重试的 `try/finally` 里 `activeAgentLoopRef = null`。auto-continue 重新构造 `loop` 时同步刷新 weakref。
+
+3. 新增 public method：
+   ```kotlin
+   /**
+    * R-UI-062: dispatch a steer message to the currently-running agent loop
+    * for this chat instance. Returns true iff the loop accepted the steer
+    * (text non-blank + loop alive); false otherwise. Mirrors Python
+    * `run_agent.py:3608-3642`.
+    */
+   fun steerActiveLoop(text: String): Boolean {
+       val loop = activeAgentLoopRef?.get() ?: return false
+       return loop.steer(text)
+   }
+   ```
+
+4. `cancelConversation()` 末尾追加 `activeAgentLoopRef?.get()?.clearPendingSteer()`，对齐 Python `:3599-3606`（hard cancel 清 pending steer）。
+
+**改动 `ChatServiceCore.kt`**: 新增 public method（紧邻 `cancelMessage(chatId)`）：
+```kotlin
+fun steerActiveLoop(chatId: String, text: String): Boolean {
+    val service = enhancedAiService ?: return false
+    return service.steerActiveLoop(text)
+}
+```
+
+**改动 `HermesGatewayController.kt` `start()`** —— 在 `instance.onSendFailed = run { ... }` 之后、`runner = instance` 之前接 `instance.steerActiveAgent` / `instance.cancelActiveAgent` 两个回调，按 `sessionKey` 找 GATEWAY-slot 的 `ChatServiceCore`，分别调 `steerActiveLoop` / `cancelMessage`。
+
+**改动 `AgentChatInputSection.kt`**: 在主 trailing-icon Box（共两处：line 969 附近的透明变体 + line 1230 附近的非透明变体）旁边加一个 sibling Box，仅 `isProcessing == true` 时可见，图标 `Icons.Default.Edit`，contentDescription 走资源 `R.string.chat_insert_message`（中文"插话"，英文"Insert"），点击走新加的 `onInsertMessage` 回调（Composable 参数）。
+
+**改动 `AIChatScreen.kt`**: 在调用 `AgentChatInputSection`/`ClassicChatInputSection` 处把 `onInsertMessage` 接到一个 lambda：短文本（≤200 字 + 单行）调 ViewModel 的 steer 接口；长文本退化到现有 send 路径（R-UI-061 在 delegate 内自动 cancel-then-resend）。
+
+**约束**:
+- **不破坏 weakref 语义**: `activeAgentLoopRef` 不能 leak —— 只在 `runAgentLoopViaHermes` 的 try/finally 内活跃；`finally` 路径必须能在异常 + 正常退出两种情况下都清。
+- **不动**任何对外 API 签名（`sendUserMessage` / `cancelMessage` 不变）。
+- **不动** R-UI-061 的 cancel-then-resend 路径——本 R 是新加按钮，长文本路径仍走 R-UI-061。
+- **不动** `hermes-android/`——本 R 是 Android-side 的 caller 整合，§2 四件套不动。
+
+**验收**:
+- **A. 编译自检** 全绿
+- **B. 单测**: `EnhancedAIServiceSteerWiringTest`（source-scan：weakref 字段存在 + register/clear 在 try/finally 块 + `steerActiveLoop` 实现）+ `ChatServiceCoreSteerLoopTest`（source-scan：`steerActiveLoop` 透传到 EnhancedAIService）+ `HermesGatewayControllerSteerWiringTest`（source-scan：start() 内两个回调都被赋值，且赋值发生在 `runner = instance` 之前）+ `AgentChatInputSectionInsertButtonTest`（source-scan：插话按钮 Composable 引用 + visibility gate）
+- **C. §2 四件套** 维持零（不动 `hermes-android/`）
+- **D. 行为保持**: `isProcessing=false` 时插话按钮不可见；现有 send/cancel/queue 三态完全不变
+

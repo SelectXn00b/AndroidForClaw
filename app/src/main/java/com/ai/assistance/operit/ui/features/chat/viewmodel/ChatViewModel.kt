@@ -1330,6 +1330,21 @@ class ChatViewModel(private val context: Context) : ViewModel() {
         }
     }
 
+    /**
+     * R-UI-062: forward the current input draft to the running HermesAgentLoop
+     * as a mid-turn `/steer`. Returns true iff the active loop accepted the
+     * text (non-blank + loop still alive). On false, the caller should fall
+     * back to cancel-then-resend semantics (R-UI-061).
+     *
+     * Mirrors the gateway-side `/steer` UX in `gateway/run.py:3290-3334`.
+     */
+    fun steerCurrentTurn(text: String): Boolean {
+        if (text.isBlank()) return false
+        val chatId = chatHistoryDelegate.currentChatId.value ?: return false
+        val service = EnhancedAIService.getChatInstance(context, chatId) ?: return false
+        return service.steerActiveLoop(text)
+    }
+
     // UI状态相关方法
     fun showErrorMessage(message: String) = uiStateDelegate.showErrorMessage(message)
     fun clearError() = uiStateDelegate.clearError()
