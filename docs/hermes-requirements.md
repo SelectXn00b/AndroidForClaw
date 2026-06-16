@@ -1686,3 +1686,88 @@ Python 上游有 6 个消费点（parallel 路径 2 个 + sequential 路径 2 �
 - **B. 单测**：`GatewayCommandRoutingTest`（覆盖 TC-GATEWAY-036-a..f）全绿
 - **C. §2 四件套** 维持零；`scan_functional_stubs` 不增
 - **D. 既有 busy 行为不变**：非 `/<cmd>` 文本 fall through，与 R-GATEWAY-035 之前完全一致
+
+### R-GATEWAY-037: drain 期 reject / queue 完整路径 + `_draining` 守卫
+
+**Python 上游**: `gateway/run.py:1230-1231`（`_queue_during_drain_enabled` 二条件守卫）+ `:1513-1533`（`_handle_active_session_busy_message` drain 分支）+ `:2549, 1892, 2536`（`_draining`/`_restart_requested` 设置点）
+
+**背景**: R-GATEWAY-035 已经把 `queueDuringDrainEnabled()` 切到读 `_busyInputMode`，但漏了 Python `:1230-1231` 的 `_restart_requested` 守卫（Python 是 **AND**：`_restart_requested AND _busy_input_mode == "queue"`）。同时 R-GATEWAY-035/036 都没引入 `_draining` 标志位，也没接 drain 分支的 reject/queue ack。本 R 把这一段补齐。
+
+**改动 `Run.kt`**:
+
+1. **加 `_draining` 字段**（`_restartRequested` 旁边即可）：
+   ```kotlin
+   /** R-GATEWAY-037: gateway is shutting down / restarting and should
+    *  reject (or queue, if `_queueDuringDrainEnabled()`) new turns.
+    *  Set true at the start of `stop()` so messages arriving during the
+    *  drain don't slip into the normal busy interrupt path. Mirrors Python
+    *  `gateway/run.py:_draining` (set at `:2549`). */
+   @Volatile internal var _draining: Boolean = false
+   ```
+
+2. **修 `queueDuringDrainEnabled()`** 加 `_restartRequested` 守卫，对齐 Python `:1230-1231`：
+   ```kotlin
+   fun queueDuringDrainEnabled(): Boolean =
+       _restartRequested && _busyInputMode == "queue"
+   ```
+   语义变化：以前只看 mode，现在 **必须** `_restartRequested=true` 才返回 true。普通 `/stop` 关停（非 restart）即使 mode=queue 也会走 reject 分支，对齐 Python 的语义（restart 才需要"队列接力"，shutdown 不接力）。
+
+3. **`_handleMessage` busy 分支顶部插入 drain 检查**（在 R-GATEWAY-036 的命令路由之前）：
+   ```kotlin
+   if (!_processingSessions.add(event.sessionKey)) {
+       // R-GATEWAY-037: drain branch (gateway shutting down / restarting).
+       // Mirrors Python `gateway/run.py:1515-1533`.
+       if (_draining) {
+           _handleDrainBusyMessage(event)
+           return
+       }
+       // R-GATEWAY-036: command routing — slash commands ...
+       val cmd = resolveCommand(event.text)
+       ...
+   ```
+   语义：drain 期间不让命令路由介入（`/steer` `/queue` `/stop` 都不再有意义——agent 即将停掉），统一走 drain ack。
+
+4. **新加 `_handleDrainBusyMessage(event)` 方法**：
+   ```kotlin
+   /**
+    * R-GATEWAY-037: drain 期 busy session 的处理。Mirrors Python
+    * `gateway/run.py:1515-1533`. 按 `queueDuringDrainEnabled()` 决定
+    * 队列接力（restart + mode=queue）还是直接 reject（shutdown 或 mode=interrupt）。
+    */
+   private suspend fun _handleDrainBusyMessage(event: MessageEvent) {
+       val gerund = if (_restartRequested) "restarting" else "shutting down"
+       val text = if (queueDuringDrainEnabled()) {
+           @Suppress("UNCHECKED_CAST")
+           mergePendingMessageEvent(
+               _pendingEvents as MutableMap<String, MessageEvent>,
+               event.sessionKey, event)
+           "⏳ Gateway $gerund — queued for the next turn after it comes back."
+       } else {
+           "⏳ Gateway is $gerund and is not accepting another turn right now."
+       }
+       _sendCommandAck(event, text)  // reuse R-036 helper for one-line ack
+   }
+   ```
+
+5. **`stop()` 入口处置 `_draining = true`**：
+   ```kotlin
+   suspend fun stop(restart: Boolean = false, ...) {
+       if (!isRunning.getAndSet(false)) return
+       _draining = true            // R-GATEWAY-037
+       if (restart) _restartRequested = true   // tag intent for queue接力
+       Log.i(_TAG, "Stopping gateway...")
+       ...
+   }
+   ```
+   `requestRestart()` 现已在 `_restartRequested = true` 后再 `delay(50); stop()`——这会让 `_draining` 在 `stop()` 第一行被置位，drain ack 路径生效。
+
+**约束**:
+- **R-GATEWAY-035 的 TC-035-c 语义微调**：之前 `_busyInputMode = "queue"` 直接让 `queueDuringDrainEnabled` 返回 true；本 R 把它改成 **AND** `_restartRequested`。需要在 `GatewayBusyInputModeTest` 里把仅设 mode 不设 `_restartRequested` 的断言改成 false（或在测试中显式 set restart 标志后断言 true）。本 R 的 `GatewayDrainBehaviorTest` 会覆盖正向 / 反向两条路径。
+- **不动**: R-GATEWAY-036 的命令路由分支顶层位置——drain 检查放在它前面。
+- **不动**: 既有 `_pendingEvents` 接力机制——drain 队列接力复用同一个 map。
+
+**验收**:
+- **A. 编译自检** 全绿
+- **B. 单测**：`GatewayDrainBehaviorTest`（TC-GATEWAY-037-a..d）+ `GatewayBusyInputModeTest`（修订后的 TC-035 全绿）+ `GatewayCommandRoutingTest`（不退化）
+- **C. §2 四件套** 维持零；`scan_functional_stubs` 不增
+- **D. 行为保持**：`_draining=false` 时 `_handleMessage` 一行不变（R-036 命令路由 + 既有 interrupt/queue）

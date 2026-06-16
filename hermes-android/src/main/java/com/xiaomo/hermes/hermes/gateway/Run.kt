@@ -223,6 +223,14 @@ class GatewayRunner(
             return
         }
 
+        // R-GATEWAY-037: enter drain mode so any messages arriving while we
+        // tear down adapters get reject/queue acks instead of slipping into
+        // the busy interrupt path. `restart` flag tags intent for queue接力.
+        // Mirrors Python `gateway/run.py:2549` (`self._draining = True`) +
+        // `:1892, 2536` (`self._restart_requested = True`).
+        _draining = true
+        if (restart) _restartRequested = true
+
         Log.i(_TAG, "Stopping gateway...")
 
         // Run shutdown hooks
@@ -318,6 +326,15 @@ class GatewayRunner(
         // Per-session guard: if this session already has an agent running,
         // store the new message as a pending event and signal interrupt.
         if (!_processingSessions.add(event.sessionKey)) {
+            // R-GATEWAY-037: drain branch — gateway is shutting down /
+            // restarting. Reject or queue (per `queueDuringDrainEnabled()`)
+            // before command routing kicks in: `/steer` etc. are meaningless
+            // when the agent is about to die. Mirrors Python
+            // `gateway/run.py:1515-1533`.
+            if (_draining) {
+                _handleDrainBusyMessage(event)
+                return
+            }
             // R-GATEWAY-036: command routing — slash commands (e.g. `/steer`,
             // `/queue`, `/stop`) get dispatched via meta-control paths instead
             // of falling into the regular interrupt/queue. Mirrors Python
@@ -748,10 +765,14 @@ class GatewayRunner(
      *
      * R-GATEWAY-035: realigned to read `_busyInputMode` (single source of truth)
      * instead of legacy `config.extra["queue_during_drain"]`. Mirrors Python
-     * `gateway/run.py:1230-1231` (`_busy_input_mode == "queue"`). The
-     * `_restart_requested` guard from Python is added in R-GATEWAY-037.
+     * `gateway/run.py:1230-1231`:
+     *   `_queue_during_drain_enabled = self._restart_requested and self._busy_input_mode == "queue"`.
+     * R-GATEWAY-037: added the missing `_restart_requested` guard so that a
+     * plain shutdown (non-restart) drain does NOT queue, matching Python.
+     * Only restart + mode=queue takes the queue接力 path.
      */
-    fun queueDuringDrainEnabled(): Boolean = _busyInputMode == "queue"
+    fun queueDuringDrainEnabled(): Boolean =
+        _restartRequested && _busyInputMode == "queue"
 
     // ── Voice mode (ported from gateway/run.py) ─────────────────────
 
@@ -1350,6 +1371,32 @@ Removed: "X"""
     }
 
     /**
+     * R-GATEWAY-037: handle a busy-session message arriving during gateway
+     * drain. Mirrors Python `gateway/run.py:1515-1533`:
+     *  - if [queueDuringDrainEnabled] (restart + mode=queue): merge into
+     *    `_pendingEvents` so the next gateway run picks it up; ack with
+     *    "queued for the next turn".
+     *  - else: reject with a one-line ack; the message is dropped.
+     *
+     * `internal` so the unit test in the same package can drive it without
+     * needing reflection or simulating a full `_handleMessage` call.
+     */
+    internal suspend fun _handleDrainBusyMessage(event: MessageEvent) {
+        val gerund = if (_restartRequested) "restarting" else "shutting down"
+        val text = if (queueDuringDrainEnabled()) {
+            @Suppress("UNCHECKED_CAST")
+            mergePendingMessageEvent(
+                _pendingEvents as MutableMap<String, MessageEvent>,
+                event.sessionKey, event,
+            )
+            "⏳ Gateway $gerund — queued for the next turn after it comes back."
+        } else {
+            "⏳ Gateway is $gerund and is not accepting another turn right now."
+        }
+        _sendCommandAck(event, text)
+    }
+
+    /**
      * R-GATEWAY-036: dispatch a recognized slash command for an active-session
      * busy event. Only `steer` / `queue` / `stop` have concrete handlers in
      * this R; other ACTIVE_SESSION_BYPASS_COMMANDS commands are politely
@@ -1548,8 +1595,19 @@ Removed: "X"""
         Log.i(_TAG, "Detached restart requested — Android service will handle restart")
     }
 
-    @Volatile private var _restartRequested = false
+    @Volatile internal var _restartRequested = false
     @Volatile private var _restartTaskStarted = false
+
+    /**
+     * R-GATEWAY-037: gateway is shutting down / restarting and should reject
+     * (or queue, if `queueDuringDrainEnabled()`) new turns. Set true at the
+     * start of `stop()` so messages arriving during the drain don't slip into
+     * the normal busy interrupt path. Mirrors Python `gateway/run.py:_draining`
+     * (set at `:2549`). Reset is implicit via process restart — once `stop()`
+     * has run the runner is single-shot and a new `GatewayRunner` instance is
+     * built for the next session.
+     */
+    @Volatile internal var _draining: Boolean = false
 
     /** Initiate a gateway restart. Returns false if already in progress. */
     @Suppress("UNUSED_PARAMETER")

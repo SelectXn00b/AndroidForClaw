@@ -69,8 +69,14 @@ class GatewayBusyInputModeTest {
     // -------- TC-GATEWAY-035-b: config queue flips mode --------
     /**
      * TC-GATEWAY-035-b: `config.extra["busy_input_mode"] = "queue"` flips
-     * the mode (no env override). `queueDuringDrainEnabled()` must return
-     * true. Mirrors Python `:1399` (config tier) + `:1230-1231` (consumer).
+     * the mode (no env override). Mirrors Python `:1399` (config tier).
+     *
+     * R-GATEWAY-037 update: `queueDuringDrainEnabled()` now requires BOTH
+     * `_restartRequested=true` AND `mode=="queue"` (Python `:1230-1231`),
+     * so we drive `_restartRequested` reflectively to assert the consumer
+     * wires both flags together. With only `mode="queue"` (no restart) the
+     * predicate must remain false — that's the inverse-direction TC in
+     * `GatewayDrainBehaviorTest#TC-GATEWAY-037-e`.
      */
     @Test
     fun `TC-GATEWAY-035-b config queue flips mode`() {
@@ -79,8 +85,18 @@ class GatewayBusyInputModeTest {
             "Config 'queue' must set busyInputMode to 'queue'",
             "queue", runner.busyInputMode(),
         )
+        // Without restart: queueDuringDrainEnabled must still be false.
+        assertFalse(
+            "queueDuringDrainEnabled requires _restartRequested too (R-037)",
+            runner.queueDuringDrainEnabled(),
+        )
+        // With restart flagged: predicate flips true. Drive via reflection
+        // since the field is internal-only (set by `stop(restart=true)`).
+        val f = runner.javaClass.getDeclaredField("_restartRequested")
+        f.isAccessible = true
+        f.setBoolean(runner, true)
         assertTrue(
-            "queueDuringDrainEnabled must be true when mode == 'queue'",
+            "queueDuringDrainEnabled must be true when mode='queue' AND restart requested",
             runner.queueDuringDrainEnabled(),
         )
     }

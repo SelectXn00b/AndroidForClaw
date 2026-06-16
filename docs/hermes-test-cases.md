@@ -1523,6 +1523,24 @@ R-GATEWAY-036 在 active session busy 期间识别 slash 命令。最小骨架�
 ./gradlew :hermes-android:testDebugUnitTest --tests "com.xiaomo.hermes.hermes.gateway.GatewayCommandRoutingTest"
 ```
 
+## 域 GATEWAY — Drain Reject/Queue (R-GATEWAY-037)
+
+R-GATEWAY-037 把 R-GATEWAY-035 漏掉的 `_restart_requested` 守卫补齐（Python `gateway/run.py:1230-1231`），并在 `_handleMessage` busy 分支顶部加 drain 检查（`:1515-1533`）。drain 期间：restart + mode=queue 走队列接力；其它走 reject ack。命令路由（R-036）让位给 drain ack——agent 即将停掉时 `/steer` 等命令无意义。
+
+| TC-ID | 关联 R | 输入 | 期望输出 | 测试类型 | 状态 |
+|---|---|---|---|---|---|
+| TC-GATEWAY-037-a | R-GATEWAY-037 | `_draining=true && _restartRequested=true && _busyInputMode="queue"` 时 busy session 收新消息 | 入 `_pendingEvents`；ack 含 "restarting" + "queued for the next turn"；不调命令路由；不调 steer/cancel | unit | `GatewayDrainBehaviorTest#TC-GATEWAY-037-a restart with queue mode queues and acks` 🟢 |
+| TC-GATEWAY-037-b | R-GATEWAY-037 | `_draining=true && _restartRequested=false && _busyInputMode="queue"` 时 busy session 收新消息（普通 stop 不接力） | **不**入 `_pendingEvents`；ack 含 "shutting down" + "not accepting"；不调命令路由 | unit | `GatewayDrainBehaviorTest#TC-GATEWAY-037-b plain stop with queue mode rejects` 🟢 |
+| TC-GATEWAY-037-c | R-GATEWAY-037 | `_draining=true && _restartRequested=true && _busyInputMode="interrupt"` 时 busy session 收新消息 | 不入 `_pendingEvents`；ack 含 "restarting" + "not accepting"；不调命令路由 | unit | `GatewayDrainBehaviorTest#TC-GATEWAY-037-c restart with interrupt mode rejects` 🟢 |
+| TC-GATEWAY-037-d | R-GATEWAY-037 | `_draining=false` 时 busy session 收 `/steer hi` | drain 检查 fall through，命令路由生效（与 R-036 行为一致）；调 steer callback | unit | `GatewayDrainBehaviorTest#TC-GATEWAY-037-d non draining lets command routing work` 🟢 |
+| TC-GATEWAY-037-e | R-GATEWAY-037 | `queueDuringDrainEnabled()` 矩阵：(restart, mode) ∈ {(F,interrupt), (F,queue), (T,interrupt), (T,queue)} | 仅 (T, "queue") → true；其它三组 → false | unit | `GatewayDrainBehaviorTest#TC-GATEWAY-037-e queueDuringDrainEnabled requires both flags` 🟢 |
+
+跑已落地 TC：
+
+```bash
+./gradlew :hermes-android:testDebugUnitTest --tests "com.xiaomo.hermes.hermes.gateway.GatewayDrainBehaviorTest"
+```
+
 ---
 
 ## 域 AGENT — Telegram inbound voice/audio + STT (R-GW-008 + R-AGENT-032)
