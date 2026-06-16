@@ -183,6 +183,143 @@ class HermesAgentLoop(
         internal var toolExecutor: java.util.concurrent.ExecutorService = Executors.newFixedThreadPool(128)
     }
 
+    // R-AGENT-036: /steer mechanism — inject a user note into the next tool
+    // result without interrupting the agent. Mirrors Python `run_agent.py:945-953`.
+    //
+    // Unlike interrupt(), steer() does NOT abort the loop; it waits for the
+    // current tool batch to finish naturally, then `_applyPendingSteerToToolResults`
+    // appends the text to the last `role:"tool"` message's content with the
+    // marker `"\n\nUser guidance: {text}"` so the model sees it on its next
+    // iteration. Message-role alternation is preserved (we modify an existing
+    // tool message rather than inserting a new user turn).
+    //
+    // **Concurrency**: `steer()` is callable from gateway / CLI / TUI threads
+    // while the agent loop runs on its own thread, so we use synchronized +
+    // @Volatile rather than ThreadLocal (which is the wrong direction here).
+    //
+    // The 6 consumption sites in the loop are wired in R-AGENT-037; this R
+    // only ships the interface so it can be tested independently.
+    @Volatile private var _pendingSteer: String? = null
+    private val _pendingSteerLock = Any()
+
+    /**
+     * R-AGENT-036: Inject a user message into the next tool result without
+     * interrupting. Aligns with Python `run_agent.py:3608-3642`.
+     *
+     * Multiple calls before the next drain point concatenate with newlines.
+     * Empty / whitespace-only text is rejected.
+     *
+     * @param text The user text to inject.
+     * @return true if accepted; false if [text] was empty / whitespace-only.
+     */
+    fun steer(text: String): Boolean {
+        if (text.isBlank()) return false
+        val cleaned = text.trim()
+        synchronized(_pendingSteerLock) {
+            val existing = _pendingSteer
+            _pendingSteer = if (existing.isNullOrEmpty()) cleaned else "$existing\n$cleaned"
+        }
+        return true
+    }
+
+    /**
+     * R-AGENT-036: Atomically read and clear the pending steer slot.
+     * Aligns with Python `run_agent.py:3644-3658`.
+     *
+     * @return The pending steer text, or null if no steer is pending.
+     */
+    internal fun _drainPendingSteer(): String? {
+        synchronized(_pendingSteerLock) {
+            val text = _pendingSteer
+            _pendingSteer = null
+            return text
+        }
+    }
+
+    /**
+     * R-AGENT-036: Append any pending steer text to the last `role:"tool"`
+     * message in the recent tail. Aligns with Python `run_agent.py:3660-3721`.
+     *
+     * Called at the end of a tool-call batch, before the next API call (the
+     * actual call sites are wired in R-AGENT-037). The steer is appended to
+     * the last `role:"tool"` message's content with the marker
+     * `"\n\nUser guidance: {text}"` so the model understands it came from the
+     * user and NOT from the tool itself. Role alternation is preserved.
+     *
+     * If no `role:"tool"` message is found in the tail (e.g. all skipped by
+     * an interrupt), the steer text is re-stashed in `_pendingSteer` so a
+     * caller's fallback path can deliver it as a normal next-turn user
+     * message.
+     *
+     * @param messages The running messages list (modified in place).
+     * @param numToolMsgs How many tool results were appended in this batch
+     *                    (used to bound the tail scan).
+     */
+    internal fun _applyPendingSteerToToolResults(
+        messages: MutableList<Map<String, Any?>>,
+        numToolMsgs: Int,
+    ) {
+        if (numToolMsgs <= 0 || messages.isEmpty()) return
+        val steerText = _drainPendingSteer() ?: return
+        // Find the last role:"tool" message in the recent tail. Skipping
+        // non-tool messages defends against future code appending something
+        // else at the boundary.
+        var targetIdx = -1
+        val lo = maxOf(messages.size - numToolMsgs - 1, -1)
+        for (j in (messages.size - 1) downTo (lo + 1)) {
+            val msg = messages[j]
+            if (msg["role"] == "tool") {
+                targetIdx = j
+                break
+            }
+        }
+        if (targetIdx < 0) {
+            // No tool result in this batch; put the steer back so the
+            // caller's fallback path can deliver it as a normal next-turn
+            // user message.
+            synchronized(_pendingSteerLock) {
+                val existing = _pendingSteer
+                _pendingSteer = if (existing.isNullOrEmpty()) steerText else "$existing\n$steerText"
+            }
+            return
+        }
+        val marker = "\n\nUser guidance: $steerText"
+        val target = messages[targetIdx]
+        val existing = target["content"]
+        val newContent: Any = when (existing) {
+            is String -> existing + marker
+            is List<*> -> {
+                // Anthropic multimodal content blocks — preserve them and
+                // append a text block at the end (lstripped marker per
+                // Python `:3710`).
+                val blocks = existing.toMutableList()
+                blocks.add(mapOf("type" to "text", "text" to marker.trimStart()))
+                blocks.toList()
+            }
+            null -> marker
+            else -> "$existing$marker"
+        }
+        // Maps in messages are typically immutable; rebuild the entry.
+        val rebuilt = target.toMutableMap().also { it["content"] = newContent }
+        messages[targetIdx] = rebuilt.toMap()
+        val preview = if (steerText.length > 120) steerText.take(120) + "..." else steerText
+        Log.i(_TAG, "Delivered /steer to agent after tool batch (${steerText.length} chars): $preview")
+    }
+
+    /**
+     * R-AGENT-036: Drop any pending steer.
+     *
+     * Called by `EnhancedAIService.cancelConversation` on hard cancel —
+     * a hard interrupt supersedes any pending /steer because the steer was
+     * meant for the agent's next tool-call iteration, which will no longer
+     * happen. Mirrors Python `run_agent.py:3599-3606`.
+     */
+    fun clearPendingSteer() {
+        synchronized(_pendingSteerLock) {
+            _pendingSteer = null
+        }
+    }
+
     private suspend fun emit(event: AgentEvent) {
         val sink = eventSink ?: return
         try {

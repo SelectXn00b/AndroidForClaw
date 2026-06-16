@@ -1446,6 +1446,26 @@ R-AGENT-035 是 R-AGENT-033 落地后端到端测试发现的修补：R-AGENT-03
 | TC-AGENT-035-c | R-AGENT-035 | 源码扫描（红线）：`CronAgentRunner.kt::deliver` 函数体保留 ChatHistoryManager fallback | 函数体仍含 `ChatHistoryManager` reference + `addMessage(` 调用 + `GatewayChatEventBus` reference；证本 R 是**新增 origin 分支**而非删除本地 chat 写入路径（用户即便用 IM 也能在 app 里看到记录）。 | unit-scan | `CronAgentRunnerOriginDeliveryWiringTest#TC-AGENT-035-c local fallback path preserved` 🔴 |
 | TC-AGENT-035-d | R-AGENT-035 | 端到端验证：飞书 bot 跟 agent 说"每 15 分钟提醒我喝水" → 16 分钟后 | jobs.json 内对应 job 含 `origin = {platform: "feishu", chat_id: ..., thread_id: ...}` + `deliver = "origin"`；GatewayFileLogger 内出现 `dispatchOutgoing: delivered platform=feishu chatId=... len=...` INFO 行；**飞书原会话真的收到 ai 消息**（这是 R-AGENT-033 + R-AGENT-034 + R-AGENT-035 三 R 闭环的最终验收）。 | manual / E2E | `(no unit test; manual verification required)` 🔴 |
 
+## 域 AGENT — Steer Interface (R-AGENT-036)
+
+R-AGENT-036 给 `HermesAgentLoop` 加 `steer()` 接口和 `_pendingSteer` 字段，作为 P4 插话功能的内核。对齐 Python `run_agent.py:945-953, 3608-3658, 3660-3721, 3599-3606`。本 R **只加接口**，6 个消费点在 R-AGENT-037。
+
+**注入语义**：`steer(text)` 把文本暂存在 `_pendingSteer`；下游某个 drain 点从最近的 `role:"tool"` 消息 content 末尾追加 `"\n\nUser guidance: {text}"`。**不**插入新的 user message（保持 OpenAI message-role alternation 不破）。
+
+| TC ID | R-ID | 输入 / 触发 | 期望 | 测试类型 | 实现 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-036-a | R-AGENT-036 | 调 `loop.steer("")` 和 `loop.steer("   ")` | 都返 `false`；`_drainPendingSteer()` 返 null（pending 不变） | unit | `HermesAgentLoopSteerTest#TC-AGENT-036-a empty or whitespace steer is rejected` 🟢 |
+| TC-AGENT-036-b | R-AGENT-036 | `loop.steer("hello")` | 返 `true`；`_drainPendingSteer()` 返 `"hello"` | unit | `HermesAgentLoopSteerTest#TC-AGENT-036-b basic steer stores trimmed text` 🟢 |
+| TC-AGENT-036-c | R-AGENT-036 | 连续 `loop.steer("a"); loop.steer("b"); loop.steer("c")` | `_drainPendingSteer()` 返 `"a\nb\nc"` | unit | `HermesAgentLoopSteerTest#TC-AGENT-036-c multiple steers concatenate with newline` 🟢 |
+| TC-AGENT-036-d | R-AGENT-036 | `loop.steer("x")` 后连续两次调 `_drainPendingSteer()` | 第一次返 `"x"`，第二次返 null（原子读清空） | unit | `HermesAgentLoopSteerTest#TC-AGENT-036-d drain returns and clears atomically` 🟢 |
+| TC-AGENT-036-e | R-AGENT-036 | 多线程并发 `loop.steer(text_i)` 100 次（不同 text） | drain 出来的合并文本含全部 100 个 text（不丢字符不交错）；行数 = 100 | unit (multithread) | `HermesAgentLoopSteerTest#TC-AGENT-036-e concurrent steer is thread-safe` 🟢 |
+| TC-AGENT-036-f | R-AGENT-036 | 构造 messages = `[{role:"user"...}, {role:"assistant", tool_calls:[...]}, {role:"tool", content:"r1"}]`；`loop.steer("hi")`；调 `loop._applyPendingSteerToToolResults(messages, 1)` | `messages[2]["content"] == "r1\n\nUser guidance: hi"` | unit | `HermesAgentLoopSteerTest#TC-AGENT-036-f apply injects to last role tool with marker` 🟢 |
+| TC-AGENT-036-g | R-AGENT-036 | tail 内**无** `role:"tool"` 消息（如全 user/assistant）；`loop.steer("hi")`；调 `_applyPendingSteerToToolResults(messages, 0)` | messages 不被修改；`_drainPendingSteer()` 返 `"hi"`（回填） | unit | `HermesAgentLoopSteerTest#TC-AGENT-036-g apply with no tool tail re-stashes text` 🟢 |
+| TC-AGENT-036-h | R-AGENT-036 | tool message content 是 `List<Map>`（多模态 block）：`[{type:"text", text:"r1"}]`；`loop.steer("hi")`；调 `_applyPendingSteerToToolResults(messages, 1)` | tool message content 仍为 List；新增了一个 `{type:"text", text:"User guidance: hi"}` block | unit | `HermesAgentLoopSteerTest#TC-AGENT-036-h apply preserves multimodal content blocks` 🟢 |
+| TC-AGENT-036-i | R-AGENT-036 | `loop.steer("x")` 后调 `loop.clearPendingSteer()` | `_drainPendingSteer()` 返 null（hard cancel 清掉 pending steer） | unit | `HermesAgentLoopSteerTest#TC-AGENT-036-i clearPendingSteer drops pending text` 🟢 |
+
+跑已落地 TC：
+
 状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
 
 ---

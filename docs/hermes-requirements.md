@@ -1454,3 +1454,47 @@ CONFIG 原先的三条 R-CONFIG-001..003（Preferences / ConfigBuilder / Control
   - 在 jobs.json 里能看到 `origin = {platform: "feishu", chat_id: ..., thread_id: ...}` + `deliver = "origin"`
   - 16 分钟后飞书原会话**真的**收到 ai 消息（这是 R-AGENT-033 + R-AGENT-034 + R-AGENT-035 三 R 闭环的最终验收）
   - GatewayFileLogger 里能看到 `dispatchOutgoing: delivered platform=feishu chatId=... len=...` INFO 行
+
+### R-AGENT-036: HermesAgentLoop 增加 `steer()` 接口（mid-turn 用户引导内核）
+**来源**:
+- 用户 2026-06-16 提需求："插话功能 — agent 正常处理事情的时候，可以插入新的对话"
+- Python 上游 `reference/hermes-agent/run_agent.py:945-953`（字段声明）+ `:3608-3642`（`steer()` 方法）+ `:3644-3658`（`_drain_pending_steer()`）+ `:3660-3721`（`_apply_pending_steer_to_tool_results()`）+ `:3599-3606`（`clear_interrupt()` 清空 pending steer）
+- 用户决定：P4 四档全对齐（interrupt + queue + steer + bypass-cmd）；执行顺序：插话先，微信后
+
+**背景**:
+- 当前 `HermesAgentLoop` 只有 `beforeNextTurn` hook（`AgentLoop.kt:178/310-320`），无法在「tool batch 进行中」注入用户引导
+- Python 上游用 `_pending_steer` + `_pending_steer_lock` 实现并发安全的"待注入文本槽"，agent 跑完一批 tool 后从最后一条 `role:"tool"` 消息尾部追加 `"\n\nUser guidance: {text}"`，保持 message-role alternation 不被破坏（不插入新的 user turn）
+- **本 R 只加接口和字段，不加消费点** —— 6 个消费点放在 R-AGENT-037。这样让本 R 单测可独立断言 steer / drain / lock 行为，commit 粒度小
+
+**架构合规**:
+- 只动 1 个 hermes-android 模块文件：`AgentLoop.kt`
+- 不动 app 模块（消费方在 R-AGENT-037 才接入；UI 暴露在 R-UI-062）
+- ThreadLocal 不适用（steer 是「跨线程注入」的反向语义：caller 在 gateway 线程，consumer 在 agent loop 线程），用 `synchronized + @Volatile` 而非 `ThreadLocal`
+
+**行为**:
+- **`HermesAgentLoop` 新增字段**（class body）:
+  - `@Volatile private var _pendingSteer: String? = null` — 待注入文本槽
+  - `private val _pendingSteerLock = Any()` — 并发锁
+- **`HermesAgentLoop` 新增方法**:
+  1. `fun steer(text: String): Boolean` —— public，对齐 Python `run_agent.py:3608-3642`
+     - 空串/空白返 false，不改 `_pendingSteer`
+     - 非空 → `text.trim()`，在 lock 内 append（已有内容用 `"\n"` 拼接，否则覆盖）
+     - 返 true
+  2. `internal fun _drainPendingSteer(): String?` —— 对齐 Python `:3644-3658`
+     - lock 内原子读取 + 清空，返回旧值
+  3. `internal fun _applyPendingSteerToToolResults(messages: MutableList<Map<String, Any?>>, numToolMsgs: Int)` —— 对齐 Python `:3660-3721`
+     - `numToolMsgs <= 0` 或 `messages.isEmpty()` 直接返
+     - drain 出 steer text（null 则返）
+     - 从 `messages` 末尾向前扫 `numToolMsgs+1` 个位置找 `role == "tool"`，找到则在其 `content` 末尾追加 marker
+       - String content → `existing + "\n\nUser guidance: {text}"`
+       - List<Map> 多模态 → append `{type:"text", text:"User guidance: {text}"}` block（Anthropic 兼容路径）
+     - 找不到 tool 消息 → 文本回填 `_pendingSteer`（让外层 fallback 当做下一轮 user message 投递）
+     - 落地后 `Log.i` 一行（含字符数 + 前 120 字预览）
+  4. `fun clearPendingSteer()` —— public，给 `EnhancedAIService.cancelConversation` 调，对齐 Python `:3599-3606`
+     - lock 内置 null
+
+**验收**:
+- **A. 编译自检**：`./gradlew :hermes-android:compileDebugKotlin :hermes-android:compileDebugUnitTestKotlin` 全绿
+- **B. 单测**：新增 `HermesAgentLoopSteerTest`（hermes-android 模块），覆盖 TC-AGENT-036-a..i 全套
+- **C. §2 四件套**：维持零；`scan_functional_stubs` 不增（本 R 是新功能，不改既有 stub）
+- **D. 不接入消费点**：本 R 故意不调 `_applyPendingSteerToToolResults` —— 验收通过 unit-call 直接触发，不走 turn-loop。turn-loop 接入在 R-AGENT-037
