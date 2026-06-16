@@ -1135,21 +1135,34 @@ inline `<think>` 提取仅作 fallback（兼容老历史）。
 | TC-GW-102-a | R-GW-003 | markdown >1 段 | 按段拆分 | unit | `WeixinMarkdownTest#chunk split` ✅ |
 | TC-GW-103-a | R-GW-003 | `qrLogin()` 成功 | 账号持久化 + 返 state | integration | `WeixinPersistenceTest#qr login persists` ✅ |
 
+### Weixin.kt — bugfix-1：4 处 Python 上游对齐偏差（无新需求）
+
+背景: bugfix territory（§0.1：bug 是代码没满足既有需求 R-GW-003 "消息收发对齐 Python 上游"）。本节只动 ②③，不动 ①。
+
+| TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
+|---|---|---|---|---|---|
+| TC-GW-111-a | R-GW-003 | session expired 分支 sleep 时长 | `delay(10 * 60_000L)` 对齐 Python `weixin.py:1258` `asyncio.sleep(600)`；不再含 `5 * 60_000L` | unit | `WeixinSessionExpirySleepTest#session expired sleeps 10 min` 🟢 |
+| TC-GW-112-a | R-GW-003 | `extra={"account_id": "abc"}` + 无 `login_token` + hermesHome 含持久化 token 的 account file | 构造 Weixin 后 `_loginToken` / `_baseUrl` 从持久化文件回填（对齐 Python `weixin.py:1166-1170`） | unit | `WeixinAccountFallbackTest#fallback loads persisted token` 🟢 |
+| TC-GW-113-a | R-GW-003 | `connect()` 在 `checkWeixinRequirements()=false` 时（mock 重写为 false） | 立即返 false 且发出 fatal log（对齐 Python `weixin.py:1183-1187`），不启 poll job | unit | `WeixinConnectRequirementsTest#connect rejects when requirements fail` 🟢 |
+| TC-GW-114-a | R-GW-003 | `send(chatId, content)` 构造的 `msg` JSON | 含 `from_user_id=""` 字段（对齐 Python `weixin.py:432`） | unit | `WeixinSendPayloadTest#payload includes empty from_user_id` 🟢 |
+
 ### Weixin.kt — 入站媒体采集（bugfix：图片消息丢失）
 
 背景: 用户在微信里发图后，agent 端只收到空文本（或纯文字部分）。Python 上游 `gateway/platforms/weixin.py:1325-1357` 在 `_process_incoming_event` 里对 `item_list` 同时做 `_extract_text` 与 `_collect_media`，把下载并解密后的本地路径塞进 `MessageEvent.media_urls`/`media_types`。Kotlin `Weixin._handleInbound`（`Weixin.kt:310-356`）只调 `_extractText`，且当 `text.isBlank()` 时直接 `return`，导致纯图片入站被无声丢弃；即便 `MessageEvent.mediaUrls`/`mediaTypes` 字段存在（`Base.kt:131,133`），也从不被填充。
 
 修复方向（合规于 R-GW-003 既有需求"消息收发对齐 Python 上游"）: 1) 翻译 Python `_collect_media` / `_download_image` / `_download_video` / `_download_file` / `_download_voice` 子集（首批至少 image，覆盖最常见用例）到 Kotlin；2) `_handleInbound` 在 text 为空但 mediaPaths 非空时也建 `MessageEvent`；3) `MessageEvent` 携带 `mediaUrls`/`mediaTypes` 透传给 `agentRunner`。本节 TC 是 bugfix 的失败侧捕获 + 修复后回归保险。
 
+> **状态说明（2026-06-16）**: 374889b6 commit 留下的 WIP 红测 (`WeixinMediaCollectTest` / `RunAgentRunnerMediaTest`) 引用了尚未实现的 top-level 符号 (`ITEM_*` / `_collectMedia` / `MediaDownloader` 接口) 与 7 参版本的 `agentRunner`，在后续 commit 让 `agentRunner` 签名前进后成了**编译毒丸**——卡住整个 `:hermes-android:testDebugUnitTest`。本会话已撤回这两个测试文件（保留 TC 描述作为活档），状态退回 🔴。R-GW-003 媒体修复立项时按 §0.1 ③ 重新落地测试代码 + 生产代码并双绿退出。
+
 | TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
 |---|---|---|---|---|---|
-| TC-GW-104-a | R-GW-003 | `ITEM_*` 常量值 | `ITEM_TEXT=1, ITEM_IMAGE=2, ITEM_VOICE=3, ITEM_FILE=4, ITEM_VIDEO=5`（与 Python `weixin.py:121-125` 一致） | unit | `WeixinMediaCollectTest#item_constants_match_python` 🟡 |
-| TC-GW-105-a | R-GW-003 | `_handleInbound` 收到只含 `ITEM_IMAGE` item 的 `item_list`（无 text item） | 不再在 `text.isBlank()` 处提前 return；`handleMessage` 收到 `MessageEvent` 且 `mediaUrls` 包含 1 个本地 cache 路径，`mediaTypes=["image/jpeg"]` | unit | `WeixinMediaCollectTest#image_only_inbound_does_not_drop` 🟡 |
-| TC-GW-106-a | R-GW-003 | `_handleInbound` 收到 text + 1 张图（混合 item_list） | `MessageEvent.text` = 文本部分；`mediaUrls.size==1`；`mediaTypes==["image/jpeg"]` | unit | `WeixinMediaCollectTest#text_plus_image_keeps_both` 🟡 |
-| TC-GW-107-a | R-GW-003 | `_handleInbound` 收到 `ref_msg.message_item.type==ITEM_IMAGE`（被引用的图） | ref 图也进 `mediaUrls`（与 Python 上游 `weixin.py:1331-1334` 行为一致） | unit | `WeixinMediaCollectTest#ref_message_image_collected` 🟡 |
-| TC-GW-108-a | R-GW-003 | `_collectMedia` 给 `ITEM_VIDEO` / `ITEM_FILE` / `ITEM_VOICE` 分别构造 stub item | 各类型 mediaType 字符串与 Python `_collect_media` 表对齐（`video/mp4` / 文件 mime / `audio/silk`）；缺少必填字段时 path 为 null 不入列表 | unit | `WeixinMediaCollectTest#non_image_branches_match_python_table` 🟡 |
-| TC-GW-109-a | R-GW-003 | `_downloadImage` 解密失败抛异常 | 不传播给 `_handleInbound`；返回 null；event 仍可被构造（媒体只是少一项） | unit | `WeixinMediaCollectTest#download_failure_does_not_crash_inbound` 🟡 |
-| TC-GW-110-a | R-GW-003 | `MessageEvent` 经 `Run.kt` `agentRunner` 调用点 | `event.mediaUrls` / `event.mediaTypes` 被透传到 `agentRunner` 的对应参数（验证 Run.kt 的 dispatch lambda 不再丢弃媒体字段） | unit | `RunAgentRunnerMediaTest#mediaUrls_passthrough` 🟡 |
+| TC-GW-104-a | R-GW-003 | `ITEM_*` 常量值 | `ITEM_TEXT=1, ITEM_IMAGE=2, ITEM_VOICE=3, ITEM_FILE=4, ITEM_VIDEO=5`（与 Python `weixin.py:121-125` 一致） | unit | 🔴 待重写（撤回 374889b6） |
+| TC-GW-105-a | R-GW-003 | `_handleInbound` 收到只含 `ITEM_IMAGE` item 的 `item_list`（无 text item） | 不再在 `text.isBlank()` 处提前 return；`handleMessage` 收到 `MessageEvent` 且 `mediaUrls` 包含 1 个本地 cache 路径，`mediaTypes=["image/jpeg"]` | unit | 🔴 待重写（撤回 374889b6） |
+| TC-GW-106-a | R-GW-003 | `_handleInbound` 收到 text + 1 张图（混合 item_list） | `MessageEvent.text` = 文本部分；`mediaUrls.size==1`；`mediaTypes==["image/jpeg"]` | unit | 🔴 待重写（撤回 374889b6） |
+| TC-GW-107-a | R-GW-003 | `_handleInbound` 收到 `ref_msg.message_item.type==ITEM_IMAGE`（被引用的图） | ref 图也进 `mediaUrls`（与 Python 上游 `weixin.py:1331-1334` 行为一致） | unit | 🔴 待重写（撤回 374889b6） |
+| TC-GW-108-a | R-GW-003 | `_collectMedia` 给 `ITEM_VIDEO` / `ITEM_FILE` / `ITEM_VOICE` 分别构造 stub item | 各类型 mediaType 字符串与 Python `_collect_media` 表对齐（`video/mp4` / 文件 mime / `audio/silk`）；缺少必填字段时 path 为 null 不入列表 | unit | 🔴 待重写（撤回 374889b6） |
+| TC-GW-109-a | R-GW-003 | `_downloadImage` 解密失败抛异常 | 不传播给 `_handleInbound`；返回 null；event 仍可被构造（媒体只是少一项） | unit | 🔴 待重写（撤回 374889b6） |
+| TC-GW-110-a | R-GW-003 | `MessageEvent` 经 `Run.kt` `agentRunner` 调用点 | `event.mediaUrls` / `event.mediaTypes` 被透传到 `agentRunner` 的对应参数（验证 Run.kt 的 dispatch lambda 不再丢弃媒体字段） | unit | 🔴 待重写（撤回 374889b6） |
 
 ### WeCom 簇
 
