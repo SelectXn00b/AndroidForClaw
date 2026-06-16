@@ -86,6 +86,39 @@ class GatewayRunner(
     private val _agentCacheLock = Any()
 
     /**
+     * R-GATEWAY-035: gateway drain-time busy-input behavior. Either `"interrupt"` (default)
+     * or `"queue"`. Mirrors Python `gateway/run.py:608, 631`.
+     *
+     * Loaded eagerly in init from env `HERMES_GATEWAY_BUSY_INPUT_MODE` → `config.extra["busy_input_mode"]`
+     * → fallback `"interrupt"`. See `_loadBusyInputMode()`. Only consumed by `queueDuringDrainEnabled()`
+     * today; full drain reject/queue path lands in R-GATEWAY-037.
+     */
+    @Volatile private var _busyInputMode: String = "interrupt"
+
+    init {
+        // R-GATEWAY-035: resolve drain-time busy-input behavior at construction time.
+        _busyInputMode = _loadBusyInputMode()
+    }
+
+    /**
+     * R-GATEWAY-035: Load drain-time busy-input behavior. Mirrors Python
+     * `gateway/run.py:1389-1402`.
+     *
+     * Priority: env `HERMES_GATEWAY_BUSY_INPUT_MODE` → `config.extra["busy_input_mode"]` →
+     * default `"interrupt"`. Trim + lowercase before compare; only literal `"queue"` flips
+     * the mode, everything else (and any unset/blank tier) falls through to `"interrupt"`.
+     */
+    private fun _loadBusyInputMode(): String {
+        val envMode = System.getenv("HERMES_GATEWAY_BUSY_INPUT_MODE")?.trim()?.lowercase().orEmpty()
+        val mode = if (envMode.isNotEmpty()) envMode
+                   else config.extra["busy_input_mode"]?.toString()?.trim()?.lowercase().orEmpty()
+        return if (mode == "queue") "queue" else "interrupt"
+    }
+
+    /** R-GATEWAY-035: Read current drain-time busy-input mode. */
+    fun busyInputMode(): String = _busyInputMode
+
+    /**
      * Bridge into the Android [HermesAgentLoop]. Set by the app-side controller
      * after construction. Text in, full assistant reply out. When null (or it
      * throws), the gateway falls back to the placeholder string.
@@ -675,14 +708,15 @@ class GatewayRunner(
         else -> "Waiting for messages"
     }
 
-    /** Whether queuing is enabled during drain. */
-    fun queueDuringDrainEnabled(): Boolean =
-        config.extra["queue_during_drain"]?.let {
-            when (it.toString().lowercase()) {
-                "true", "1", "yes" -> true
-                else -> false
-            }
-        } ?: false
+    /**
+     * Whether queuing is enabled during drain.
+     *
+     * R-GATEWAY-035: realigned to read `_busyInputMode` (single source of truth)
+     * instead of legacy `config.extra["queue_during_drain"]`. Mirrors Python
+     * `gateway/run.py:1230-1231` (`_busy_input_mode == "queue"`). The
+     * `_restart_requested` guard from Python is added in R-GATEWAY-037.
+     */
+    fun queueDuringDrainEnabled(): Boolean = _busyInputMode == "queue"
 
     // ── Voice mode (ported from gateway/run.py) ─────────────────────
 

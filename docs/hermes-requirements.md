@@ -1535,3 +1535,61 @@ Python 上游有 6 个消费点（parallel 路径 2 个 + sequential 路径 2 �
 - **C. §2 四件套**：维持零；`scan_functional_stubs` 不增
 - **D. 不破坏 R-AGENT-036**：`HermesAgentLoopSteerTest` 全套保持绿
 - **E. 不破坏既有 turn-loop**：`_pendingSteer == null` 时所有消费点 short-circuit 零开销，既有行为完全不变
+
+---
+
+### R-GATEWAY-035: GatewayRunner 加载 `_busyInputMode` 字段
+
+**来源**:
+- Python `gateway/run.py:217-218`（`_display_cfg["busy_input_mode"]` → 写到 `HERMES_GATEWAY_BUSY_INPUT_MODE` env）
+- Python `gateway/run.py:608`（`_busy_input_mode: str = "interrupt"` 类默认）
+- Python `gateway/run.py:631`（构造时 `self._busy_input_mode = self._load_busy_input_mode()`）
+- Python `gateway/run.py:1389-1402`（`_load_busy_input_mode` loader：env 优先 → config.yaml → "interrupt"，唯一接受 "queue" 切档）
+- Python `gateway/run.py:1230-1231`（消费点：`_queue_during_drain_enabled` 仅在 `_restart_requested && mode == "queue"` 返 true）
+
+**为什么要做这个**:
+当前 Kotlin `GatewayRunner.queueDuringDrainEnabled()` 读 `config.extra["queue_during_drain"]`，**与 Python 不一致**——Python 用单一 `_busy_input_mode` 字段统一控制 drain 期与（未来）busy 期行为。本 R 让 Kotlin 加载这个字段、对齐 Python loader 优先级（env → config.extra → 默认 "interrupt"），并把现有 `queueDuringDrainEnabled()` 切到读这个字段，使 R-GATEWAY-037（drain reject/queue 完整路径）能直接消费它。
+
+**注意**：
+- Python 上游里 `_busy_input_mode` **只**在 `_queue_during_drain_enabled` 里被消费（normal-busy 路径永远 interrupt）。本 R 不动 normal-busy 路径，只把字段引入 + 对齐 `queueDuringDrainEnabled()` 实现。
+- 计划文档 `virtual-foraging-ripple.md` 中 §二 R-GATEWAY-035 设想了"normal-busy 也分流到 queue"，但与 Python 实现不符。**对齐 Python 优先**——只动 drain 路径的语义来源。
+
+**改动清单**:
+1. **`GatewayRunner` 字段**（Run.kt class 体内，`_pendingEvents` 附近）：
+   ```kotlin
+   /** R-GATEWAY-035: gateway drain-time busy-input behavior. Either "interrupt" (default) or "queue".
+    *  Mirrors Python `gateway/run.py:608, 631`. */
+   @Volatile private var _busyInputMode: String = "interrupt"
+   ```
+2. **构造时初始化**（`init {}` 块或 `start()` 顶部，对齐 Python `:631`）：
+   ```kotlin
+   _busyInputMode = _loadBusyInputMode()
+   ```
+3. **新增 loader**（class 体内或 companion 内 static helper）：
+   ```kotlin
+   /** R-GATEWAY-035: Load drain-time busy-input behavior. Mirrors Python `:1389-1402`.
+    *  Priority: env `HERMES_GATEWAY_BUSY_INPUT_MODE` → `config.extra["busy_input_mode"]` → "interrupt".
+    *  Only literal "queue" (lowercase, trimmed) flips to queue; everything else → "interrupt". */
+   private fun _loadBusyInputMode(): String {
+       val envMode = System.getenv("HERMES_GATEWAY_BUSY_INPUT_MODE")?.trim()?.lowercase() ?: ""
+       val mode = if (envMode.isNotEmpty()) envMode
+                  else (config.extra["busy_input_mode"]?.toString()?.trim()?.lowercase() ?: "")
+       return if (mode == "queue") "queue" else "interrupt"
+   }
+   ```
+4. **`queueDuringDrainEnabled()` 重写**（line ~679，从读 `extra["queue_during_drain"]` 切到读 `_busyInputMode`，对齐 Python `:1230-1231`）：
+   ```kotlin
+   fun queueDuringDrainEnabled(): Boolean = _busyInputMode == "queue"
+   ```
+   注意：Python `:1231` 还有 `_restart_requested` 守卫——这个由 R-GATEWAY-037 加（本 R 只动语义来源）。
+5. **getter 暴露**（供 R-GATEWAY-037 / 测试使用）：
+   ```kotlin
+   /** R-GATEWAY-035: Read current busy-input mode. */
+   fun busyInputMode(): String = _busyInputMode
+   ```
+
+**验收**:
+- **A. 编译自检**：`./gradlew :hermes-android:compileDebugKotlin :hermes-android:compileDebugUnitTestKotlin` 全绿
+- **B. 单测**：新增 `GatewayBusyInputModeTest`（hermes-android 模块），覆盖 TC-GATEWAY-035-a..d
+- **C. §2 四件套**：维持零；`scan_functional_stubs` 不增
+- **D. 不破坏既有 drain 行为**：`queueDuringDrainEnabled()` 默认依然返 false（默认 mode = interrupt）；既有调用方无需改

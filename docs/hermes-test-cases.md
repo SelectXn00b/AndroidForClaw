@@ -1482,6 +1482,27 @@ R-AGENT-037 把 R-AGENT-036 的 `_applyPendingSteerToToolResults` / `_drainPendi
 
 ---
 
+## 域 GATEWAY — Busy-Input Mode (R-GATEWAY-035)
+
+R-GATEWAY-035 给 `GatewayRunner` 加 `_busyInputMode: String` 字段（默认 `"interrupt"`，可切 `"queue"`），并把现有 `queueDuringDrainEnabled()` 实现切到读这个字段。对齐 Python `gateway/run.py:608, 631, 1230-1231, 1389-1402`。本 R **只做字段加载 + getter 暴露 + queueDuringDrainEnabled 重写**——drain 路径完整 reject/queue 行为在 R-GATEWAY-037。
+
+| TC ID | R-ID | 输入 | 期望输出 | 类型 | 状态 |
+|---|---|---|---|---|---|
+| TC-GATEWAY-035-a | R-GATEWAY-035 | 既无 env `HERMES_GATEWAY_BUSY_INPUT_MODE`，也无 `config.extra["busy_input_mode"]`，构造 `GatewayRunner` | `busyInputMode() == "interrupt"`；`queueDuringDrainEnabled() == false` | unit | `GatewayBusyInputModeTest#TC-GATEWAY-035-a default mode is interrupt` 🟢 |
+| TC-GATEWAY-035-b | R-GATEWAY-035 | `config.extra["busy_input_mode"] = "queue"`，无 env，构造 runner | `busyInputMode() == "queue"`；`queueDuringDrainEnabled() == true` | unit | `GatewayBusyInputModeTest#TC-GATEWAY-035-b config queue flips mode` 🟢 |
+| TC-GATEWAY-035-c | R-GATEWAY-035 | env `HERMES_GATEWAY_BUSY_INPUT_MODE=queue`，且 `config.extra["busy_input_mode"]="interrupt"` | env 优先：`busyInputMode() == "queue"`；`queueDuringDrainEnabled() == true` | unit | `GatewayBusyInputModeTest#TC-GATEWAY-035-c env overrides config` 🟢 |
+| TC-GATEWAY-035-d | R-GATEWAY-035 | 非法值（`config.extra["busy_input_mode"] = "INVALID"` / `"interrupt"` / 大写 `"QUEUE"`、其它 `"foo"`） | 非 `"queue"`（lowercase trim 后） → 全部归类为 `"interrupt"`；`"QUEUE"` 大写 → trim+lowercase 后命中 `"queue"` 切档 | unit | `GatewayBusyInputModeTest#TC-GATEWAY-035-d only literal queue flips mode` 🟢 |
+
+跑已落地 TC：
+
+```bash
+./gradlew :hermes-android:testDebugUnitTest --tests "com.xiaomo.hermes.hermes.gateway.GatewayBusyInputModeTest"
+```
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — Telegram inbound voice/audio + STT (R-GW-008 + R-AGENT-032)
 
 R-GW-008 + R-AGENT-032 是一对孪生需求，目的是把 Telegram 入站的 voice / audio 消息**真正下载到本地**并通过 OpenAI Whisper STT **自动转写为文本**，让 agent 不再只看到 `[Voice: <fileId>]` 占位字符串。本轮**只动 voice / audio 两个分支**——photo / document / video / sticker 维持现状（继续塞 fileId），后续在新 R 中处理（用户决策："本轮只动 audio/voice STT，图片下次 R"）。
