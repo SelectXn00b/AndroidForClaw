@@ -6,7 +6,10 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -29,8 +32,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.ai.assistance.operit.R
 import com.ai.assistance.operit.data.model.Memory
+import com.ai.assistance.operit.data.repository.MemoryArchiver
 import com.ai.assistance.operit.ui.features.memory.screens.graph.model.Edge
 import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -40,21 +45,28 @@ fun MemoryInfoDialog(
         onDismiss: () -> Unit,
         onEdit: () -> Unit,
         onDelete: () -> Unit,
-        onTogglePersistent: (Boolean) -> Unit = {}
+        onTogglePersistent: (Boolean) -> Unit = {},
+        coldArchiveEntries: List<MemoryArchiver.ArchiveEntry> = emptyList()
 ) {
     val scrollState = rememberScrollState()
     val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()) }
     val tagNames = memory.tags.map { it.name }
     val isPersistent = tagNames.contains("#persistent_instruction")
+    // R-AGENT-041-c: root 节点（含 `#auto_root` tag）展示冷归档区
+    val isRootNode = tagNames.contains("#auto_root")
 
     AlertDialog(
             onDismissRequest = onDismiss,
             title = { Text(text = stringResource(R.string.memory_details_title)) },
             text = {
                 Column(
-                        modifier = Modifier.verticalScroll(scrollState),
+                        modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    Column(
+                            modifier = Modifier.verticalScroll(scrollState),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                     Text("${stringResource(R.string.memory_title)}: ${memory.title}", style = MaterialTheme.typography.titleMedium)
                     HorizontalDivider()
                     Text(stringResource(R.string.memory_content) + ":", style = MaterialTheme.typography.titleSmall)
@@ -112,6 +124,38 @@ fun MemoryInfoDialog(
                             "${stringResource(R.string.memory_updated_at)}: ${dateFormat.format(memory.updatedAt)}",
                             style = MaterialTheme.typography.bodySmall
                     )
+                    }
+                    // R-AGENT-041-c: root 节点详情页冷归档区（按 chatId 分组、组内 ts 倒序）
+                    if (isRootNode && coldArchiveEntries.isNotEmpty()) {
+                        HorizontalDivider()
+                        Text(
+                                stringResource(R.string.memory_cold_archive_section_title),
+                                style = MaterialTheme.typography.titleSmall
+                        )
+                        val grouped = coldArchiveEntries.groupBy { it.chatId }
+                        val flatRows: List<Pair<String, MemoryArchiver.ArchiveEntry>> =
+                                grouped.entries.flatMap { (chatId, list) ->
+                                    list.sortedByDescending { it.ts }.map { chatId to it }
+                                }
+                        LazyColumn(
+                                modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            items(flatRows) { (chatId, entry) ->
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    Text(
+                                            text = "${dateFormat.format(Date(entry.ts))} · chat=$chatId · ${entry.source}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                            text = entry.content.take(200),
+                                            style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             },
             confirmButton = {

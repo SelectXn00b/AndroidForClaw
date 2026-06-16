@@ -203,6 +203,63 @@ class MemoryArchiver(
         return File(context.filesDir, "hermes/memory_archive/${bucket.dirName}")
     }
 
+    /**
+     * R-AGENT-041-c: 读冷归档 jsonl。
+     *
+     * 列出 `archiveDir(bucket)` 下所有 `*.jsonl` 文件，按文件名 desc（yyyy-MM-DD 字典序 = 时间序，
+     * 最近日期在前），逐个 readText 并 parseArchiveJsonl 解析，所有 entries 拼接返回。
+     * 单文件 IO 失败吞掉走 try / catch，UI 平滑降级（不能拖垮详情页）。
+     */
+    fun loadColdArchive(bucket: ArchiveBucket): List<ArchiveEntry> {
+        val dir = archiveDir(bucket)
+        if (!dir.exists() || !dir.isDirectory) return emptyList()
+        val files = (dir.listFiles { f -> f.isFile && f.name.endsWith(".jsonl") } ?: emptyArray())
+            .toList()
+            .sortedByDescending { it.name }
+        val out = ArrayList<ArchiveEntry>()
+        for (file in files) {
+            try {
+                val text = file.readText()
+                out.addAll(parseArchiveJsonl(text))
+            } catch (t: Throwable) {
+                AppLogger.w(
+                    TAG,
+                    "R-AGENT-041-c: load cold archive failed for ${file.absolutePath}: ${t.message}",
+                )
+            }
+        }
+        return out
+    }
+
+    /**
+     * R-AGENT-041-c: 反查 root memory 对应的 bucket。
+     *
+     * root 节点身上有两条 tag：bucket 专属 root tag（`#auto_summary_root` 等）+ 通用 `#auto_root`
+     * 标识 tag。本函数检查 memory.tags 里命中哪个 bucket 的 rootTag，命中即返回；非 root 节点返回 null。
+     */
+    fun bucketForRootMemory(memory: Memory): ArchiveBucket? {
+        val tagNames = memory.tags.map { it.name }.toSet()
+        if (!tagNames.contains("#auto_root")) return null
+        for (bucket in ArchiveBucket.values()) {
+            if (tagNames.contains(bucket.rootTag)) return bucket
+        }
+        return null
+    }
+
+    /**
+     * R-AGENT-041-c: 冷归档行实体。schema 来源 R-AGENT-038 锁定的 jsonl 字段：
+     *  - `ts` epoch ms
+     *  - `chat_id` 来源会话 id
+     *  - `content` 单行原文
+     *  - `source` bucket sourceLabel（auto_summary / auto_extracted / auto_summary_id）
+     */
+    data class ArchiveEntry(
+        val ts: Long,
+        val chatId: String,
+        val content: String,
+        val source: String,
+    )
+
     private fun parseLineToJson(line: String, bucket: ArchiveBucket): JSONObject {
         // 解析回 ts / chat / content；如果格式异常则把整行当 content，用当前时间。
         val matcher = LINE_PATTERN.matchEntire(line)
@@ -291,4 +348,42 @@ class MemoryArchiver(
                 }
         }
     }
+}
+
+/**
+ * R-AGENT-041-c: 解析 jsonl 文本（每行一条 JSON）为 `List<ArchiveEntry>`。
+ *
+ * 容忍坏行：
+ *  - 空白 / 空行：跳过
+ *  - 非 JSON / JSON 解析失败：跳过
+ *  - 缺关键字段（`ts` / `chat_id` / `content` / `source` 任一缺失）：跳过
+ *
+ * 顶层纯函数，无 Android 依赖，可直接单测覆盖（`MemoryArchiverColdArchiveParseTest`）。
+ */
+fun parseArchiveJsonl(text: String): List<MemoryArchiver.ArchiveEntry> {
+    if (text.isBlank()) return emptyList()
+    val out = ArrayList<MemoryArchiver.ArchiveEntry>()
+    for (rawLine in text.split('\n')) {
+        val line = rawLine.trim()
+        if (line.isEmpty()) continue
+        try {
+            val obj = JSONObject(line)
+            if (!obj.has("ts") || !obj.has("chat_id") ||
+                !obj.has("content") || !obj.has("source")
+            ) {
+                continue
+            }
+            out.add(
+                MemoryArchiver.ArchiveEntry(
+                    ts = obj.getLong("ts"),
+                    chatId = obj.getString("chat_id"),
+                    content = obj.getString("content"),
+                    source = obj.getString("source"),
+                )
+            )
+        } catch (t: Throwable) {
+            // 坏行：跳过
+        }
+    }
+    return out
 }

@@ -733,12 +733,84 @@ MemoryScreen `#auto_summary` 列表为空（root 节点保留）；`#auto_summar
 
 ---
 
-#### R-AGENT-041-c: root 节点详情页查归档 jsonl（占位）
+#### R-AGENT-041-c: root 节点详情页查归档 jsonl
 
-**性质**: 占位。当前记录工程意图：
-- root 节点详情页查归档 jsonl 列表（按日期分组展示冷归档行）。
+**来源**: R-AGENT-038 阶段 1 设计闭环。`MemoryArchiver` 已经把每条 summary / extracted / summary_id 写到
+`<filesDir>/hermes/memory_archive/<bucket.dirName>/<yyyy-MM-DD>.jsonl` 冷归档文件，但是 UI 端**完全
+没有读路径** —— 用户在 MemoryScreen 点开 root 节点，只看见 root.content（聚合摘要文本），看不到底层
+原始的 jsonl 行。冷归档等于沉默。041-c 把 root 节点详情页接通冷归档读路径：判定当前节点是 root 时，
+拉对应 bucket 的 jsonl，按 `chat_id` 分组、ts 倒序展示。
 
-**前置依赖**: R-AGENT-041-b 完成。
+**性质**: 新功能（用户明确提出过"详情页能看冷归档"，且这是 R-AGENT-038 数据闭环的最后一公里）。
+
+**前置依赖**: R-AGENT-038（archiver 写 jsonl）+ R-AGENT-040（root 节点存在）。**不**依赖 041-b ——
+041-b 是 MemoryScreen 列表层的视觉优化，与详情页冷归档展示正交；先做 041-c 价值更大（数据闭环 vs
+视觉打磨）。
+
+**Python 上游**: 无。Hermes Python 上游不绘制 UI，UI 层是 Android 独有。jsonl schema 由 R-AGENT-038
+锁定（`{ts: Long, chat_id: String, content: String, source: String}`）。
+
+**架构落点**:
+
+1. **数据层 — `MemoryArchiver` 增加读 API**（`data/repository/MemoryArchiver.kt`）：
+   - 新顶层纯函数 `parseArchiveJsonl(text: String): List<ArchiveEntry>` —— 解析 jsonl 文本、容忍坏行
+     （单行 JSON 异常跳过、不抛）。
+   - 新 data class `MemoryArchiver.ArchiveEntry(ts: Long, chatId: String, content: String, source: String)`。
+   - 新 instance method `MemoryArchiver.loadColdArchive(bucket: ArchiveBucket): List<ArchiveEntry>` ——
+     列出 `archiveDir(bucket)` 下所有 `*.jsonl` 文件，按文件名 desc（最近日期在前）排序，逐个 readText
+     并 parseArchiveJsonl，所有 entries 拼接返回；IO 异常吞掉走 try / catch（READ 路径不能拖垮 UI）。
+   - 新 util `MemoryArchiver.bucketForRootMemory(memory: Memory): ArchiveBucket?` —— 反查 root 节点
+     对应的 bucket（看 memory.tags 里哪个等于 `ArchiveBucket.SUMMARY.rootTag` / `.EXTRACTED.rootTag` /
+     `.SUMMARY_ID.rootTag`）。非 root 节点返回 null。
+
+2. **VM 层 — `MemoryViewModel` 加冷归档 state**（`ui/features/memory/viewmodel/MemoryViewModel.kt`）：
+   - 新 StateFlow `coldArchiveEntries: StateFlow<List<MemoryArchiver.ArchiveEntry>>`（默认 `emptyList()`）。
+   - `selectNode(node)` 内：识别到 root 时（`bucketForRootMemory(node) != null`）→
+     `viewModelScope.launch(Dispatchers.IO)` 调 `loadColdArchive(bucket)` 并 emit 到 `_coldArchiveEntries`；
+     非 root → emit emptyList 清掉。
+   - `clearSelection()` 同步清掉 `_coldArchiveEntries`。
+
+3. **UI 层 — `MemoryInfoDialog` 加 root 分支**（`ui/features/memory/screens/dialogs/MemoryDialogs.kt`）：
+   - Composable 新增参数 `coldArchiveEntries: List<MemoryArchiver.ArchiveEntry>`（默认 emptyList）。
+   - 节点 tags 包含 `#auto_root` 时：
+     * 在 content 区下方加 section 标题 "冷归档"。
+     * 用 `LazyColumn`（性能：单 root 可能聚合数百行）渲染 entries：按 `chatId` 分组（同一会话的行
+       归到一组），组内按 `ts` 倒序；每行显示 ts 格式化日期 + content 截断（首 200 chars）+ source 角标。
+   - 非 root 节点 → 完全不渲染冷归档区（保持现有 verticalScroll Column 不变）。
+
+4. **MemoryScreen 接线**（`ui/features/memory/screens/MemoryScreen.kt`）：
+   - 收集 `viewModel.coldArchiveEntries` 为 `coldArchiveEntries`。
+   - `MemoryInfoDialog(...)` 调用点透传 `coldArchiveEntries = coldArchiveEntries`。
+
+**测试策略（混合）**:
+
+- **真单测**（覆盖 jsonl 解析行为）—— `parseArchiveJsonl` 是纯函数（输入 String，输出 List），ROI 极高。
+  对应 `MemoryArchiverColdArchiveParseTest`：
+  * TC-AGENT-041-c-a: 多行有效 jsonl → 全部解析返回。
+  * TC-AGENT-041-c-b: 含坏行（非 JSON / 缺字段）→ 坏行跳过、好行返回。
+  * TC-AGENT-041-c-c: 空文本 / 全空白 → 返回 empty list。
+
+- **源码字符串扫描**（覆盖 wiring）—— IO 层 + UI 层 + VM 层都涉及 Android Context / Compose / Flow，
+  纯 JVM mock ROI 极低，沿用 R-AGENT-029/038/039/040/041-a 同范式：
+  * `MemoryArchiverColdArchiveReadWiringTest`（TC-AGENT-041-c-d/e）：扫 `MemoryArchiver.kt` 含
+    `parseArchiveJsonl(` 顶层函数签名、`loadColdArchive(` instance method、`ArchiveEntry(`
+    data class、`bucketForRootMemory(` util、`archiveDir(` 调用 + `*.jsonl` 文件遍历 + try/catch
+    包裹。
+  * `MemoryDialogsColdArchiveWiringTest`（TC-AGENT-041-c-f）：扫 `MemoryDialogs.kt` 含
+    `coldArchiveEntries` 参数、`#auto_root` 字面、`LazyColumn(` + 分组 / 排序逻辑标记
+    （`groupBy { it.chatId }` 等价表达 + `sortedByDescending { it.ts }` 等价表达）。
+  * `MemoryViewModelColdArchiveWiringTest`（TC-AGENT-041-c-g）：扫 `MemoryViewModel.kt` 含
+    `coldArchiveEntries` StateFlow 字段、`bucketForRootMemory(` 调用、`loadColdArchive(` 调用、
+    `Dispatchers.IO` 调度。
+
+**E2E**: 不必跑 §3 三个脚本（纯 UI 详情页 + 启动时不触发的读路径，与 agent loop / API / 工具派发链
+路无关）。手测兜底：装新 APK → MemoryScreen 点 root 节点 → 看冷归档区出现 + 行内容正确。
+
+**对应测试**:
+- `MemoryArchiverColdArchiveParseTest#TC-AGENT-041-c-a/b/c`
+- `MemoryArchiverColdArchiveReadWiringTest#TC-AGENT-041-c-d/e`
+- `MemoryDialogsColdArchiveWiringTest#TC-AGENT-041-c-f`
+- `MemoryViewModelColdArchiveWiringTest#TC-AGENT-041-c-g`
 
 ---
 

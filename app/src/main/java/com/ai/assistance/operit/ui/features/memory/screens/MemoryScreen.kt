@@ -190,6 +190,8 @@ fun MemoryScreen() {
             factory = MemoryViewModelFactory(context, selectedProfileId)
         )
     val uiState by viewModel.uiState.collectAsState()
+    // R-AGENT-041-c: root 节点详情页冷归档行（非 root / 未选中时为 emptyList）
+    val coldArchiveEntries by viewModel.coldArchiveEntries.collectAsState()
     val keyboardController = LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
     val isCurrentScreen = LocalIsCurrentScreen.current
@@ -606,7 +608,8 @@ fun MemoryScreen() {
                     onDelete = { viewModel.deleteMemory(uiState.selectedMemory!!.id) },
                     onTogglePersistent = { enabled ->
                         viewModel.togglePersistentInstruction(uiState.selectedMemory!!.id, enabled)
-                    }
+                    },
+                    coldArchiveEntries = coldArchiveEntries
                 )
             }
 

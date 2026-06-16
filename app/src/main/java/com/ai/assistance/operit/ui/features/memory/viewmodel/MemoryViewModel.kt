@@ -14,6 +14,7 @@ import com.ai.assistance.operit.data.model.MemorySearchConfig
 import com.ai.assistance.operit.data.model.MemorySearchDebugInfo
 import com.ai.assistance.operit.data.preferences.MemorySearchSettingsPreferences
 import com.ai.assistance.operit.data.repository.MemoryRepository
+import com.ai.assistance.operit.data.repository.MemoryArchiver
 import com.ai.assistance.operit.ui.features.memory.screens.graph.model.Edge
 import com.ai.assistance.operit.ui.features.memory.screens.graph.model.Graph
 import com.ai.assistance.operit.ui.features.memory.screens.graph.model.Node
@@ -136,6 +137,17 @@ class MemoryViewModel(
     private val _uiState = MutableStateFlow(MemoryUiState())
     val uiState: StateFlow<MemoryUiState> = _uiState.asStateFlow()
     private val searchSettingsPreferences = MemorySearchSettingsPreferences(context, profileId)
+
+    /**
+     * R-AGENT-041-c: root 节点详情页冷归档行 state。
+     *  - selectNode 命中 root 时（`memoryArchiver.bucketForRootMemory(memory) != null`），
+     *    后台 IO 协程拉对应 bucket 的冷归档 jsonl，写到这里；
+     *  - 非 root / clearSelection 时重置为 emptyList，防止上一个 root 的冷归档残留到下一个详情页。
+     */
+    private val _coldArchiveEntries = MutableStateFlow<List<MemoryArchiver.ArchiveEntry>>(emptyList())
+    val coldArchiveEntries: StateFlow<List<MemoryArchiver.ArchiveEntry>> = _coldArchiveEntries.asStateFlow()
+
+    private val memoryArchiver = MemoryArchiver(context, repository)
 
     init {
         loadSearchSettings()
@@ -594,6 +606,21 @@ class MemoryViewModel(
                 } else {
                     _uiState.update { it.copy(selectedNodeId = node.id, selectedMemory = memory, selectedEdge = null, isDocumentViewOpen = false) }
                 }
+                // R-AGENT-041-c: 命中 root 节点时后台 IO 拉冷归档；非 root 重置 emptyList
+                val rootBucket = memory?.let { memoryArchiver.bucketForRootMemory(it) }
+                if (rootBucket != null) {
+                    viewModelScope.launch(Dispatchers.IO) {
+                        val entries = try {
+                            memoryArchiver.loadColdArchive(rootBucket)
+                        } catch (t: Throwable) {
+                            AppLogger.w(TAG, "R-AGENT-041-c: load cold archive failed: ${t.message}")
+                            emptyList()
+                        }
+                        _coldArchiveEntries.value = entries
+                    }
+                } else {
+                    _coldArchiveEntries.value = emptyList()
+                }
             }
         }
     }
@@ -606,6 +633,8 @@ class MemoryViewModel(
     /** Clears any selection (node or edge). */
     fun clearSelection() {
         _uiState.update { it.copy(selectedMemory = null, selectedNodeId = null, selectedEdge = null) }
+        // R-AGENT-041-c: 同步清掉冷归档 state，防止上一个 root 节点的冷归档残留到下一个详情页
+        _coldArchiveEntries.value = emptyList()
     }
 
     /** 关闭文档视图 */

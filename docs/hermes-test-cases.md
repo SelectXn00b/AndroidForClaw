@@ -661,6 +661,28 @@ R-AGENT-041-a = R-AGENT-038 phase 2 第二步，紧跟 R-AGENT-040 之后。app 
 
 ---
 
+## 域 AGENT — root 节点详情页冷归档 jsonl 展示 (R-AGENT-041-c)
+
+R-AGENT-041-c = R-AGENT-038 数据闭环最后一公里。`MemoryArchiver` 已经把每条 summary / extracted / summary_id 写到 `<filesDir>/hermes/memory_archive/<bucket.dirName>/<yyyy-MM-DD>.jsonl` 冷归档，但 UI 端没有读路径，用户在 MemoryScreen 点开 root 节点只看到聚合 content 看不到底层原始行。本条把 root 节点详情页接通冷归档读路径：判定为 root → 拉对应 bucket 的 jsonl → 按 chatId 分组 + ts 倒序展示。
+
+测试策略（混合）：
+- **真单测** 覆盖 `parseArchiveJsonl` 纯函数（输入 String / 输出 List，ROI 极高）。
+- **源码字符串扫描** 覆盖 IO / VM / UI 三层 wiring：`MemoryArchiver` 读 API、`MemoryViewModel` 冷归档 state、`MemoryDialogs` root 分支渲染都涉及 Android Context / Compose / Flow，纯 JVM mock ROI 极低，沿用 R-AGENT-029/038/039/040/041-a 同范式。
+
+| TC ID | 关联 R | 输入 / 现状 | 期望 | 测试类型 | 测试落地 |
+|---|---|---|---|---|---|
+| TC-AGENT-041-c-a | R-AGENT-041-c | `parseArchiveJsonl` 输入：3 行有效 jsonl 文本（每行 `{ts, chat_id, content, source}`） | 返回 size = 3 的 `List<ArchiveEntry>`，每行字段映射正确（ts Long、chatId String、content String、source String）。 | unit | `MemoryArchiverColdArchiveParseTest#TC-AGENT-041-c-a parses well-formed jsonl into archive entries` 🟢 |
+| TC-AGENT-041-c-b | R-AGENT-041-c | `parseArchiveJsonl` 输入：5 行混杂文本（2 行有效 + 1 行非 JSON 乱码 + 1 行 JSON 缺 `chat_id` 字段 + 1 行空白） | 返回 size = 2 的列表（只含 2 行有效行）；坏行不抛异常、不污染列表。 | unit | `MemoryArchiverColdArchiveParseTest#TC-AGENT-041-c-b skips malformed lines without throwing` 🟢 |
+| TC-AGENT-041-c-c | R-AGENT-041-c | `parseArchiveJsonl` 输入：空字符串 / 全空白 / 仅换行 | 返回 emptyList，不抛。 | unit | `MemoryArchiverColdArchiveParseTest#TC-AGENT-041-c-c handles empty and whitespace-only input` 🟢 |
+| TC-AGENT-041-c-d | R-AGENT-041-c | 源码扫描：`data/repository/MemoryArchiver.kt` | 必须含 (1) data class `ArchiveEntry(`（嵌套或顶层）字面，含 `ts` / `chatId` / `content` / `source` 四字段；(2) 顶层 `fun parseArchiveJsonl(` 签名（接受 `String`，返回 `List<`）；(3) `fun loadColdArchive(` instance method 签名（参数 `ArchiveBucket`，返回 `List<`）；(4) `fun bucketForRootMemory(` 签名（参数含 `Memory`，返回类型含 `ArchiveBucket?` 或等价 nullable）。 | unit-scan | `MemoryArchiverColdArchiveReadWiringTest#TC-AGENT-041-c-d archiver declares cold archive read api surface` 🟢 |
+| TC-AGENT-041-c-e | R-AGENT-041-c | 源码扫描：`MemoryArchiver.loadColdArchive` 函数体 | 必须含 (1) `archiveDir(` 调用拿到 bucket 对应目录；(2) `.jsonl` 字面（用文件名后缀过滤）；(3) `sortedByDescending` 或 `sortedDescending` 等价（最近日期在前）；(4) `readText(` 字面（读文件内容）；(5) `parseArchiveJsonl(` 调用；(6) `try {` + `catch (` 包裹（IO 失败不能拖垮 UI）。 | unit-scan | `MemoryArchiverColdArchiveReadWiringTest#TC-AGENT-041-c-e loadColdArchive lists jsonl files sorts desc reads parses with try-catch` 🟢 |
+| TC-AGENT-041-c-f | R-AGENT-041-c | 源码扫描：`ui/features/memory/screens/dialogs/MemoryDialogs.kt::MemoryInfoDialog` Composable | 必须含 (1) `coldArchiveEntries` 参数（默认 `emptyList`）；(2) `"#auto_root"` 字面（root 节点判定）；(3) `LazyColumn(` 字面（列表性能）；(4) `groupBy` 等价表达 + `chatId` 引用（按 chatId 分组）；(5) `sortedByDescending` 等价表达 + `ts` 引用（组内 ts 倒序）。 | unit-scan | `MemoryDialogsColdArchiveWiringTest#TC-AGENT-041-c-f info dialog renders cold archive section grouped by chatId on root nodes` 🟢 |
+| TC-AGENT-041-c-g | R-AGENT-041-c | 源码扫描：`ui/features/memory/viewmodel/MemoryViewModel.kt` | 必须含 (1) `coldArchiveEntries` StateFlow 字段（含 `StateFlow<` 字面 + `ArchiveEntry` 引用）；(2) `selectNode` 函数体内 `bucketForRootMemory(` 调用 + `loadColdArchive(` 调用；(3) `Dispatchers.IO` 字面（后台 IO 协程不阻塞主线程）；(4) `clearSelection` 函数体内对 `_coldArchiveEntries` 重置 emptyList 的写入（防止 root 节点关闭后旧数据残留）。 | unit-scan | `MemoryViewModelColdArchiveWiringTest#TC-AGENT-041-c-g viewmodel exposes cold archive state and loads on root selection` 🟢 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — App Self-Awareness Prompt Injection (R-AGENT-030)
 
 R-AGENT-030 让主 agent 的 system prompt 注入「应用自我感知」段，告诉 agent HermesApp 内置了哪些用户视角的 UI 入口（工具箱 / Memory hub / Settings / Skill Recorder / Terminal 等），方便 agent 在被问"我去哪里 X"时给出导航式回答而非自己代劳或瞎猜。

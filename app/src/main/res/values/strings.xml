@@ -5499,6 +5499,7 @@
     <string name="memory_credibility">可信度</string>
     <string name="memory_created_at">创建时间</string>
     <string name="memory_updated_at">更新时间</string>
+    <string name="memory_cold_archive_section_title">冷归档</string>
     <string name="memory_edit">编辑</string>
     <string name="memory_delete">删除</string>
     <string name="memory_persistent_instruction_toggle">设为持久化指令（每轮注入到 system prompt）</string>
