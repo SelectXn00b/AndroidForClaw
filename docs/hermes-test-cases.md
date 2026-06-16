@@ -600,6 +600,29 @@ R-AGENT-038 把"对话压缩摘要 (`#auto_summary`) + 自动抽取碎片 (`#aut
 
 ---
 
+## 域 AGENT — `session_search` 工具：agent 端主动召回会话历史 (R-AGENT-039)
+
+R-AGENT-039 给 agent 暴露一个名为 `session_search` 的工具（与 Python 上游 `tools/session_search_tool.py` 工具名一致），用户说"翻翻之前聊过的 X" 时 agent 可主动调；底层先接 ObjectBox `MemoryRepository.searchMemories`（R-AGENT-038 root 节点 + 老 `#auto_summary` 老节点都能命中）。本阶段**不**读 jsonl 冷归档（留给 R-AGENT-042）。
+
+测试策略：
+- 工具暴露 / 调度路由 / prompt 教学 / 描述不泄露内部 tag → source-scan（仿 R-AGENT-017 / R-AGENT-030 同范式）。
+- 输出截断 / 空 query / 0 命中 / 异常容错 → 用 fake `MemoryRepository` 跑行为 unit。
+- 不做 agent-level 真调测试（属 §3 E2E 的 `test_tool_call_e2e.sh` 覆盖范围）。
+
+| TC ID | R-ID | 输入 / 触发 | 期望 | 测试类型 | 实现 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-039-a | R-AGENT-039 | 源码扫描：`core/tools/ToolRegistration.kt` | 必须含 `"session_search"` 字面值（工具注册名）+ category 为 `MEMORY` 字面值 / 等价枚举（位于 `session_search` 注册块内）+ danger = `LOW` 字面 / `Tool.Danger.LOW` 枚举。 | unit-scan | `SessionSearchToolWiringTest#TC-AGENT-039-a tool registration declares session_search with memory category and low danger` 🔴 |
+| TC-AGENT-039-b | R-AGENT-039 | 源码扫描：`core/tools/defaultTool/standard/MemoryQueryToolExecutor.kt::invoke` 函数体 | 函数体内 `when` / `switch` 块必须含 `"session_search" -> ` 字面分支，分支体调用 `executeSessionSearch(` 字面（私有 suspend 函数名）。 | unit-scan | `SessionSearchToolWiringTest#TC-AGENT-039-b executor dispatches session_search to executeSessionSearch branch` 🔴 |
+| TC-AGENT-039-c | R-AGENT-039 | 源码扫描：`core/config/SystemToolPrompts.kt` | 必须含 `session_search` EN 工具描述段（内含 `query` + `limit` 两个参数说明字面）+ CN 描述段（含 `query` + `limit` 字面）。 | unit-scan | `SessionSearchToolWiringTest#TC-AGENT-039-c system tool prompts describe session_search params in both locales` 🔴 |
+| TC-AGENT-039-d | R-AGENT-039 | 源码扫描：`core/config/SystemToolPrompts.kt` `session_search` 描述段 | **不**得含 `auto_extracted` / `auto_summary` 字面值（守 R-AGENT-017-g 红线：prompt 不泄露内部 tag 机制）。 | unit-scan | `SessionSearchToolWiringTest#TC-AGENT-039-d session_search description does not leak internal tag names` 🔴 |
+| TC-AGENT-039-e | R-AGENT-039 | 源码扫描：`core/config/SystemPromptConfig.kt` `GATEWAY_AWARENESS_EN` + `GATEWAY_AWARENESS_CN`（或等价 system prompt 段） | 两段都必须各含一处 `session_search` 字面（教 agent "翻找历史"时主动调本工具）。 | unit-scan | `SessionSearchToolWiringTest#TC-AGENT-039-e prompt teaches session_search in both locales` 🔴 |
+| TC-AGENT-039-f | R-AGENT-039 | 源码扫描：`MemoryQueryToolExecutor.kt` `executeSessionSearch` 函数体 | 必须含 8000 字符截断逻辑（字面值 `8000` + `take(` 或 `substring(` 调用）+ `…[truncated]` 字面 / 等价后缀；必须含 `limit` 参数 clamp 逻辑（`coerceIn(` 或 `coerceAtMost(50)` 等价表达）。 | unit-scan | `MemoryQueryToolExecutorSessionSearchTest#TC-AGENT-039-f session_search truncates output and clamps limit` 🔴 |
+| TC-AGENT-039-g | R-AGENT-039 | 源码扫描：`MemoryQueryToolExecutor.kt` `executeSessionSearch` 函数体 | 必须含三种边界守卫：(1) 空 query 走 `ToolResult(... success = false ...)` 路径（含 `query` + `isBlank` / `isEmpty` 字面）；(2) 0 命中走 success 路径（含 `"No matching memories found"` 字面）；(3) `try { ... } catch` 包裹 `searchMemories` 调用 + `AppLogger.w` 或 `AppLogger.e` 记录 + `ToolResult(... success = false ...)` 不穿透异常。 | unit-scan | `MemoryQueryToolExecutorSessionSearchTest#TC-AGENT-039-g session_search guards empty query empty result and io exception` 🔴 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — App Self-Awareness Prompt Injection (R-AGENT-030)
 
 R-AGENT-030 让主 agent 的 system prompt 注入「应用自我感知」段，告诉 agent HermesApp 内置了哪些用户视角的 UI 入口（工具箱 / Memory hub / Settings / Skill Recorder / Terminal 等），方便 agent 在被问"我去哪里 X"时给出导航式回答而非自己代劳或瞎猜。

@@ -573,17 +573,89 @@ Hermes Android 翻译已半成品：`hermes-android/.../MemoryManager.kt:339-362
 
 ---
 
-### R-AGENT-039: 阶段 2 — 存量迁移 + UI 改造 + 召回链路改造（占位）
+### R-AGENT-039: agent 端可主动召回会话历史的 `session_search` 工具（与 Python 上游对齐）
 
-**来源**: R-AGENT-038 阶段 1 上线后的后续工程。
+**来源**: Python 上游 `reference/hermes-agent/tools/session_search_tool.py:318-516`（`session_search` 工具实现）+ `:528-572`（schema 定义）+ `reference/hermes-agent/agent/memory_provider.py:42-231`（MemoryProvider 抽象）。用户 2026-06-16 反馈："R-AGENT-038 阶段 1 已经把摘要写入聚合到 3 个 root 节点 + 冷归档 jsonl，但 agent 不知道这些节点存在、也不知道怎么查 —— 需要让 agent 在用户开口让它'翻找历史'时能够主动查"。
 
-**性质**: 占位条目，阶段 1 验证稳定后再展开本条具体行为。当前仅记录工程意图：
-- 启动时一次性把存量 `#auto_summary` / `#auto_extracted` / `#auto_summary_id:*` 节点合并到对应 root + 落 jsonl 后删除（仿 R-AGENT-029 + 防重入键 `R_AGENT_039_auto_node_consolidation_done`）。
-- MemoryScreen 加 chip 过滤族 `#auto_root`（默认隐藏 / 仅看自动 / 全部三态）+ root 节点详情查归档 jsonl 列表。
-- R-AGENT-015 pre-act injection 改造：召回时检查 root 节点 → 改用 grep 行 + 必要时按时间窗读最近 N 天归档 jsonl 一同注入。
-- 节点配色 `pickNodeColorByAttributes` 增加 root 节点专属颜色。
+**架构合规**:
+- 上游有对应工具（`session_search`）→ 按 R-CORE-002 优先与 Hermes 对齐：工具名沿用 `session_search`（**不**自创 `query_memory_archive` 之类 Android-only 名）。
+- 上游 `MemoryProvider` 用 SQLite + FTS5 单一存储；Android 当前用 ObjectBox（`MemoryRepository.searchMemories`）。本阶段**只接通 ObjectBox**全文搜索路径，**不**读 R-AGENT-038 的 jsonl 冷归档（冷归档读取作为 R-AGENT-042 单独立项；本阶段不扩张）。
+- 不动写入侧（R-AGENT-038 写入路径不变）；不动 R-AGENT-015 `<memory-context>` 自动注入路径（用户主动召回是另一条路径）。
 
-**前置依赖**: R-AGENT-038 必须落地稳定运行至少 1 个开发迭代周期 + 单测全绿。本条详细 spec 在 R-AGENT-038 验证完成后补全。
+**行为**:
+- 工具名：`session_search`（与 Python `tools/session_search_tool.py:528` 的 `name` 字段一致）。
+- 参数：
+  - `query: string`（**必填**）—— 关键词或短语，传给 `MemoryRepository.searchMemories`。
+  - `role_filter: string?`（可选）—— 上游接受 `"user" | "assistant" | "tool"`；Android 当前实现先**接收**该参数（schema 守约），但**不实际过滤**（root 节点 content 行格式已含 `(chat=...)` 元信息，按 role 过滤需扩展行格式，留给 R-AGENT-042）。本阶段：值若非空则在返回 metadata 段记 `role_filter_applied: false (deferred)`。
+  - `limit: int?`（可选，默认 10，上限 50）—— 返回的 memory 条数上限。
+- 内部走 `MemoryRepository.searchMemories(query, limit)`（已存在 API），命中 root 节点 / 老 `#auto_summary` 节点 / 普通节点都按命中返回。
+- 输出格式：纯文本聚合，每条命中：`<memory id> | <title> | <source> | <content 截断>`，多条用空行分隔。整体输出截断到 **8000 字符**（与 `MemoryQueryToolExecutor` 现有风格一致），超出加 `…[truncated]` 尾标。
+- 工具暴露（让 agent 知道并能调）：
+  - `core/tools/ToolRegistration.kt` 注册 `session_search`，category = `MEMORY`，danger = `LOW`，调度到 `MemoryQueryToolExecutor.invoke` 的新分支 `executeSessionSearch(tool)`。
+  - `core/config/SystemToolPrompts.kt` 加 EN + CN 两段工具描述（参数说明 + "用于按关键词查会话历史 / 自动摘要 / 抽取的事实"），**不**得在描述里出现 `auto_extracted` / `auto_summary` 字面值（保留 R-AGENT-017 不泄露内部 tag 机制的口径）。
+  - `core/config/SystemPromptConfig.kt` 的 `GATEWAY_AWARENESS_EN/CN` 段（或等价 system prompt 段）扩一句说明：当用户要求"翻找历史 / 回忆之前的对话"时，可以调 `session_search`。
+- 失败模式：
+  - `query` 为空 / 空白 → `ToolResult.error("query parameter is required")`。
+  - `limit` 越界（< 1 或 > 50）→ clamp 到 [1, 50]，不报错。
+  - `MemoryRepository.searchMemories` 抛异常 → `try/catch` + `AppLogger.w` + 返回 `ToolResult.error("session_search io failure: <msg>")`，不让异常穿透到 agent loop。
+  - 0 命中 → 正常返回，输出 `"No matching memories found for query: <query>"`，不算错误。
+
+**验收**:
+- 工具调用 `session_search` 时 ToolDispatcher 能找到对应执行器（`MemoryQueryToolExecutor.invoke` 的 `"session_search"` 分支命中）。
+- system prompt 中 EN + CN 都含 `session_search` 描述段，描述中**无** `auto_extracted` / `auto_summary` 字面（不泄露内部机制）。
+- 单元测试覆盖（`SessionSearchToolWiringTest` + `MemoryQueryToolExecutorSessionSearchTest`，全部走源码字符串扫描策略 —— 与 R-AGENT-013/014/038 同范式，因 `MemoryQueryToolExecutor` 重度依赖 ObjectBox / Context，JVM mock ROI 极低）：
+  - 工具注册命中（`ToolRegistration` 文本扫含 `session_search`）。
+  - 调度命中（`MemoryQueryToolExecutor.invoke` 文本扫含 `"session_search" ->`）。
+  - schema 守护（描述含 `query` + `limit`；`role_filter` 可选；`SystemToolPrompts` 文本扫）。
+  - 输出截断（`executeSessionSearch` 函数体扫含 `8000` + `…[truncated]` 字面）。
+  - `limit` clamp（函数体扫含 `coerceIn` 或 `coerceAtMost(50)` 等价表达）。
+  - 空 query 守卫（函数体扫含 `isBlank` / `isEmpty` 走 success=false 分支字面）。
+  - 0 命中走 "No matching memories found" 分支（函数体字面扫）。
+  - searchMemories 异常走 try/catch + AppLogger.w/e + success=false（函数体字面扫，不穿透）。
+  - **运行时正确性**由手测 + §3 E2E `test_tool_call_e2e.sh` 兜底（agent 真调 `session_search` 返回内容）。
+- §2 四件套：`verify_align` / `scan_stubs` / `deep_align` 维持零；`scan_functional_stubs` ≤ 390（本改动**只动 app/ 模块** + 加新工具不是补 stub，指标不应回升）。
+- §3 E2E：本改动暴露了一个新工具给 agent。**`test_tool_call_e2e.sh` 需要重跑**（agent 工具集发生变化）；`test_api_config_e2e.sh` / `test_builtin_key_e2e.sh` 不受影响但发布前应跑。
+- **手测验收**: 装了 R-AGENT-039 APK 后，对 agent 说"翻翻我们之前聊过的 X" → agent 应主动调 `session_search` → MemoryScreen 看到 memory_query_tool 路径产生的 tool_use 记录，agent 回复中包含命中 memory 的 content 片段。
+
+---
+
+### R-AGENT-040: 启动时一次性迁移存量 `#auto_summary` / `#auto_extracted` / `#auto_summary_id:*` 节点到 root（占位）
+
+**来源**: R-AGENT-038 阶段 1 后续工程；用户 2026-06-16 提出"能不能把用户之前产生的那些节点也按最新规则整合"。
+
+**性质**: 占位条目，等 R-AGENT-039（agent 召回工具）落地稳定后再展开。当前记录工程意图：
+- 启动时一次性把存量 `#auto_summary` / `#auto_extracted` / `#auto_summary_id:*` 节点（每条独立 Memory）按时间顺序合并到对应 root.content + 落 jsonl 后删除独立节点（仿 R-AGENT-029 启动迁移机制）。
+- 防重入键：`R_AGENT_040_auto_node_consolidation_done`（SharedPreferences `hermes_data_migrations`）。
+- 单事务（`runInTx`）保证：迁移过程异常不留半成品（要么全迁要么全不动）。
+- 旧节点删除前必须先成功 append 到 root + 落 jsonl，任一步骤失败回滚。
+
+**前置依赖**: R-AGENT-039 落地 + 至少 1 个开发迭代周期稳定运行。本条详细 spec 在 R-AGENT-039 验证完成后补全。
+
+---
+
+### R-AGENT-041: MemoryScreen UI 改造支持 root 节点 + chip 过滤族（占位）
+
+**来源**: R-AGENT-038 阶段 1 后续工程。
+
+**性质**: 占位条目。当前记录工程意图：
+- MemoryScreen 加 chip 过滤族 `#auto_root`（默认隐藏 / 仅看自动 / 全部三态）。
+- root 节点详情页查归档 jsonl 列表（按日期分组展示冷归档行）。
+- 节点配色 `pickNodeColorByAttributes` 增加 root 节点专属颜色（与普通节点视觉区分）。
+
+**前置依赖**: R-AGENT-040 完成（存量迁移到 root 之后 chip 过滤才有意义）。
+
+---
+
+### R-AGENT-042: pre-act injection（R-AGENT-015）改造支持 root 节点 + 冷归档读取（占位）
+
+**来源**: R-AGENT-038 阶段 1 后续工程。
+
+**性质**: 占位条目。当前记录工程意图：
+- R-AGENT-015 `<memory-context>` 自动注入路径增加 root 节点感知：召回时检查命中是否为 root → 用 grep 行匹配代替整 content 注入（避免 200 行 root.content 一次性塞进 user message）。
+- 必要时按时间窗读最近 N 天归档 jsonl 一同参与匹配（冷归档不再"沉默"）。
+- `session_search` 工具（R-AGENT-039）也同步扩展：参数 `date_range` 启用、`role_filter` 真正生效（行格式扩展支持 role 元信息）。
+
+**前置依赖**: R-AGENT-039 + R-AGENT-040 + R-AGENT-041 全部稳定运行。
 
 ---
 

@@ -64,6 +64,7 @@ MEMORY USAGE GUIDANCE:
 - If the user says something like "remember this", "from now on", "never X", "always X", treat it as a persistent rule trigger.
 - When using query_memory, search with short keywords (e.g., user name, topic words), not full sentences.
 - AUTO-SUMMARY MEMORIES: every time a chat is auto-compacted (token-limit summary) or hits the send-summary threshold, the system force-persists a condensed snapshot of that chat into the memory library with tags `#auto_summary` and `#chat:<chatId>`. To recall an earlier conversation, call query_memory with `tags=#auto_summary` (optionally `tags=#auto_summary|#chat:<chatId>` to scope to one chat). Multiple tags use `|` and mean ALL-of (intersection).
+- SESSION SEARCH: when the user asks you to recall or look up something from past conversations ("what did I tell you about X", "find the chat where we discussed Y"), call the dedicated `session_search` tool with a short keyword `query`. It searches across past chats, auto-summaries and extracted facts in one go without you needing to remember internal tag schemes. Prefer `session_search` over `query_memory` for free-form "recall a past conversation" requests.
 
 WORKSPACE MEMORY FILES (long-term project memory, on-demand read):
 - The workspace root `/Users/qiao/.openclaw/workspace-dev-androidclaw/` keeps a set of long-term memory markdown files maintained across sessions. These are NOT auto-injected into every prompt — read them on demand.
@@ -90,6 +91,7 @@ WORKSPACE MEMORY FILES (long-term project memory, on-demand read):
 - 如果用户说"记住"、"以后..."、"别再..."、"始终..."之类的话，把它当作持久规则的触发信号。
 - 使用 query_memory 时，用简短关键词搜索（如用户名、主题词），不要用完整句子。
 - 自动摘要记忆：每当聊天被自动压缩（token-limit 摘要）或达到发送摘要阈值，系统会把那段聊天的浓缩快照强制写入记忆库，并打上 `#auto_summary` 和 `#chat:<chatId>` 这两个 tag。要回忆早前的对话，调用 query_memory 时传 `tags=#auto_summary`（要锁定到某个 chat 就传 `tags=#auto_summary|#chat:<chatId>`）。多个 tag 用 `|` 分隔，语义是 ALL-of（交集）。
+- 会话搜索：当用户让你回忆或翻找过去的对话（"我之前跟你说过 X 吗"、"找一下我们讨论 Y 的那次聊天"、"翻翻我们之前聊过的 Z"），调用专用的 `session_search` 工具并传短关键词 `query`。它会一次性搜索过往聊天 / 自动摘要 / 抽取事实，不需要你记内部 tag 体系。对于"翻找历史对话"这类自由形式请求，优先用 `session_search` 而不是 `query_memory`。
 
 工作区记忆文件（跨会话长期记忆，按需读取）：
 - 工作区根目录 `/Users/qiao/.openclaw/workspace-dev-androidclaw/` 维护着一组跨会话的长期记忆 markdown 文件。这些文件**不会**被自动注入每次 prompt —— 按需读取。

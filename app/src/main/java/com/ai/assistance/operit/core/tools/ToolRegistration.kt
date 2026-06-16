@@ -514,6 +514,20 @@ fun registerAllTools(handler: AIToolHandler, context: Context) {
                 problemLibraryTool.invoke(tool)
             }
     )
+
+    // R-AGENT-039: 注册 session_search —— agent 端可主动召回会话历史的工具（与 Python 上游
+    // tools/session_search_tool.py 工具名一致）。复用 MemoryQueryToolExecutor 的 dispatcher。
+    handler.registerTool(
+            name = "session_search",
+            descriptionGenerator = { tool ->
+                val query = tool.parameters.find { it.name == "query" }?.value ?: ""
+                "Search conversation history for: $query"
+            },
+            executor = { tool ->
+                val memoryTool = ToolGetter.getMemoryQueryToolExecutor(context)
+                memoryTool.invoke(tool)
+            }
+    )
     
     // 注册根据标题获取单个记忆工具
     handler.registerTool(

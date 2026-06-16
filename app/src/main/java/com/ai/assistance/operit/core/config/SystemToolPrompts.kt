@@ -512,6 +512,15 @@ object SystemToolPrompts {
                 )
             ),
             ToolPrompt(
+                name = "session_search",
+                description = "Searches conversation history (past chats, summaries and extracted facts) for relevant content. Use this when the user asks you to recall, look up or revisit something from earlier conversations.",
+                parametersStructured = listOf(
+                    ToolParameterSchema(name = "query", type = "string", description = "required, string, keyword(s) or short phrase to search across conversation history. Short keywords (a name, a topic word) work better than full sentences", required = true),
+                    ToolParameterSchema(name = "role_filter", type = "string", description = "optional, string, one of `user` / `assistant` / `tool`. Accepted but not yet enforced in the current build (deferred); pass it for forward compatibility", required = false),
+                    ToolParameterSchema(name = "limit", type = "integer", description = "optional, int >= 1 and <= 50. Maximum number of matching memories to return. Defaults to 10. Values outside [1, 50] are clamped", required = false, default = "10")
+                )
+            ),
+            ToolPrompt(
                 name = "get_memory_by_title",
                 description = "Retrieves a memory by exact title, including document content or selected chunks.",
                 parametersStructured = listOf(
@@ -541,6 +550,15 @@ object SystemToolPrompts {
                     ToolParameterSchema(name = "threshold", type = "number", description = "可选, number >= 0。返回记忆所需的最小相关度分数。query_memory 默认值为 0", required = false, default = "0"),
                     ToolParameterSchema(name = "limit", type = "integer", description = "可选, int >= 1, 返回结果的最大数量. 当 > 20 时，只返回标题和截断内容", required = false, default = "20"),
                     ToolParameterSchema(name = "tags", type = "string", description = "可选, 字符串。按 tag 名做硬前置过滤。多个 tag 用 `|` 分隔，例如 `tags=#auto_summary` 或 `tags=#auto_summary|#chat:gw:feishu:user1:chat1`。语义是 ALL-of（交集）—— 只有同时含全部所列 tag 的记忆才通过过滤。常用 tag：`#auto_summary`（聊天自动摘要）、`#chat:<chatId>`（聊天来源）、`#persistent_instruction`（持久规则）。这是硬过滤，不是打分", required = false)
+                )
+            ),
+            ToolPrompt(
+                name = "session_search",
+                description = "搜索会话历史（过往聊天、摘要和抽取的事实）中的相关内容。当用户让你回忆或翻找之前对话里提过的事情时调用。",
+                parametersStructured = listOf(
+                    ToolParameterSchema(name = "query", type = "string", description = "必需, 字符串, 用于跨会话历史搜索的关键词或短语。短关键词（人名、主题词）比完整句子效果更好", required = true),
+                    ToolParameterSchema(name = "role_filter", type = "string", description = "可选, 字符串, `user` / `assistant` / `tool` 之一。当前版本接收但暂不实际过滤（功能延后）；传入用于向前兼容", required = false),
+                    ToolParameterSchema(name = "limit", type = "integer", description = "可选, int >= 1 且 <= 50。返回的命中条数上限。默认 10。超出 [1, 50] 的值会被自动 clamp", required = false, default = "10")
                 )
             ),
             ToolPrompt(

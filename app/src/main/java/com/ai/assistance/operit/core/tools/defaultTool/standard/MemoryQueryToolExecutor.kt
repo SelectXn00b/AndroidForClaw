@@ -154,6 +154,7 @@ class MemoryQueryToolExecutor(private val context: Context) : ToolExecutor {
     override fun invoke(tool: AITool): ToolResult = runBlocking {
         return@runBlocking when (tool.name) {
             "query_memory" -> executeQueryMemory(tool)
+            "session_search" -> executeSessionSearch(tool)
             "get_memory_by_title" -> executeGetMemoryByTitle(tool)
             "create_memory" -> executeCreateMemory(tool)
             "update_memory" -> executeUpdateMemory(tool)
@@ -304,6 +305,86 @@ class MemoryQueryToolExecutor(private val context: Context) : ToolExecutor {
         } catch (e: Exception) {
             AppLogger.e(TAG, "Memory query failed", e)
             ToolResult(toolName = tool.name, success = false, result = StringResultData(""), error = "Failed to execute memory query: ${e.message}")
+        }
+    }
+
+    /**
+     * R-AGENT-039: agent 端可主动召回会话历史的 `session_search` 工具。与 Python 上游
+     * `tools/session_search_tool.py` 工具名一致；底层先接 ObjectBox `searchMemories`
+     * （root 节点 + 老 `#auto_summary` 老节点都能命中）。本阶段**不**读 R-AGENT-038 的 jsonl
+     * 冷归档（留给 R-AGENT-042）。
+     *
+     * 参数：
+     *   - `query` (必填): 关键词或短语
+     *   - `role_filter` (可选): 接收但本阶段不实际过滤（行格式扩展支持 role 留给 R-AGENT-042）
+     *   - `limit` (可选, 默认 10, clamp 到 [1, 50]): 返回 memory 条数上限
+     *
+     * 输出：纯文本聚合，每条命中 `<id> | <title> | <source> | <content 截断>`，多条空行分隔；
+     * 整体截断到 8000 字符（与现有 MemoryQueryToolExecutor 风格一致），超出加 `…[truncated]` 尾标。
+     */
+    private suspend fun executeSessionSearch(tool: AITool): ToolResult {
+        val query = tool.parameters.find { it.name == "query" }?.value ?: ""
+        if (query.isBlank()) {
+            return ToolResult(
+                toolName = tool.name,
+                success = false,
+                result = StringResultData(""),
+                error = "query parameter is required"
+            )
+        }
+        val limitParam = tool.parameters.find { it.name == "limit" }?.value
+        val limit = (limitParam?.toIntOrNull() ?: 10).coerceIn(1, 50)
+        // role_filter 本阶段接受但不实际过滤（留给 R-AGENT-042 行格式扩展后启用）
+        val roleFilter = tool.parameters.find { it.name == "role_filter" }?.value
+        val roleFilterApplied = false
+
+        return try {
+            val results = memoryRepository.searchMemories(
+                query = query,
+                folderPath = null,
+            )
+            if (results.isEmpty()) {
+                return ToolResult(
+                    toolName = tool.name,
+                    success = true,
+                    result = StringResultData(
+                        "No matching memories found for query: $query"
+                    )
+                )
+            }
+            val sb = StringBuilder()
+            if (!roleFilter.isNullOrBlank()) {
+                sb.append("[role_filter_applied: $roleFilterApplied (deferred)]\n\n")
+            }
+            for (mem in results.take(limit)) {
+                sb.append(mem.id)
+                    .append(" | ")
+                    .append(mem.title)
+                    .append(" | ")
+                    .append(mem.source)
+                    .append(" | ")
+                    .append(mem.content.take(800))
+                    .append("\n\n")
+            }
+            val raw = sb.toString().trimEnd()
+            val out = if (raw.length > 8000) {
+                raw.take(8000) + "…[truncated]"
+            } else {
+                raw
+            }
+            ToolResult(
+                toolName = tool.name,
+                success = true,
+                result = StringResultData(out)
+            )
+        } catch (e: Exception) {
+            AppLogger.w(TAG, "session_search io failure: ${e.message}", e)
+            ToolResult(
+                toolName = tool.name,
+                success = false,
+                result = StringResultData(""),
+                error = "session_search io failure: ${e.message}"
+            )
         }
     }
 
@@ -1317,7 +1398,7 @@ class MemoryQueryToolExecutor(private val context: Context) : ToolExecutor {
 
 
     override fun validateParameters(tool: AITool): ToolValidationResult {
-        if (tool.name == "query_memory") {
+        if (tool.name == "query_memory" || tool.name == "session_search") {
             val query = tool.parameters.find { it.name == "query" }?.value
             if (query.isNullOrBlank()) {
                 return ToolValidationResult(valid = false, errorMessage = "Missing or empty required parameter: query")
