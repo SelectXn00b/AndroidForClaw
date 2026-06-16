@@ -27,6 +27,7 @@ import com.ai.assistance.operit.data.preferences.CharacterGroupCardManager
 import com.ai.assistance.operit.data.preferences.ActivePromptManager
 import com.ai.assistance.operit.data.preferences.DisplayPreferencesManager
 import com.ai.assistance.operit.data.preferences.preferencesManager
+import com.ai.assistance.operit.data.repository.MemoryArchiver
 import com.ai.assistance.operit.data.repository.MemoryRepository
 import com.ai.assistance.operit.services.ChatServiceUiBridge
 import com.ai.assistance.operit.util.ChatMarkupRegex
@@ -1894,71 +1895,32 @@ class MessageCoordinationDelegate(
             return
         }
 
-        // R-AGENT-023 (2026-06-12): 写入侧去重。落库前查同 chat 已有的 #auto_summary 节点，
-        // 用 3-gram jaccard 比相似度，>= 0.75 视为"几乎一样"——更新旧那条 content（保留 id +
-        // 下游 fact 子节点的 #auto_summary_id:<parentId> 串联），不再新建。
-        // 修自动摘要堆积根因：之前 saveMemory 绕过 createMemory 的 dedup，每次触发都新建一条。
-        val existingAutoSummaries = try {
-            repository.findMemoriesByTag("#auto_summary")
-                .filter { mem -> mem.tags.any { it.name == "#chat:$chatId" } }
-                .sortedByDescending { it.createdAt }
-                .take(5)
-        } catch (t: Throwable) {
-            AppLogger.w(TAG, "R-AGENT-023: failed to load existing auto_summaries: ${t.message}")
-            emptyList()
-        }
-        val newSummaryNgrams = computeAutoSummaryNgrams(strippedSummary)
-        val dedupHit = existingAutoSummaries.firstOrNull { existing ->
-            val existingNgrams = computeAutoSummaryNgrams(existing.content)
-            val jaccard = computeAutoSummaryJaccard(newSummaryNgrams, existingNgrams)
-            jaccard >= 0.75f
-        }
-        if (dedupHit != null) {
-            repository.updateMemory(
-                memory = dedupHit,
-                newTitle = titleText,
-                newContent = strippedSummary
-            )
-            AppLogger.d(
-                TAG,
-                "R-AGENT-023: dedup hit, updated existing #auto_summary id=${dedupHit.id} (chatId=$chatId, len=${strippedSummary.length})"
-            )
-            // 命中 dedup 时 fact 子节点继续挂在旧父 id 下；重新跑一次 fact 抽取，让新事实也归到这个父
-            extractAndPersistFacts(
-                summaryText = strippedSummary,
-                chatId = chatId,
-                parentMemoryId = dedupHit.id,
-                useEnglish = useEnglish,
-                repository = repository
-            )
-            return
-        }
-
-        val memory = Memory(
-            title = titleText,
+        // R-AGENT-038 (2026-06-16) phase 1：把 #auto_summary 写入路径切到 MemoryArchiver
+        // 的 SUMMARY bucket（root 节点：#auto_summary_root），dedup + rollover 由 archiver
+        // 内部完成。旧的 #auto_summary 节点保留不动（迁移由 phase 2 R-AGENT-039 做）。
+        // 调用 appendToRoot 替代过去的 dedup + saveMemory + addTagToMemory 三步。
+        val memoryArchiver = MemoryArchiver(context, repository)
+        val appendResult = memoryArchiver.appendToRoot(
+            bucket = MemoryArchiver.ArchiveBucket.SUMMARY,
+            chatId = chatId,
             content = strippedSummary,
-            contentType = "text/plain",
-            source = "auto_summary",
-            credibility = 0.9f,
-            importance = 0.6f,
-            folderPath = null
         )
-        val id = repository.saveMemory(memory)
-        AppLogger.d(TAG, "R-AGENT-013: 摘要已落档 memoryId=$id chatId=$chatId len=${strippedSummary.length} (原长 ${summaryText.length})")
-        // 打 tag —— addTagToMemory 内部会 memoryBox.put(memory) 持久化关系
-        repository.addTagToMemory(memory, "#auto_summary")
-        repository.addTagToMemory(memory, "#chat:$chatId")
+        AppLogger.d(
+            TAG,
+            "R-AGENT-038: appendToRoot(SUMMARY) chatId=$chatId len=${strippedSummary.length} result=$appendResult"
+        )
 
-        // R-AGENT-016 (2026-06-08)：在父 #auto_summary 整段落库之后，把 SUMMARY_PROMPT 已经
-        // 稳定输出的 【关键事实】 / [Key Facts] bullet 段每行解析成独立 fact 节点，
-        // 逐条 take(800) → saveMemory → 打 #auto_extracted + #chat:<chatId>
-        // + #auto_summary_id:<parentId>。零额外 LLM 调用、零额外 token 成本。
+        // R-AGENT-016 (2026-06-08)：在父 summary 落库之后，把 SUMMARY_PROMPT 已经
+        // 稳定输出的 【关键事实】 / [Key Facts] bullet 段每行解析成独立 fact，
+        // 通过 archiver 写入 EXTRACTED bucket（root 节点：#auto_extracted_root）。
+        // 零额外 LLM 调用、零额外 token 成本。
+        // R-AGENT-038 (2026-06-16) phase 1：parentMemoryId 不再需要——历史 #auto_summary_id:NNN
+        // 串联机制在 R-AGENT-027 已废，phase 1 沿用此简化设计；只传 chatId 做溯源即可。
         extractAndPersistFacts(
             summaryText = strippedSummary,
             chatId = chatId,
-            parentMemoryId = id,
             useEnglish = useEnglish,
-            repository = repository
+            archiver = memoryArchiver,
         )
     }
 
@@ -1975,9 +1937,8 @@ class MessageCoordinationDelegate(
     private suspend fun extractAndPersistFacts(
         summaryText: String,
         chatId: String,
-        parentMemoryId: Long,
         useEnglish: Boolean,
-        repository: MemoryRepository
+        archiver: MemoryArchiver,
     ) {
         try {
             // (1) 选段头：根据 useEnglish 选 SUMMARY_SECTION_KEY_INFO_EN ([Key Facts]) 还是
@@ -2028,9 +1989,7 @@ class MessageCoordinationDelegate(
             }
 
             // (4) 剥前缀 + take(800) + 过滤短/空 + 限 10 条上限
-            // R-AGENT-016 (2026-06-15) 收紧：MAX_FACT_COUNT 从 20 降到 10。`#auto_extracted` 节点
-            // 雪球元凶之一是单次抽取上限太宽（20 条让模型有"补全感"，把所有 bullet 抄一遍）。
-            // 配合 (5) 的 jaccard dedup 升级，把单次落库量减半，逼模型只挑最重要的事实。
+            // R-AGENT-016 (2026-06-15) 收紧：MAX_FACT_COUNT 从 20 降到 10。
             val MAX_FACT_CONTENT_CHARS = 800
             val MAX_FACT_COUNT = 10
             val MIN_FACT_CHARS = 5
@@ -2053,75 +2012,38 @@ class MessageCoordinationDelegate(
                 return
             }
 
-            // (5) R-AGENT-016 (2026-06-15) 去重升级：3-gram jaccard 0.75（原 lowercase exact）
-            //
-            // 雪球根因：原 `factKey = trim().lowercase()` exact 比对——"用户喜欢 Tailwind" /
-            // "User likes Tailwind CSS" / "偏好 Tailwind 框架" 三种措辞被认作 3 条独立 fact，
-            // 同一句话日产 3-5 节点。改成与父 #auto_summary 同款 3-gram jaccard 0.75（复用
-            // computeAutoSummaryNgrams + computeAutoSummaryJaccard），同义改写就被吸收。
-            //
-            // 同步把 baseline take(200) 提到 take(1000)：用户 #auto_extracted 库变大后
-            // 200 召回容易漏旧 fact 导致重复落库；1000 已经足够覆盖任何健康规模的库
-            // （配合 commit-c 的 per-chat 50 + 30d TTL 后总量也压在 ~1500 内）。
-            val DEDUP_BASELINE = 1000
-            data class ExistingFact(val ngrams: Set<String>)
-            val existingFacts: List<ExistingFact> = try {
-                val existingHits = repository.searchMemories(
-                    query = "",
-                    tags = listOf("#auto_extracted")
-                )
-                existingHits.take(DEDUP_BASELINE).map { mem ->
-                    ExistingFact(ngrams = computeAutoSummaryNgrams(mem.content))
-                }
-            } catch (t: Throwable) {
-                AppLogger.w(TAG, "R-AGENT-016: dedup 前置查询失败，按零去重处理: ${t.message}")
-                emptyList()
-            }
-
-            // (6) 逐条落库，单条失败不影响其它
+            // (5) R-AGENT-038 (2026-06-16) phase 1：把每条 fact 写入 archiver 的 EXTRACTED bucket。
+            // 旧设计是 N 条 fact = N 条独立 Memory 节点；现在合并到单一 root（#auto_extracted_root）。
+            // dedup（3-gram jaccard 0.75）由 archiver 内部完成；无需在此再 prefetch 1000 条做比对。
+            // 单条失败不影响其它 —— archiver 自带 try/catch，调用层只 log。
             var savedCount = 0
             var dedupedCount = 0
+            var failedCount = 0
             for (fact in facts) {
                 try {
-                    val factNgrams = computeAutoSummaryNgrams(fact)
-                    val isDuplicate = existingFacts.any { existing ->
-                        computeAutoSummaryJaccard(factNgrams, existing.ngrams) >= 0.75f
-                    }
-                    if (isDuplicate) {
-                        dedupedCount++
-                        continue
-                    }
-                    val factTitle = fact.lineSequence()
-                        .firstOrNull { it.isNotBlank() }
-                        ?.trim()
-                        ?.take(60)
-                        .orEmpty()
-                        .ifEmpty { "auto-extracted fact" }
-                    val factMemory = Memory(
-                        title = factTitle,
+                    when (val r = archiver.appendToRoot(
+                        bucket = MemoryArchiver.ArchiveBucket.EXTRACTED,
+                        chatId = chatId,
                         content = fact,
-                        contentType = "text/plain",
-                        source = "auto_extracted",
-                        credibility = 0.85f,
-                        importance = 0.5f,
-                        folderPath = null
-                    )
-                    repository.saveMemory(factMemory)
-                    repository.addTagToMemory(factMemory, "#auto_extracted")
-                    repository.addTagToMemory(factMemory, "#chat:$chatId")
-                    // R-AGENT-027 (2026-06-13): 删除 #auto_summary_id:<parentId> tag。
-                    // 原本意图是"反查这条事实来自哪条父摘要"，但实际无任何代码 / UI 读这个 tag；
-                    // R-AGENT-026 走 keepDecision=false 路径时还会产生 #auto_summary_id:-1 孤儿 tag 污染。
-                    // #chat:<chatId> 已足够提供会话级溯源；段落级溯源是无人使用的设计冗余，删掉。
-                    savedCount++
+                    )) {
+                        is MemoryArchiver.AppendResult.Created,
+                        is MemoryArchiver.AppendResult.Appended,
+                        is MemoryArchiver.AppendResult.AppendedWithRollover -> savedCount++
+                        is MemoryArchiver.AppendResult.SkippedDuplicate -> dedupedCount++
+                        is MemoryArchiver.AppendResult.Failed -> {
+                            failedCount++
+                            AppLogger.w(TAG, "R-AGENT-038: archiver failed for fact (chatId=$chatId): ${r.reason}")
+                        }
+                    }
                 } catch (t: Throwable) {
+                    failedCount++
                     AppLogger.w(TAG, "R-AGENT-016: 单条 fact 落库失败（继续下一条）: ${t.message}")
                 }
             }
             AppLogger.d(
                 TAG,
-                "R-AGENT-016: fact 抽取完成 chatId=$chatId parent=$parentMemoryId " +
-                    "saved=$savedCount deduped=$dedupedCount total_bullets=${bullets.size}"
+                "R-AGENT-038: fact 抽取完成 chatId=$chatId " +
+                    "saved=$savedCount deduped=$dedupedCount failed=$failedCount total_bullets=${bullets.size}"
             )
         } catch (t: Throwable) {
             AppLogger.w(TAG, "R-AGENT-016: fact extraction failed: ${t.message}", t)

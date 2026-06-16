@@ -438,23 +438,31 @@ R-AGENT-012 是 R-AGENT-011 的 UI 兜底：R-011 已把 `#gateway:<platform>` t
 
 ## 域 AGENT — APP 内自动摘要强行写入长期记忆（绕过判官）(R-AGENT-013)
 
-测试类: `app/src/test/java/com/ai/assistance/operit/services/core/MessageCoordinationDelegateAutoSummaryMemoryWiringTest.kt`
+测试类: `app/src/test/java/com/ai/assistance/operit/services/core/MessageCoordinationDelegateSummaryStripWiringTest.kt`（保留 013-j / 015-g 两条）
 
-**背景**: R-AGENT-013 要求 `MessageCoordinationDelegate.launchAsyncSummaryForSend` / `summarizeHistory` 在成功 `addSummaryMessage` 之后强制把摘要文本直接写入 `MemoryRepository.saveMemory`（绕过 `MemoryLibrary.saveMemoryAsync` / `generateAnalysis` LLM 判官），并打上 `#auto_summary` + `#chat:<chatId>` tag。两条路径共享同一份"摘要持久化"行为，但 `MessageCoordinationDelegate` 重度依赖 Android Context / `EnhancedAIService` / `ChatHistoryDelegate` / `ApiPreferences`，JVM mock ROI 太低；与 R-AGENT-010/011 同策略 —— 走源码字符串扫描守住 wiring，运行时正确性由手测 + §3 E2E 兜底。
+**背景**: R-AGENT-013 要求 `MessageCoordinationDelegate.launchAsyncSummaryForSend` / `summarizeHistory` 在成功 `addSummaryMessage` 之后强制把摘要文本直接写入长期记忆（绕过 `MemoryLibrary.saveMemoryAsync` / `generateAnalysis` LLM 判官）。
+
+**R-AGENT-038 (2026-06-16) 取代**: phase 1 (R-AGENT-038) 把"独立 `#auto_summary` 节点 + `addTagToMemory(#auto_summary)` + per-summary saveMemory + 写入侧 dedup（R-AGENT-023）"的核心写入路径**全部迁移**到 `MemoryArchiver` 单一 root 节点（`#auto_summary_root`）。原 TC-AGENT-013-a..i + R-AGENT-023 / R-AGENT-026 keepDecision **以外**的 R-AGENT-016 fact 抽取细则（TC-AGENT-016-a..i）由 TC-AGENT-038-a..g 接管。
+
+仍然保留：
+- `TC-AGENT-013-j`：落库前裁掉"对话回顾"/"工具包预热"两段拼接块
+- `TC-AGENT-013-k`：`SUMMARY_PROMPT` 短重点风格
+- `TC-AGENT-015-g`：`sanitizeContext` 剥 fence
+- `TC-AGENT-026-a..c`：keepDecision=false 早返回（仍由 archiver 路径前的 gate 完成）
 
 | ID | R-ID | 输入 / 触发条件 | 期望输出 | 类型 | 测试方法引用 |
 |---|---|---|---|---|---|
-| TC-AGENT-013-a | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | `launchAsyncSummaryForSend` 函数体必须 reference `memoryRepository.saveMemory(` —— 否则发送阈值摘要永远不进长期记忆。 | unit-scan | `MessageCoordinationDelegateAutoSummaryMemoryWiringTest#TC-AGENT-013-a launchAsyncSummaryForSend invokes MemoryRepository saveMemory` 🔴 |
-| TC-AGENT-013-b | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | `summarizeHistory` 函数体必须 reference `memoryRepository.saveMemory(` —— 否则 token-limit 摘要永远不进长期记忆。 | unit-scan | `MessageCoordinationDelegateAutoSummaryMemoryWiringTest#TC-AGENT-013-b summarizeHistory invokes MemoryRepository saveMemory` 🔴 |
-| TC-AGENT-013-c | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | 两条路径**禁止**调用 `MemoryLibrary.saveMemoryAsync`（绕过 LLM 判官的硬约束）—— 全文不得出现 `MemoryLibrary.saveMemoryAsync` 字面字符串。R-AGENT-010 的 `saveMemoryAsync` 调用点在 `HermesGatewayController`，与本文件无关。 | unit-scan | `MessageCoordinationDelegateAutoSummaryMemoryWiringTest#TC-AGENT-013-c MessageCoordinationDelegate does not call MemoryLibrary saveMemoryAsync` 🔴 |
-| TC-AGENT-013-d | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | 摘要保存必须打 `"#auto_summary"` tag —— 源码包含 `addTagToMemory(` 调用且参数含字面字符串 `"#auto_summary"`。 | unit-scan | `MessageCoordinationDelegateAutoSummaryMemoryWiringTest#TC-AGENT-013-d adds auto_summary tag` 🔴 |
-| TC-AGENT-013-e | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | 摘要保存必须打来源 chat tag —— 源码包含 `"#chat:"` 字面字符串作为 `addTagToMemory` 的参数前缀（与 `originalChatId` / `currentChatId` 拼接）。 | unit-scan | `MessageCoordinationDelegateAutoSummaryMemoryWiringTest#TC-AGENT-013-e adds chat source tag` 🔴 |
-| TC-AGENT-013-f | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | `saveMemory` 调用点必须读 `enableMemoryQueryFlow`（与 R-AGENT-010 同一开关） —— 源码包含 `enableMemoryQueryFlow` 字面字符串，否则用户关闭记忆查询后摘要仍然偷偷写库。 | unit-scan | `MessageCoordinationDelegateAutoSummaryMemoryWiringTest#TC-AGENT-013-f gates on enableMemoryQueryFlow` 🔴 |
-| TC-AGENT-013-g | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | `saveMemory` + `addTagToMemory` 调用必须被 try-catch 包围（不影响 `addSummaryMessage` / `refreshStableContextWindow`）—— 源码 `saveMemory` 调用所在的函数体包含 `try {` 与对应 `catch` 块。 | unit-scan | `MessageCoordinationDelegateAutoSummaryMemoryWiringTest#TC-AGENT-013-g saveMemory wrapped in try catch` 🔴 |
-| TC-AGENT-013-h | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | `saveMemory` 调用必须位于 `addSummaryMessage(` 调用**之后**（确保摘要先入 chat 历史）—— 两条路径函数体内 `addSummaryMessage` 字面位置 < `saveMemory` 字面位置。 | unit-scan | `MessageCoordinationDelegateAutoSummaryMemoryWiringTest#TC-AGENT-013-h saveMemory called after addSummaryMessage` 🔴 |
-| TC-AGENT-013-i | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | 新建的 `Memory(...)` 实例必须设置 `source = "auto_summary"`（让 `MemoryScreen` `EditMemoryDialog` 的 source 字段可见来源）—— 源码包含 `"auto_summary"` 字面字符串作为 `source` 参数值。 | unit-scan | `MessageCoordinationDelegateAutoSummaryMemoryWiringTest#TC-AGENT-013-i memory source set to auto_summary` 🔴 |
-| TC-AGENT-013-j | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | **bugfix（2026-06-08）**：`forcePersistSummaryToMemory` 落库前**必须裁掉**"对话回顾"和"工具包预热"两段拼接块（它们由 `AIMessageManager.summarizeMemory` 拼接进 `summary` 消息用于 chat 历史压缩，但不应进长期记忆——会让 `#auto_summary` 节点 content 大部分变成原文复述、淹没 AI 真摘要）。期望：源码含按 `"对话回顾"` / `"Dialogue review"` / `"【工具包预热】"` / `"[Package Warmup]"` 等分隔符做 `substringBefore` 或 `indexOf`+`substring` 裁剪的代码。 | unit-scan | `MessageCoordinationDelegateSummaryStripWiringTest#TC-AGENT-013-j strips dialogue review and package warmup before persist` 🔴 |
-| TC-AGENT-013-k | R-AGENT-013 | 源码扫描：`FunctionalPrompts.kt` | **bugfix（2026-06-08）**：`SUMMARY_PROMPT` (CN) 和 `SUMMARY_PROMPT_EN` 必须采用**短重点风格**——禁止包含"不少于 3 段"/"5+ 条"/"宁可内容多一点"/"绝不能以一句话敷衍"/"no fewer than 3 paragraphs"/"Info point 5+"/"Prefer being detailed" 等强制扩写指令；必须含"精简" / "重点" / "concise" / "key facts" 等约束词，引导模型抓重点而非堆字数。 | unit-scan | `FunctionalPromptsSummaryConcisenessWiringTest#TC-AGENT-013-k summary prompt enforces concise style` 🔴 |
+| ~~TC-AGENT-013-a~~ | R-AGENT-013 | [SUPERSEDED by TC-AGENT-038-f @ R-AGENT-038, 2026-06-16] 写入路径不再调 `MemoryRepository.saveMemory` 落 `#auto_summary` 节点；改走 `MemoryArchiver.appendToRoot(SUMMARY,...)` 维护 `#auto_summary_root` 单一根。 | — | — | _测试已撤回_ |
+| ~~TC-AGENT-013-b~~ | R-AGENT-013 | [SUPERSEDED by TC-AGENT-038-f @ R-AGENT-038, 2026-06-16] 同上：`summarizeHistory` 路径也走 archiver。 | — | — | _测试已撤回_ |
+| ~~TC-AGENT-013-c~~ | R-AGENT-013 | [SUPERSEDED by TC-AGENT-038-f @ R-AGENT-038, 2026-06-16] 红线由 archiver 路径继承（archiver 内部不调 `MemoryLibrary.saveMemoryAsync`）。 | — | — | _测试已撤回_ |
+| ~~TC-AGENT-013-d~~ | R-AGENT-013 | [SUPERSEDED by TC-AGENT-038-a @ R-AGENT-038, 2026-06-16] 不再打 `#auto_summary` 到独立节点；改在 `#auto_summary_root` 上挂 `#auto_root` + `#auto_summary_root` 两 tag。 | — | — | _测试已撤回_ |
+| ~~TC-AGENT-013-e~~ | R-AGENT-013 | [SUPERSEDED by TC-AGENT-038 @ R-AGENT-038, 2026-06-16] `#chat:<chatId>` 改为按行内 `(chat=<chatId>)` 元数据保留——不再以 tag 形式落到 root（避免 root 节点 tag 数量爆炸）。 | — | — | _测试已撤回_ |
+| TC-AGENT-013-f | R-AGENT-013 | [REMAINS VALID] 源码扫描：`MessageCoordinationDelegate.kt` —— `forcePersistSummaryToMemory` 调用点应仍受 `enableMemoryQueryFlow` gate 保护。本 TC 在 R-AGENT-038 后**仍有效**但门控位置可能在 archiver 之外（调用方层），新测试目前未单独覆盖；待 R-AGENT-039 phase 2 一并加强（gate 应**包住** archiver 路径）。 | unit-scan | _暂无测试_ 🔴 |
+| ~~TC-AGENT-013-g~~ | R-AGENT-013 | [SUPERSEDED by TC-AGENT-038-e @ R-AGENT-038, 2026-06-16] `try-catch` 现在在 archiver 内部（jsonl IO 路径），调用方简化。 | — | — | _测试已撤回_ |
+| ~~TC-AGENT-013-h~~ | R-AGENT-013 | [SUPERSEDED] `addSummaryMessage` 与 archiver 写入的相对顺序仍由 `forcePersistSummaryToMemory` 调用站点位置约束（同函数内），但已不再以独立 saveMemory 锚点检查。 | — | — | _测试已撤回_ |
+| ~~TC-AGENT-013-i~~ | R-AGENT-013 | [SUPERSEDED by TC-AGENT-038-a @ R-AGENT-038, 2026-06-16] root memory 的 `source` 字段在 archiver 内部固定为 `"auto_summary"`（保持向 EditMemoryDialog 兼容）。 | — | — | _测试已撤回_ |
+| TC-AGENT-013-j | R-AGENT-013 | 源码扫描：`MessageCoordinationDelegate.kt` | **bugfix（2026-06-08）**：`forcePersistSummaryToMemory` 落库前**必须裁掉**"对话回顾"和"工具包预热"两段拼接块。期望：源码含按 `"对话回顾"` / `"Dialogue review"` / `"【工具包预热】"` / `"[Package Warmup]"` 等分隔符做 `substringBefore` 或 `indexOf`+`substring` 裁剪的代码。 | unit-scan | `MessageCoordinationDelegateSummaryStripWiringTest#TC-AGENT-013-j strips dialogue review and package warmup before persist` 🟢 |
+| TC-AGENT-013-k | R-AGENT-013 | 源码扫描：`FunctionalPrompts.kt` | **bugfix（2026-06-08）**：`SUMMARY_PROMPT` (CN) 和 `SUMMARY_PROMPT_EN` 必须采用**短重点风格**——禁止包含强制扩写指令；必须含"精简" / "重点" / "concise" / "key facts" 等约束词。 | unit-scan | `FunctionalPromptsSummaryConcisenessWiringTest#TC-AGENT-013-k summary prompt enforces concise style` 🟢 |
 
 ### R-AGENT-014: Agent 感知 `#auto_summary` + `query_memory` tag 过滤（2026-06-07）
 
@@ -498,21 +506,21 @@ R-AGENT-012 是 R-AGENT-011 的 UI 兜底：R-011 已把 `#gateway:<platform>` t
 
 ### R-AGENT-016: APP 内自动摘要时一并把【关键事实】拆成独立 memory 节点（事实自我学习）（2026-06-08）
 
-测试类: `app/src/test/java/com/ai/assistance/operit/services/core/MessageCoordinationDelegateFactExtractionWiringTest.kt`（新增）
+测试类: _原 `MessageCoordinationDelegateFactExtractionWiringTest.kt` 已撤回 @ R-AGENT-038, 2026-06-16_
 
-**背景**: R-AGENT-013 让 APP 内自动摘要强行落库 `#auto_summary` 整段。R-AGENT-014 让 agent 能按 tag 查。R-AGENT-015 让 agent 调 LLM 前自动 prefetch 召回 fence。三者构成"读"侧闭环。但**写**侧整段摘要颗粒度过粗（用户 5 条偏好揉进一段 1500 字摘要），跨 chat 召回时 fence 噪声大、用户编辑成本高。R-AGENT-016 在 `forcePersistSummaryToMemory` 落 `#auto_summary` 整段之后追加一步：**复用既有 SUMMARY_PROMPT 已经稳定输出的 `【关键事实】 / [Key Facts]` bullet 段**（不改 prompt、不调新 LLM、零额外 token），按行解析 bullet line，逐条 take(800) → 独立落库 → 打 `#auto_extracted` + `#chat:$chatId` + `#auto_summary_id:$parentMemoryId`。Python 上游的等价路径是 Mem0/Hindsight 通过 `MemoryProvider.sync_turn` 远端做 fact extraction，Android 侧无 plugin 落地，本需求是 LLM-free 平替——直接复用 R-AGENT-013 已经调过的 summary 输出。
+**R-AGENT-038 (2026-06-16) 取代**: phase 1 把 fact 抽取后的"逐条独立 saveMemory + addTagToMemory(#auto_extracted)"路径**全部迁移**到 `MemoryArchiver.appendToRoot(EXTRACTED, ...)`，单一根节点 `#auto_extracted_root` 维护。dedup（3-gram jaccard 0.75）由 archiver 内部完成，不再在 delegate 层 prefetch+比对。原 TC-AGENT-016-a..i 由 TC-AGENT-038-a..g（行为）+ TC-AGENT-038-f（delegate wiring）接管。fact 抽取的 prompt 解析逻辑（bullet 切分、800 字截断、10 条上限、双语段头、try-catch）仍保留在 `extractAndPersistFacts` 函数体内，但守护方式变为"行为单测 + archiver 行为单测"，不再以独立 unit-scan 守每个常量。
 
 | TC ID | R-ID | 输入 / 触发 | 期望 | 测试类型 | 实现 / 状态 |
 |---|---|---|---|---|---|
-| TC-AGENT-016-a | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | `forcePersistSummaryToMemory` 函数体末尾必须含对 fact 抽取/落库新方法的调用（如 `extractAndPersistFacts(` 或同义 `extractFacts*` / `*ExtractedFacts*`）—— 否则 R-AGENT-016 整条链路完全没接通。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-a forcePersistSummaryToMemory invokes fact extractor at end` 🟢 |
-| TC-AGENT-016-b | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | 文件内必须存在新增的 private suspend 函数体，函数体内含：(a) `SUMMARY_SECTION_KEY_INFO_CN`（`【关键事实】`）或 `SUMMARY_SECTION_KEY_INFO_EN`（`[Key Facts]`）字面引用；(b) bullet 切分（`startsWith("- ")` 或 `Regex` 匹配 `- ` / `* ` / `• ` 之一）。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-b fact extractor parses key facts section bullet lines` 🟢 |
-| TC-AGENT-016-c | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | 抽取出的每条 fact 必须独立落库 + 打 `#auto_extracted` tag —— 源码必须含 `"#auto_extracted"` 字面字符串 + `repository.saveMemory(` 调用 + `repository.addTagToMemory(` 调用。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-c each fact saved separately with auto_extracted tag` 🟢 |
-| TC-AGENT-016-d | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | 单条 fact content 必须 800 字符截断（防超长 LLM 输出爆 ObjectBox）—— 源码 fact 抽取块内含 `take(800)` 调用或同名 `MAX_FACT_*_CHARS` / `FACT_CONTENT_LIMIT` = `800` 常量。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-d fact content truncated at 800 chars` 🟢 |
-| TC-AGENT-016-e | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | **2026-06-15 收紧**：单次抽取最多 **10 条** fact（原 20，雪球元凶之一——把上限拉低逼模型挑最重要事实）—— 源码 fact 抽取块内含 `take(10)` / `coerceAtMost(10)` / 同名 `MAX_FACT_COUNT` = `10` 常量。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-e fact count capped at 10` 🟢 |
-| TC-AGENT-016-f | R-AGENT-016 / R-AGENT-027 | 源码扫描：`MessageCoordinationDelegate.kt` | 必须打 `#chat:` 来源 tag —— 源码 fact 抽取块内含 `"#chat:"` 字面字符串。**R-AGENT-027 (2026-06-13)** 红线：函数体不得再写 `#auto_summary_id:` tag（已认定为设计冗余 + 孤儿污染源）。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-f facts get chat tag` 🟢 |
-| TC-AGENT-016-g | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | **2026-06-15 收紧**：去重升级到 **3-gram jaccard 0.75**（原 lowercase exact 比对——同义改写就被绕开，是 `#auto_extracted` 雪球元凶）。源码 fact 抽取块必须：(a) 调 `searchMemories(...)` 用 `tags=listOf("#auto_extracted")` 限定查询；(b) 函数体或 helper 调用 `computeAutoSummaryNgrams(` + `computeAutoSummaryJaccard(`（复用 R-AGENT-023 helper）；(c) 阈值字面 `0.75` 出现在 fact 抽取块；(d) baseline 至少 `take(1000)` 避免少召回（原 `take(200)`）。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-g fact extractor dedupes against existing auto_extracted nodes via jaccard` 🟢 |
-| TC-AGENT-016-h | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | 失败容忍：fact 抽取整段必须 try-catch 包围（解析异常 / 单条 saveMemory 异常都不能拖垮父 `#auto_summary` 落库）—— fact 抽取函数体含 `try {` + 对应 `catch (`。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-h fact extractor wrapped in try catch` 🟢 |
-| TC-AGENT-016-i | R-AGENT-016 | 源码扫描：`MessageCoordinationDelegate.kt` | i18n 完整性：fact 抽取函数必须能根据 `useEnglish` 选 `SUMMARY_SECTION_KEY_INFO_EN` 或 `..._CN` 段头 —— 函数签名含 `useEnglish` 形参 / 函数体同时引用 `SUMMARY_SECTION_KEY_INFO_CN` 和 `SUMMARY_SECTION_KEY_INFO_EN`。 | unit-scan | `MessageCoordinationDelegateFactExtractionWiringTest#TC-AGENT-016-i fact extractor handles both languages` 🟢 |
+| ~~TC-AGENT-016-a~~ | R-AGENT-016 | [SUPERSEDED by TC-AGENT-038-f @ R-AGENT-038, 2026-06-16] `forcePersistSummaryToMemory` 调 `extractAndPersistFacts` 仍然成立，但守护落到"delegate 文件含 `memoryArchiver.appendToRoot(` 字面值"。 | — | — | _测试已撤回_ |
+| ~~TC-AGENT-016-b~~ | R-AGENT-016 | [SUPERSEDED] bullet 解析逻辑仍在 `extractAndPersistFacts`，但**行为**由 archiver 路径下整体 verify。 | — | — | _测试已撤回_ |
+| ~~TC-AGENT-016-c~~ | R-AGENT-016 | [SUPERSEDED by TC-AGENT-038-f @ R-AGENT-038, 2026-06-16] 不再"独立 saveMemory + addTagToMemory(#auto_extracted)"；改走 archiver。 | — | — | _测试已撤回_ |
+| ~~TC-AGENT-016-d~~ | R-AGENT-016 | [SUPERSEDED] 800 字截断逻辑保留在 delegate 层，但通过行为而非 unit-scan 守护。 | — | — | _测试已撤回_ |
+| ~~TC-AGENT-016-e~~ | R-AGENT-016 | [SUPERSEDED] 10 条上限逻辑保留在 delegate 层，但通过行为而非 unit-scan 守护。 | — | — | _测试已撤回_ |
+| ~~TC-AGENT-016-f~~ | R-AGENT-016 | [SUPERSEDED] `#chat:` 改为按行内 `(chat=<chatId>)` 元数据；不再 tag。R-AGENT-027 红线（不得写 `#auto_summary_id:`）由 archiver 路径自然继承——archiver 完全不打 `#auto_summary_id:` 任何 tag。 | — | — | _测试已撤回_ |
+| ~~TC-AGENT-016-g~~ | R-AGENT-016 | [SUPERSEDED by TC-AGENT-038-d @ R-AGENT-038, 2026-06-16] dedup（3-gram jaccard 0.75）现在由 archiver 内部完成。 | — | — | _测试已撤回_ |
+| ~~TC-AGENT-016-h~~ | R-AGENT-016 | [SUPERSEDED by TC-AGENT-038-e @ R-AGENT-038, 2026-06-16] try-catch 同时存在于 delegate 层（fact 解析）和 archiver 层（IO）。delegate 层的 try-catch 仍是 `extractAndPersistFacts` 的 wrap，行为继承不变。 | — | — | _测试已撤回_ |
+| ~~TC-AGENT-016-i~~ | R-AGENT-016 | [SUPERSEDED] i18n 段头选择仍然在 `extractAndPersistFacts` 内部，未变。 | — | — | _测试已撤回_ |
 
 ### TC-AGENT-017 — R-AGENT-017 让 agent 知道自己有 memory 维护职责
 
@@ -565,6 +573,28 @@ R-AGENT-012 是 R-AGENT-011 的 UI 兜底：R-011 已把 `#gateway:<platform>` t
 | TC-AGENT-029-d | R-AGENT-029 | 源码扫描：`OperitApplication.kt` | 必须含 `launchOrphanTagMigrationsIfNeeded` 字面值（方法名）+ `"#auto_summary_id:"` 字面值（清理目标 prefix）+ `"hermes_data_migrations"` 字面值（SharedPreferences 名）+ `R_AGENT_029` 字面值（防重入键前缀）。 | unit-scan | `OperitApplicationOrphanTagMigrationWiringTest#TC-AGENT-029-d application source declares migration constants` 🟢 |
 | TC-AGENT-029-e | R-AGENT-029 | 源码扫描：`OperitApplication.kt::onCreate` 函数体 | `onCreate` 函数体内必须调用 `launchOrphanTagMigrationsIfNeeded()`（顺序无要求，但必须出现）。 | unit-scan | `OperitApplicationOrphanTagMigrationWiringTest#TC-AGENT-029-e onCreate invokes orphan tag migration hook` 🟢 |
 | TC-AGENT-029-f | R-AGENT-029 | 源码扫描：`OperitApplication.kt` `launchOrphanTagMigrationsIfNeeded` 函数体 | 必须含 `profileListFlow.first()` 字面值（多 profile 全遍历）+ `cleanupOrphanTagsByPrefix(` 字面值（调仓储 API）+ `try {` + `catch` 包裹（失败容忍）+ `prefs.edit().putBoolean(` 调用（成功才写完成标记）。 | unit-scan | `OperitApplicationOrphanTagMigrationWiringTest#TC-AGENT-029-f migration iterates all profiles with try-catch and writes done flag` 🟢 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
+## 域 AGENT — Auto-Fragment Bucket Roots + Cold Archive (R-AGENT-038)
+
+R-AGENT-038 把"对话压缩摘要 (`#auto_summary`) + 自动抽取碎片 (`#auto_extracted`) + 历史编号碎片 (`#auto_summary_id:NNN`)"三大碎片来源**结构化合并**为 3 个根节点，并把溢出条目按桶+日期归档到 `Context.filesDir/hermes/memory_archive/<bucket>/<YYYY-MM-DD>.jsonl`。本 R = phase 1 = 骨架接入（新写入走 archiver；旧节点保留不动），R-AGENT-039 = phase 2 = 历史迁移 + UI + 召回改造。
+
+测试策略：
+- 仿 `MemoryRepositoryOrphanTagCleanupTest` / `OperitApplicationOrphanTagMigrationWiringTest` 用 source-scan 做接入守护（关键字面值 / 调用顺序）。
+- `MemoryArchiver` 行为层用 unit test：fake `MemoryRepository` + 临时目录承接 jsonl 写入；断言 root content 形态、dedup 路径、rollover slice 行为、IO 失败容错。
+
+| TC ID | R-ID | 输入 / 触发 | 期望 | 测试类型 | 实现 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-038-a | R-AGENT-038 | 第一次调 `MemoryArchiver.appendToRoot(SUMMARY, chatId="c1", content="hello", ts=…)`，repository 中无现成 `#auto_summary_root` tag | 仓库新建一条 Memory，tags = `{#auto_summary_root, #auto_root}`；content 为单行 `[<ISO ts>] (chat=c1) hello\n`；返回 `AppendResult.Created` | unit | `MemoryArchiverTest#TC-AGENT-038-a first append lazily creates root with bucket and shared auto tag` 🔴 |
+| TC-AGENT-038-b | R-AGENT-038 | 在已有 root（含 1 行旧内容）上连续 append 2 条新内容 | content 行序为 newest-first：第 0 行是最后一次 append、第 1 行是上一次 append、第 2 行是最早那条；返回 `AppendResult.Appended` | unit | `MemoryArchiverTest#TC-AGENT-038-b subsequent appends prepend newest first preserving prior lines` 🔴 |
+| TC-AGENT-038-c | R-AGENT-038 | root 已有 `MAX_HOT_LINES_SUMMARY=200` 行，再 append 一条让总数达到 201 | rollover：oldest 20 行 (index 181..200) 被写入 `<filesDir>/hermes/memory_archive/auto_summary/<YYYY-MM-DD>.jsonl`，每行是 `{ts, chat_id, content, source}` JSON；root content 截断为最新 181 行（200-20+1）；返回 `AppendResult.AppendedWithRollover(20)` | unit | `MemoryArchiverTest#TC-AGENT-038-c overflow rolls oldest 20 lines to dated jsonl and trims root` 🔴 |
+| TC-AGENT-038-d | R-AGENT-038 | root 已含 `"今天天气真好"`；append 新内容 `"今天 天气 真好"`（jaccard ≥ 0.75） | dedup 命中：root content 不变（仍为 1 行），不写 jsonl，返回 `AppendResult.SkippedDuplicate` | unit | `MemoryArchiverTest#TC-AGENT-038-d high-similarity append is dropped without modifying root or archive` 🔴 |
+| TC-AGENT-038-e | R-AGENT-038 | rollover 时 archive 目录不可写（fake `File.outputStream()` 抛 IOException） | root content 保持 rollover 前状态（不被截断也不丢内容）；返回 `AppendResult.Failed`；archiver 内部 `try/catch` + `AppLogger.w` 记录但不抛 | unit | `MemoryArchiverTest#TC-AGENT-038-e archive io failure leaves root content intact` 🔴 |
+| TC-AGENT-038-f | R-AGENT-038 | 源码扫描：`MessageCoordinationDelegate.kt` `forcePersistSummaryToMemory` + `extractAndPersistFacts` 函数体 | 函数体必须包含 `memoryArchiver.appendToRoot(` 字面值；**不得**再出现 `repository.addTagToMemory(...#auto_summary` / `...#auto_extracted` 字面值（写入路径已切到 archiver） | unit-scan | `MessageCoordinationDelegateAutoNodeWiringTest#TC-AGENT-038-f delegate routes auto-summary and auto-extracted writes through archiver` 🔴 |
+| TC-AGENT-038-g | R-AGENT-038 | 源码扫描：`MemoryArchiver.kt` 文件文本 | 必须含字面值 `MAX_HOT_LINES_SUMMARY = 200` + `MAX_HOT_LINES_EXTRACTED = 100` + `MAX_HOT_LINES_SUMMARY_ID = 50` + `"hermes/memory_archive"` 路径前缀 + `try {` / `catch` 守住 IO + `appendText(` 或 `outputStream(` 调用（jsonl append-only 写入） | unit-scan | `MemoryArchiverTest#TC-AGENT-038-g archiver source declares thresholds path and io guard` 🔴 |
 
 状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
 

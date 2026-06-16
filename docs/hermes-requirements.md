@@ -507,6 +507,86 @@ Hermes Android 翻译已半成品：`hermes-android/.../MemoryManager.kt:339-362
 
 ---
 
+### R-AGENT-038: 三类自动节点（`#auto_summary` / `#auto_extracted` / `#auto_summary_id:*`）聚合到 root 节点 + 冷归档（阶段 1：架构骨架）
+
+**来源**: 用户 2026-06-16 明确提议："把这3个来源，分类合并成3个节点，超出一定数量就往手机硬盘储存（做好分类和时间戳）"。无 Python 上游对应（R-AGENT-013/016 整套自动抽取流水线本身就是 Android 平台特化，上游 `MemoryProvider` 把 fact 维护下放给云端 plugin，本地不存类似结构）。
+
+**背景**: R-AGENT-013（auto_summary 写入）+ R-AGENT-016（fact 拆独立节点）+ R-AGENT-027 历史 `#auto_summary_id:*` 残留共同造成"图谱里几百到几千个浅灰小节点淹没 MemoryScreen"。R-AGENT-023/025/026 反复迭代过 dedup / AI 保留判断 / 一键清父，但**架构上无总量上限 + 无 TTL + 无后台 GC**（HANDOFF-MEM-CLEANUP.md:5 明确产品决策"不自动删除"），本质是无界增长。R-AGENT-038 用结构性重做替代之前的"打补丁"路线：把无限增长的零散节点变成 **3 个永远在线 root + 冷数据下沉硬盘 jsonl** 的两层结构。
+
+**架构合规**:
+- 不动上游 Python 对齐基线（本来就没这个机制）。
+- 只动 `app/` 模块（`MessageCoordinationDelegate` / 新增 `MemoryArchiver` / `MemoryRepository` 新仓储 API），不动 `hermes-android/`——§2 四件套指标不应受影响。
+- 阶段 1 只做"写入端骨架"：新写入路径 + 冷归档器。**不动** R-AGENT-015 召回链路、不动 MemoryScreen UI、不做存量数据迁移（迁移留给阶段 2 R-AGENT-039）。
+- 旧节点保持原状（不删不改），与新 root 节点共存——降低单次发布风险，灰度可回滚。
+
+**行为**:
+- **3 个 root 节点**（按需懒创建）：
+  - `#auto_summary_root` — 聚合所有 `#auto_summary` 写入。`source = "auto_summary_root"`。
+  - `#auto_extracted_root` — 聚合所有 `#auto_extracted` 写入。`source = "auto_extracted_root"`。
+  - `#auto_summary_id_root` — 占位，本阶段**不主动写入**（生产源已被 R-AGENT-027 关停），留 schema 给阶段 2 迁移残留时使用。
+  - 同时打 `#auto_root` 共族 tag（供阶段 2 chip 过滤族识别）。
+- **root 节点 content 格式**（每行一条，最新在前）：
+  ```
+  [<ISO-8601 timestamp>] (chat=<chatId>) <sanitized content single-line>
+  ```
+  换行用空格替换；超长内容（> 800 char/行）截断尾部加 `…`。
+- **MAX_HOT_LINES**（root.content 行数上限，触发归档的阈值）：
+  - `MAX_HOT_LINES_SUMMARY = 200`
+  - `MAX_HOT_LINES_EXTRACTED = 100`
+  - `MAX_HOT_LINES_SUMMARY_ID = 50`
+- **冷归档**：超出 MAX_HOT_LINES 时把尾部 N 行（N=20）切出去，写到 `Context.filesDir/hermes/memory_archive/<bucket>/<YYYY-MM-DD>.jsonl`，bucket ∈ {`auto_summary`, `auto_extracted`, `auto_summary_id`}。每行 JSON：`{ts, chat_id, content, source}`。文件按当地日期切分（一天一文件），按 append-only 方式写。
+- **写入流程改造**（`MessageCoordinationDelegate.kt`）：
+  - `forcePersistSummaryToMemory` 解析 `[Persistence Decision]` 不值得仍 skip（保留 R-AGENT-026）；值得 → 调 `MemoryArchiver.appendToRoot(bucket="auto_summary", chatId, content, ts)`。
+  - `extractAndPersistFacts` 同样改成对每条 fact 调 `MemoryArchiver.appendToRoot(bucket="auto_extracted", chatId, content, ts)`。
+  - **不再为每条 fact / summary 创建独立 Memory 节点**（这是阶段 1 的关键写入端切换）。
+  - 旧 dedup（jaccard 0.75 与 ObjectBox 老节点比对）保留语义但 baseline 改成 root.content 行内比对：append 前先把待写行与 root.content 现有行做 3-gram jaccard，命中 ≥ 0.75 → 跳过（不重复 append，不更新时间戳——保持简单，阶段 2 再加"再次出现"标记）。
+- **新增组件**：
+  - `app/src/main/java/com/ai/assistance/operit/data/repository/MemoryArchiver.kt`（per-profile 实例）
+    - `suspend fun appendToRoot(bucket: ArchiveBucket, chatId: String, content: String, timestamp: Long): AppendResult`
+    - `suspend fun ensureRoot(bucket: ArchiveBucket): Memory`（懒创建 root）
+    - `private fun rolloverIfNeeded(root: Memory, bucket: ArchiveBucket)` — 检查行数 > MAX_HOT_LINES → 切尾部 20 行 → 写 jsonl + 更新 root.content + extra
+    - `private fun archiveDir(bucket: ArchiveBucket): File` — `filesDir/hermes/memory_archive/<bucket>/`
+  - `MemoryRepository` 新增 `findMemoryByTagExact(tagName: String): Memory?` —— 按 tag 精确查找单个节点（root 节点查询用），如已有等价 API 复用。
+- **不变量**（阶段 1 必须守住）：
+  - 旧的 `#auto_summary` / `#auto_extracted` / `#auto_summary_id:*` 节点**不删**（迁移在阶段 2）；新写入只去 root。
+  - 现有 R-AGENT-015 召回链路对老节点仍生效（搜索 ObjectBox 全表）；root 节点暂不参与召回（阶段 2 改造）。
+  - R-AGENT-026 keepDecision=false 整段 skip 行为保留。
+  - R-AGENT-029 启动迁移仍跑（清 `#auto_summary_id:*` 残留）。
+  - 一次写入失败（ObjectBox / 文件 IO 异常）必须 try/catch + AppLogger.w，不阻塞摘要主流程。
+
+**验收**:
+- `MemoryArchiver.kt` 必须存在并对外暴露 `appendToRoot` / `ensureRoot` 两个 suspend 函数。
+- `MessageCoordinationDelegate.forcePersistSummaryToMemory` / `extractAndPersistFacts` 内不再含 `repository.saveMemory(... source = "auto_summary" ...)` / `source = "auto_extracted"` 写法（改走 archiver）；保留 `[Persistence Decision]` skip + 摘要尾部块清理。
+- 单元测试覆盖（`MemoryArchiverTest`）：
+  - `appendToRoot` 首次调用懒创建 root + 打 `#auto_summary_root` / `#auto_extracted_root` / `#auto_root` tag。
+  - 第 N 次调用累加到 root.content（最新在前 + 时间戳格式）。
+  - 行数达 MAX_HOT_LINES + 1 → 自动 rollover：尾部 20 行落 jsonl + root.content 缩回 MAX_HOT_LINES - 20 行 + 文件含合法 JSONL。
+  - 重复 append 同 content（jaccard ≥ 0.75）→ 跳过不重复写。
+  - 文件 IO 异常（mock filesDir 只读）→ rollover 失败但 root.content 不损坏 + AppLogger.w 落日志。
+- 单元测试覆盖（`MessageCoordinationDelegateAutoNodeTest` 或就地扩展现有测试类）：
+  - 一次摘要写入只产生 1 条 archiver append（不再创建独立 Memory）。
+  - 不值得（[Persistence Decision]=not worth）整段 skip + archiver 0 调用。
+  - 一条摘要含 5 条 [Key Facts] bullet → archiver 收到 1 条 summary append + 5 条 extracted append。
+- §2 四件套：`verify_align` / `scan_stubs` / `deep_align` 维持零（baseline 1）；`scan_functional_stubs` ≤ 390。本改动**只动 app/ 模块**，hermes-android 指标不变。
+- §3 E2E：本改动不触及 agent loop / API / 工具派发，但触及"摘要写入 → 记忆库"链路。**触及 memory 召回的 E2E 路径**——pre-act injection（R-AGENT-015）仍读老节点，本阶段未改召回侧，因此 `test_tool_call_e2e.sh` 行为不变。仍建议跑一次 `test_api_config_e2e.sh` 确认 chat 主路径不退化。
+- **手测验收**: 装了 R-AGENT-038 APK 后聊一段对话触发摘要 → MemoryScreen 应能看到新 root 节点（带 `#auto_summary_root` tag）+ 行内含时间戳；旧 `#auto_summary` 节点不增不减（用 `#auto_extracted` 同理）。
+
+---
+
+### R-AGENT-039: 阶段 2 — 存量迁移 + UI 改造 + 召回链路改造（占位）
+
+**来源**: R-AGENT-038 阶段 1 上线后的后续工程。
+
+**性质**: 占位条目，阶段 1 验证稳定后再展开本条具体行为。当前仅记录工程意图：
+- 启动时一次性把存量 `#auto_summary` / `#auto_extracted` / `#auto_summary_id:*` 节点合并到对应 root + 落 jsonl 后删除（仿 R-AGENT-029 + 防重入键 `R_AGENT_039_auto_node_consolidation_done`）。
+- MemoryScreen 加 chip 过滤族 `#auto_root`（默认隐藏 / 仅看自动 / 全部三态）+ root 节点详情查归档 jsonl 列表。
+- R-AGENT-015 pre-act injection 改造：召回时检查 root 节点 → 改用 grep 行 + 必要时按时间窗读最近 N 天归档 jsonl 一同注入。
+- 节点配色 `pickNodeColorByAttributes` 增加 root 节点专属颜色。
+
+**前置依赖**: R-AGENT-038 必须落地稳定运行至少 1 个开发迭代周期 + 单测全绿。本条详细 spec 在 R-AGENT-038 验证完成后补全。
+
+---
+
 ## 域 ACP — Agent Client Protocol
 
 HermesApp 支持 ACP 双向：作为 **server** 暴露自身 agent 给外部 client（Zed / CLI）；作为 **client** 连到外部 ACP server（如 GitHub Copilot）。Python 源：`reference/hermes-agent/acp_adapter/` + `acp_registry/` + `agent/copilot_acp_client.py`。

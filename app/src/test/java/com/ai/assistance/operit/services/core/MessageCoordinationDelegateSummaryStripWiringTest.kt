@@ -60,23 +60,27 @@ class MessageCoordinationDelegateSummaryStripWiringTest {
 
     /**
      * TC-AGENT-015-g (R-AGENT-015 死循环防御, 2026-06-08)：`forcePersistSummaryToMemory` 在调
-     * `memoryRepository.saveMemory(...)` 之前必须对 `summaryText` 做一次 `<memory-context>` fence
-     * 剥离（调 `sanitizeContext` 或等价正则替换 `<memory-context>...</memory-context>` 整段）。
+     * 落库（R-AGENT-038 之后是 `memoryArchiver.appendToRoot(...)`）之前必须对 `summaryText`
+     * 做一次 `<memory-context>` fence 剥离（调 `sanitizeContext` 或等价正则替换
+     * `<memory-context>...</memory-context>` 整段）。
      *
      * 防御性代码：理论上 `summarizeMemory` 拿的是 `List<ChatMessage>`（持久化层不带 fence），
      * 剥不到东西；但一旦未来路径变化让 fence 漏进 ChatMessage（例如直接保存被 R-AGENT-015 注入
-     * 过的 OpenAI message 内容），`#auto_summary` 节点就会带 fence 落库，下轮 prefetch 又把它
+     * 过的 OpenAI message 内容），auto_summary root 节点就会带 fence 落库，下轮 prefetch 又把它
      * 召回拼回 user message —— 形成"注入 → 摘要 → 落库 → 召回 → 再注入"雪球。在落库前剥一次
      * 是 cheap 兜底。
+     *
+     * R-AGENT-038 (2026-06-16)：anchor 从 `saveMemory(` 切到 `memoryArchiver.appendToRoot(`，
+     * 写入路径已合并到 archiver root 节点，但 sanitize 必须仍在 appendToRoot 之前。
      */
     @Test
     fun `TC-AGENT-015-g forcePersistSummaryToMemory sanitizes memory context before save`() {
         val block = extractFunctionBlock(source, "forcePersistSummaryToMemory")
 
-        // 找 saveMemory 调用位置（落库点）
-        val saveIdx = Regex("""\bsaveMemory\s*\(""").find(block)?.range?.first ?: -1
+        // 找 archiver 落库调用位置（R-AGENT-038 之后的新落库点）
+        val saveIdx = Regex("""\bmemoryArchiver\.appendToRoot\s*\(""").find(block)?.range?.first ?: -1
         assertTrue(
-            "找不到 saveMemory(...) 调用 —— 先满足 R-AGENT-013-a/b 的 wiring。",
+            "找不到 memoryArchiver.appendToRoot(...) 调用 —— 先满足 TC-AGENT-038-f1 的 wiring。",
             saveIdx >= 0
         )
 
