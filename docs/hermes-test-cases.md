@@ -623,6 +623,25 @@ R-AGENT-039 给 agent 暴露一个名为 `session_search` 的工具（与 Python
 
 ---
 
+## 域 AGENT — 启动迁移：存量散节点合并到 root (R-AGENT-040)
+
+R-AGENT-040 = R-AGENT-038 phase 2 第一步。app cold start 时一次性把旧 APK 装机产生的散 `#auto_summary` / `#auto_extracted` / `#auto_summary_id:NNN` 节点合并到 R-AGENT-038 phase 1 的 3 个 root 节点（复用 archiver `appendToRoot` 内置 dedup + rollover）。**不删旧节点**（保险起见 phase 2 留着，R-AGENT-041 才删）；**不动写入侧**（archiver / delegate / repository 一行不动，只在 `OperitApplication.onCreate` 加一个迁移 hook）。
+
+测试策略：仿 R-AGENT-029 / R-AGENT-038 同款，全部 source-scan。`OperitApplication.onCreate` 触发的 IO 协程涉及 ObjectBox + Context.filesDir + SharedPreferences，纯 JVM mock ROI 极低；运行时正确性由 §3 E2E + 用户带历史散节点设备的手测兜底。
+
+| TC ID | 关联 R | 输入 / 现状 | 期望 | 测试类型 | 测试落地 |
+|---|---|---|---|---|---|
+| TC-AGENT-040-a | R-AGENT-040 | 源码扫描：`OperitApplication.kt` | 必须含 `launchAutoNodeArchiverMigrationIfNeeded` 字面值（方法名）+ `R_AGENT_040_auto_node_consolidation_done` 字面（done flag key）+ `"hermes_data_migrations"` 字面（SharedPreferences 名，与 R-AGENT-029 共用）。 | unit-scan | `OperitApplicationAutoNodeArchiverMigrationWiringTest#TC-AGENT-040-a application source declares migration constants` 🔴 |
+| TC-AGENT-040-b | R-AGENT-040 | 源码扫描：`OperitApplication.kt::onCreate` 函数体 | `onCreate` 函数体内必须调用 `launchAutoNodeArchiverMigrationIfNeeded()`（顺序无要求，但必须出现）。 | unit-scan | `OperitApplicationAutoNodeArchiverMigrationWiringTest#TC-AGENT-040-b onCreate invokes migration hook` 🔴 |
+| TC-AGENT-040-c | R-AGENT-040 | 源码扫描：`OperitApplication.kt::launchAutoNodeArchiverMigrationIfNeeded` 函数体 | 必须含：(1) `applicationScope.launch` / 等价后台协程；(2) `getSharedPreferences("hermes_data_migrations"` 字面；(3) `getBoolean(` + done flag key 的短路返回；(4) `prefs.edit().putBoolean(` + done flag key + `true` 字面（成功路径置位）。 | unit-scan | `OperitApplicationAutoNodeArchiverMigrationWiringTest#TC-AGENT-040-c migration hook uses background scope and done flag short-circuit` 🔴 |
+| TC-AGENT-040-d | R-AGENT-040 | 源码扫描：`launchAutoNodeArchiverMigrationIfNeeded` 函数体 | 必须扫描三段 tag：(1) `"#auto_summary"` 字面 + `findMemoriesByTag(` 调用；(2) `"#auto_extracted"` 字面 + `findMemoriesByTag(` 调用；(3) `"#auto_summary_id:"` 字面 + `findTagsByNamePrefix(` 调用（变长后缀走 prefix 扫）。必须引用 `ArchiveBucket.SUMMARY` / `ArchiveBucket.EXTRACTED` / `ArchiveBucket.SUMMARY_ID` 三个枚举。必须调 `appendToRoot(` 至少一次（迁移落库动作）。必须调 `MemoryArchiver(` 构造（per-profile 实例化）。 | unit-scan | `OperitApplicationAutoNodeArchiverMigrationWiringTest#TC-AGENT-040-d migration scans three tag families and writes via archiver` 🔴 |
+| TC-AGENT-040-e | R-AGENT-040 | 源码扫描：`launchAutoNodeArchiverMigrationIfNeeded` 函数体 | 必须含：(1) `profileListFlow.first()` 调用（遍历所有 profile）；(2) `try {` + `catch (` 包住主体；(3) catch 路径含 `AppLogger.w(` 调用；(4) catch 路径**不**写 `prefs.edit().putBoolean(...true)`（done flag 只在 try 末尾置位）—— 等价表达：done flag 置位语句必须出现在 catch 块**之外**。 | unit-scan | `OperitApplicationAutoNodeArchiverMigrationWiringTest#TC-AGENT-040-e migration iterates profiles guards exceptions and skips done flag on failure` 🔴 |
+| TC-AGENT-040-f | R-AGENT-040 | 源码扫描：`launchAutoNodeArchiverMigrationIfNeeded` 函数体 | 必须含 chatId 提取逻辑：从 Memory 的 `tags` ToMany 找 `#chat:` 前缀的 tag，取后缀作为 chatId 传给 `appendToRoot`；找不到时传 `""`。验收点：函数体含 `"#chat:"` 字面 + `removePrefix(` 或 `substringAfter(` 或 `drop(` 等价表达。**不**得直接传 `Memory.uuid` / `Memory.id` 作为 chatId（因为 Memory 没有 chatId 字段，旧节点的 chatId 在 tag 上）。 | unit-scan | `OperitApplicationAutoNodeArchiverMigrationWiringTest#TC-AGENT-040-f migration extracts chatId from chat-prefixed tag with empty fallback` 🔴 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — App Self-Awareness Prompt Injection (R-AGENT-030)
 
 R-AGENT-030 让主 agent 的 system prompt 注入「应用自我感知」段，告诉 agent HermesApp 内置了哪些用户视角的 UI 入口（工具箱 / Memory hub / Settings / Skill Recorder / Terminal 等），方便 agent 在被问"我去哪里 X"时给出导航式回答而非自己代劳或瞎猜。

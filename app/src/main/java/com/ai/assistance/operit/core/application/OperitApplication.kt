@@ -151,6 +151,9 @@ class OperitApplication : Application(), ImageLoaderFactory, WorkConfiguration.P
         launchOrphanTagMigrationsIfNeeded()
         AppLogger.d(TAG, "【启动计时】R-AGENT-029 孤儿 tag 迁移任务已提交（异步IO） - ${System.currentTimeMillis() - startTime}ms")
 
+        launchAutoNodeArchiverMigrationIfNeeded()
+        AppLogger.d(TAG, "【启动计时】R-AGENT-040 自动节点归档迁移任务已提交（异步IO） - ${System.currentTimeMillis() - startTime}ms")
+
         // R-AGENT-031: enqueue the WorkManager-driven cron tick (15-minute period, KEEP policy).
         // Must be after launchOrphanTagMigrationsIfNeeded so memory-side maintenance runs first.
         CronTickWorker.enqueue(this)
@@ -472,6 +475,136 @@ class OperitApplication : Application(), ImageLoaderFactory, WorkConfiguration.P
                 )
             } catch (e: Exception) {
                 AppLogger.w(TAG, "R-AGENT-029: orphan tag migration failed, will retry next launch: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * R-AGENT-040: 一次性把 phase 1 之前装的旧 APK 写下的散 `#auto_summary` / `#auto_extracted` /
+     * `#auto_summary_id:NNN` 节点合并到 R-AGENT-038 的 3 个 root 节点 (`#auto_summary_root` /
+     * `#auto_extracted_root` / `#auto_summary_id_root`)。
+     *
+     * 仿 [launchOrphanTagMigrationsIfNeeded] 范式：applicationScope + Dispatchers.IO + try/catch，
+     * 不阻塞主线程。SharedPreferences 防重入键 `R_AGENT_040_auto_node_consolidation_done`（位于
+     * `hermes_data_migrations` 文件，与 R-AGENT-029 共用）。失败不写完成标记，下次启动重试。
+     *
+     * **不删旧节点**：保险起见 phase 2 留着，R-AGENT-041 才删。
+     * **chatId**：Memory 实体无 chatId 字段，旧节点的 chatId 是作为 `#chat:<id>` tag 挂在节点上的，
+     * 迁移时从 tags ToMany 找 `#chat:` 前缀的 tag 取后缀；找不到传 `""`。
+     */
+    private fun launchAutoNodeArchiverMigrationIfNeeded() {
+        applicationScope.launch {
+            val migrationStartTime = System.currentTimeMillis()
+            val prefs = getSharedPreferences("hermes_data_migrations", Context.MODE_PRIVATE)
+            val key = "R_AGENT_040_auto_node_consolidation_done"
+            if (prefs.getBoolean(key, false)) {
+                return@launch
+            }
+            // Memory 实体无 chatId 字段，旧节点的 chatId 是作为 `#chat:<id>` tag 挂上的；
+            // 从 tags ToMany 找 `#chat:` 前缀 tag 取后缀作为 chatId，找不到传 ""。
+            val extractChatId: (com.ai.assistance.operit.data.model.Memory) -> String = { memory ->
+                try {
+                    memory.tags
+                        .firstOrNull { it.name.startsWith("#chat:") }
+                        ?.name
+                        ?.removePrefix("#chat:")
+                        ?: ""
+                } catch (_: Exception) {
+                    ""
+                }
+            }
+            try {
+                val profiles = preferencesManager.profileListFlow.first()
+                if (profiles.isEmpty()) {
+                    AppLogger.d(TAG, "R-AGENT-040: no profiles yet, skip migration this run")
+                    return@launch
+                }
+                var totalAppended = 0
+                for (profileId in profiles) {
+                    val repo = com.ai.assistance.operit.data.repository.MemoryRepository(
+                        applicationContext,
+                        profileId
+                    )
+                    val archiver = com.ai.assistance.operit.data.repository.MemoryArchiver(
+                        applicationContext,
+                        repo
+                    )
+
+                    // SUMMARY bucket：扫 `#auto_summary` exact-match
+                    val summaryNodes = repo.findMemoriesByTag("#auto_summary")
+                        .sortedBy { it.createdAt.time }
+                    for (node in summaryNodes) {
+                        if (node.content.isBlank()) continue
+                        val chatId = extractChatId(node)
+                        try {
+                            archiver.appendToRoot(
+                                bucket = com.ai.assistance.operit.data.repository.MemoryArchiver.ArchiveBucket.SUMMARY,
+                                chatId = chatId,
+                                content = node.content,
+                                timestamp = node.createdAt.time
+                            )
+                            totalAppended++
+                        } catch (e: Exception) {
+                            AppLogger.w(TAG, "R-AGENT-040: profile=$profileId SUMMARY append failed nodeId=${node.id}: ${e.message}")
+                        }
+                    }
+
+                    // EXTRACTED bucket：扫 `#auto_extracted` exact-match
+                    val extractedNodes = repo.findMemoriesByTag("#auto_extracted")
+                        .sortedBy { it.createdAt.time }
+                    for (node in extractedNodes) {
+                        if (node.content.isBlank()) continue
+                        val chatId = extractChatId(node)
+                        try {
+                            archiver.appendToRoot(
+                                bucket = com.ai.assistance.operit.data.repository.MemoryArchiver.ArchiveBucket.EXTRACTED,
+                                chatId = chatId,
+                                content = node.content,
+                                timestamp = node.createdAt.time
+                            )
+                            totalAppended++
+                        } catch (e: Exception) {
+                            AppLogger.w(TAG, "R-AGENT-040: profile=$profileId EXTRACTED append failed nodeId=${node.id}: ${e.message}")
+                        }
+                    }
+
+                    // SUMMARY_ID bucket：变长后缀，走 prefix 扫
+                    val summaryIdTags = repo.findTagsByNamePrefix("#auto_summary_id:")
+                    val summaryIdNodes = mutableListOf<com.ai.assistance.operit.data.model.Memory>()
+                    for (tag in summaryIdTags) {
+                        summaryIdNodes.addAll(tag.memories.toList())
+                    }
+                    val uniqueSummaryIdNodes = summaryIdNodes
+                        .distinctBy { it.id }
+                        .sortedBy { it.createdAt.time }
+                    for (node in uniqueSummaryIdNodes) {
+                        if (node.content.isBlank()) continue
+                        val chatId = extractChatId(node)
+                        try {
+                            archiver.appendToRoot(
+                                bucket = com.ai.assistance.operit.data.repository.MemoryArchiver.ArchiveBucket.SUMMARY_ID,
+                                chatId = chatId,
+                                content = node.content,
+                                timestamp = node.createdAt.time
+                            )
+                            totalAppended++
+                        } catch (e: Exception) {
+                            AppLogger.w(TAG, "R-AGENT-040: profile=$profileId SUMMARY_ID append failed nodeId=${node.id}: ${e.message}")
+                        }
+                    }
+
+                    AppLogger.d(
+                        TAG,
+                        "R-AGENT-040: profile=$profileId scanned summary=${summaryNodes.size} extracted=${extractedNodes.size} summaryId=${uniqueSummaryIdNodes.size}"
+                    )
+                }
+                prefs.edit().putBoolean(key, true).apply()
+                AppLogger.d(
+                    TAG,
+                    "R-AGENT-040: migration done, totalAppended=$totalAppended across ${profiles.size} profile(s), 耗时${System.currentTimeMillis() - migrationStartTime}ms"
+                )
+            } catch (e: Exception) {
+                AppLogger.w(TAG, "R-AGENT-040: auto node consolidation failed, will retry next launch: ${e.message}")
             }
         }
     }

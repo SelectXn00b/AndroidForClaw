@@ -619,17 +619,50 @@ Hermes Android 翻译已半成品：`hermes-android/.../MemoryManager.kt:339-362
 
 ---
 
-### R-AGENT-040: 启动时一次性迁移存量 `#auto_summary` / `#auto_extracted` / `#auto_summary_id:*` 节点到 root（占位）
+### R-AGENT-040: 启动时一次性迁移存量 `#auto_summary` / `#auto_extracted` / `#auto_summary_id:*` 节点到 root
 
-**来源**: R-AGENT-038 阶段 1 后续工程；用户 2026-06-16 提出"能不能把用户之前产生的那些节点也按最新规则整合"。
+**来源**: R-AGENT-038 阶段 1 后续工程；用户 2026-06-16 提出"能不能把用户之前产生的那些节点也按最新规则整合"。R-AGENT-039 (β) 已 ship `c92d1c8d`，召回路径稳定，开始填存量迁移。
 
-**性质**: 占位条目，等 R-AGENT-039（agent 召回工具）落地稳定后再展开。当前记录工程意图：
-- 启动时一次性把存量 `#auto_summary` / `#auto_extracted` / `#auto_summary_id:*` 节点（每条独立 Memory）按时间顺序合并到对应 root.content + 落 jsonl 后删除独立节点（仿 R-AGENT-029 启动迁移机制）。
-- 防重入键：`R_AGENT_040_auto_node_consolidation_done`（SharedPreferences `hermes_data_migrations`）。
-- 单事务（`runInTx`）保证：迁移过程异常不留半成品（要么全迁要么全不动）。
-- 旧节点删除前必须先成功 append 到 root + 落 jsonl，任一步骤失败回滚。
+**Python 上游**: 无 —— 启动迁移属 Android 平台特化（旧 APK 装机用户的数据修复），Python Hermes 没有对应需求。形态上仿 R-AGENT-029 `launchOrphanTagMigrationsIfNeeded` 一次性后台迁移机制。
 
-**前置依赖**: R-AGENT-039 落地 + 至少 1 个开发迭代周期稳定运行。本条详细 spec 在 R-AGENT-039 验证完成后补全。
+**背景**: R-AGENT-038 phase 1 把摘要 / 抽取 / fact 写入路径切到 `MemoryArchiver.appendToRoot(...)`，新数据落入 3 个 root 节点（`#auto_summary_root` / `#auto_extracted_root` / `#auto_summary_id_root`）的 `content` 字段（newest-first prepend，写满 hot 阈值后 rollover 到 JSONL 冷归档）。但 phase 1 之前装的旧 APK 已经写了**散节点**（每条 summary / extracted / fact 都是独立的 Memory，挂 `#auto_summary` / `#auto_extracted` / `#auto_summary_id:NNN` tag）。这些散节点：
+- ✅ 仍能被 R-AGENT-039 `session_search` 全表搜到（ObjectBox 全表检索覆盖所有 Memory）
+- ❌ R-AGENT-015 `<memory-context>` pre-act 注入路径召回率不如 root 节点（root 是定向 prefetch，散节点要靠 embedding / tag 命中）
+- ❌ 历史节点散落在 MemoryScreen 列表，UX 杂乱（R-AGENT-041 chip 过滤需要 root 化后才有意义）
+
+R-AGENT-040 把这些散节点**一次性合并**到对应 root 节点的 `content`，使存量数据复用 phase 1 的 hot/cold + dedup + rollover 机制。
+
+**核心行为**:
+- **触发**: app cold start `OperitApplication.onCreate` → `launchAutoNodeArchiverMigrationIfNeeded()` → `applicationScope.launch`（IO 协程，不阻塞主线程）。
+- **防重入**: SharedPreferences `hermes_data_migrations` / key `R_AGENT_040_auto_node_consolidation_done`（boolean）；命中即跳过。失败不写 done flag → 下次冷启重试（与 R-AGENT-029 同语义）。
+- **范围**: 遍历 `preferencesManager.profileListFlow.first()` 拿到所有 profile，对每个 profile：
+  - `MemoryRepository(ctx, profileId)` + `MemoryArchiver(ctx, repo)` per-profile 实例化。
+  - 三段扫描：
+    1. `findMemoriesByTag("#auto_summary")` → 走 `ArchiveBucket.SUMMARY`
+    2. `findMemoriesByTag("#auto_extracted")` → 走 `ArchiveBucket.EXTRACTED`
+    3. `findTagsByNamePrefix("#auto_summary_id:")` → 对每个 tag 走 `tag.memories` ToMany 拿 carriers → 去重（同一 Memory 可能挂多个 `#auto_summary_id:*` tag）→ 走 `ArchiveBucket.SUMMARY_ID`
+- **顺序**: 每段内按 `Memory.createdAt` **正序**遍历（旧 → 新）。archiver `appendToRoot` 是 newest-first prepend，正序喂入 → 最新散节点最后 prepend → 在 root.content 顶部，与新增摘要保持时间顺序一致。
+- **chatId 来源**: Memory 实体无 `chatId` 字段（phase 1 之前是把 chatId 作为 `#chat:<id>` tag 挂在节点上）。迁移时扫节点 `tags`，匹配 `^#chat:(.+)$` 的第一个 tag → 取后缀作为 chatId；找不到就传 `""`（archiver 内部能处理空 chatId）。
+- **dedup / rollover**: 复用 archiver `appendToRoot` 内置逻辑（3-gram jaccard 0.75 命中跳过 / 写满 hot 阈值自动落 JSONL）。返回 `SkippedDuplicate` 算成功，**不**视为错误。
+- **旧节点处理**: **保留不删**（phase 2 保险口径）。理由：(1) archiver 已 dedup，旧节点重复出现在 root content 不会污染数据；(2) 旧节点继续存在 ObjectBox 不影响召回；(3) 留着以防迁移逻辑有 bug 还能恢复。**删除**留作 R-AGENT-041（与 MemoryScreen UI 改造一起）。
+- **事务粒度**: 单条 `appendToRoot` 内置 ObjectBox tx 已是原子单元；外层不包大 `runInTx`（避免 5K+ 节点 × 200~800 chars + JSONL 文件 IO 一次性进事务导致 OOM / 超时）。整次迁移的"原子性"由 done flag + 失败重试覆盖：迁移过程任一异常 → done flag 不置位 → 下次冷启从头再扫一遍 → archiver 内置 dedup 自动跳过已迁移内容。
+- **失败兜底**: 整体 try / catch；catch 路径 `AppLogger.w(TAG, "R-AGENT-040: ... will retry next launch: ${e.message}")`，**不**写 done flag。
+- **日志**: 全程关键节点 `AppLogger.d(TAG, ...)` 记录："starting"、每个 profile 的 "<profile> consolidated N nodes (<bucket>)"、"migration done in Xms"。
+
+**写入侧零改动**:
+- ❌ 不动 `MemoryArchiver.kt`（appendToRoot API 已够用）
+- ❌ 不动 `MessageCoordinationDelegate.kt`（写入新摘要的链路不变）
+- ❌ 不动 `MemoryRepository.kt`（`findMemoriesByTag` / `findTagsByNamePrefix` 都是 R-AGENT-029 已有 API）
+
+**测试策略**: source-scan only（仿 `OperitApplicationOrphanTagMigrationWiringTest` / `MemoryArchiverTest` 同款）。`OperitApplication.onCreate` 触发的 IO 协程涉及 ObjectBox + Context.filesDir + SharedPreferences，纯 JVM mock ROI 极低；运行时正确性由 §3 E2E 全套 + 用户在带历史散节点设备上的手测兜底。
+
+**验收**:
+- TC-AGENT-040-a..f 全绿（详见 `docs/hermes-test-cases.md`）
+- §2 四件套零增量
+- §3 `test_tool_call_e2e.sh` + `test_api_config_e2e.sh` PASS（启动迁移 hook 不能阻塞 / 崩溃 onCreate）
+- **手测验收**: 用带历史 `#auto_summary` 散节点的旧 APK 升级到含 R-AGENT-040 的 APK，启动一次后 logcat 见 `R-AGENT-040: migration done`；MemoryScreen 打开 `#auto_summary_root` 节点 → content 包含历史 summary 段；旧散节点仍在（R-AGENT-041 才删）。
+
+**前置依赖**: R-AGENT-039 已 ship。后续 R-AGENT-041（UI + 删散节点） / R-AGENT-042（pre-act 注入改造）依赖本条。
 
 ---
 
