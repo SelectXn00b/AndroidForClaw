@@ -1703,11 +1703,14 @@ R-GATEWAY-038 守住"agent busy 时收到非命令文本 → 当前 turn 通过 
 | TC-GATEWAY-038-a | R-GATEWAY-038 | session 已 busy（`_processingSessions` 已含 sessionKey）+ 收到非命令文本"二号消息"；agentRunner 第一次返回 `INTERRUPTED_SENTINEL`，第二次返回正常 reply | agentRunner 被调 2 次；第二次 `text` 参数 = "二号消息"；adapter 收到 1 条最终 reply（content=正常 reply、replyTo=二号消息的 message_id）；`_pendingEvents` 最终为空 | unit | `GatewayBusyPendingReplayTest#TC-GATEWAY-038-a busy non-command text aborts current turn and replays as next turn user input` 🟢 |
 | TC-GATEWAY-038-b | R-GATEWAY-038 | busy 期间 `mergePendingMessageEvent` 入队 + `_interruptFlags[key].set(true)` 路径完整存在（源码扫描守住） | `Run.kt` busy 分支必须包含 `mergePendingMessageEvent(_pendingEvents` + `_interruptFlags[event.sessionKey]?.set(true)` + `_sendBusyAck(event)` 三行，且全部位于 drain 检查与命令路由之后、return 之前 | unit (源码扫描) | `GatewayBusyPendingReplayTest#TC-GATEWAY-038-b busy default branch wires pending+interrupt+ack` 🟢 |
 | TC-GATEWAY-038-c | R-GATEWAY-038 | pending-event 循环：连续 5 条 busy 消息（每次 agentRunner 返 `INTERRUPTED_SENTINEL` 并塞下一条 pending） | agentRunner 总调用次数被封顶 = 1 (initial) + `MAX_INTERRUPT_DEPTH=3` = 4；finally 块清空 `_pendingEvents`（深度溢出消息直接丢，不残留供重启复活，对齐 Python `gateway/run.py:601-604`） | unit | `GatewayBusyPendingReplayTest#TC-GATEWAY-038-c pending replay caps at MAX_INTERRUPT_DEPTH` 🟢 |
+| TC-GATEWAY-038-d | R-GATEWAY-038 | Weixin adapter `_runPollLoop` 单轮拿到 N 条入站 msg：busy default 分支只有在 adapter 把 inbound dispatch 放到独立协程时才能触发；源码扫描守住 `Weixin.kt` 的 inbound 派发**不得**直接 await `_handleInbound` / `handleMessage`，必须经 `scope.launch` 或 per-chat `Channel` 解耦 | `Weixin.kt` 内 `_runPollLoop` 取出 `msgs` 数组后，对每条消息的 dispatch 必须出现 `_queueForProcessing` / `scope.launch` / `Channel` 任一并发结构关键字；不得在 for 循环里直接 `_handleInbound(msg)` 同栈 await（与 `Telegram.kt:528-547` per-chat `Channel` 模型 + `Feishu.kt:782-795` `scope.launch` 模型保持契约一致） | unit (源码扫描) | `WeixinPollDispatchTest#TC-GATEWAY-038-d weixin inbound dispatch decouples from poll loop` 🟢 |
+| TC-GATEWAY-038-e | R-GATEWAY-038 | Weixin adapter 同一 `from_user_id` 连发两条 inbound msg：第一条对应的 `messageHandler` 协程被人为阻塞 1.5s；运行时验证第二条 `messageHandler` 在第一条**仍未释放前**就已经被进入 | 两次 `messageHandler` 进入时间差 < 200ms（窗口内并发派发）；不是"等第一条完成才派第二条"的串行行为；这是 R-GATEWAY-038 要求的"同一 chat 内 mid-turn 插话"在 wechat 适配器层的 runtime 验收 | unit (coroutines-test) | `WeixinPollDispatchTest#TC-GATEWAY-038-e weixin per-chat dispatch overlaps in time` 🟢 |
 
 跑已落地 TC：
 
 ```bash
 ./gradlew :hermes-android:testDebugUnitTest --tests "com.xiaomo.hermes.hermes.gateway.GatewayBusyPendingReplayTest"
+./gradlew :hermes-android:testDebugUnitTest --tests "com.xiaomo.hermes.hermes.gateway.platforms.WeixinPollDispatchTest"
 ```
 
 ## 域 UI — Cancel-then-resend (R-UI-061)

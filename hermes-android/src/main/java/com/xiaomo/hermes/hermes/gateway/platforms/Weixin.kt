@@ -289,7 +289,7 @@ class WeixinAdapter(
                 val msgs = data.optJSONArray("msgs") ?: org.json.JSONArray()
                 for (i in 0 until msgs.length()) {
                     val msg = msgs.optJSONObject(i) ?: continue
-                    _handleInbound(msg)
+                    scope.launch { _handleInbound(msg) }
                 }
             } catch (e: CancellationException) {
                 throw e
