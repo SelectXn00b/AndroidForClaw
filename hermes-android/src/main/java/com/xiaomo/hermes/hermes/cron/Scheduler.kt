@@ -104,6 +104,36 @@ var cronOutboundDispatcher:
 @Volatile
 var cronImmediateRunner: (suspend (job: Map<String, Any?>) -> Unit)? = null
 
+/**
+ * R-AGENT-044: cron self-diagnostic probe injection point.
+ *
+ * `app→hermes-android` is a single-direction dependency, so this module
+ * cannot reach into WorkManager directly. The app module injects a lambda
+ * that returns a snapshot of WorkManager state for the unique cron tick
+ * worker, plus the most recent enqueue error captured by
+ * `CronTickWorker.lastEnqueueError`.
+ *
+ * Signature: `suspend () -> Map<String, Any?>`
+ *
+ * Probe-side payload contract (the keys consumed by `cronjob(action="health")`):
+ *  - `worker_registered`: Boolean — `true` iff WorkManager has any
+ *    non-cancelled WorkInfo for the unique work name.
+ *  - `worker_state`: String — WorkInfo.State.name (e.g. "ENQUEUED",
+ *    "RUNNING", "FAILED"), or "MISSING" when no record exists.
+ *  - `last_enqueue_error`: String? — most recent exception message from
+ *    `CronTickWorker.enqueue` catch block, or null on healthy boot.
+ *  - `last_tick_at`: String? — ISO-8601 timestamp of the most recent
+ *    `doWork` start, or null if the worker has never ticked yet.
+ *  - `next_scheduled_at`: String? — ISO-8601 of the worker's next scheduled
+ *    fire time as estimated by WorkManager, or null when unavailable.
+ *
+ * `null` (default) means the probe is not wired (e.g. unit tests, or
+ * cold-start before `OperitApplication.onCreate` injection). The health
+ * branch falls back to `worker_registered=false` / `worker_state="MISSING"`.
+ */
+@Volatile
+var cronHealthProbe: (suspend () -> Map<String, Any?>)? = null
+
 // File-based lock directory
 private val _LOCK_DIR: File get() = File(getHermesHome(), "cron")
 private val _LOCK_FILE: File get() = File(_LOCK_DIR, ".tick.lock")

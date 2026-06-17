@@ -179,6 +179,15 @@ class OperitApplication : Application(), ImageLoaderFactory, WorkConfiguration.P
         }
         AppLogger.d(TAG, "【启动计时】R-AGENT-043 cronImmediateRunner 已注入 - ${System.currentTimeMillis() - startTime}ms")
 
+        // R-AGENT-044: inject the cron self-diagnostic probe so the agent's
+        // `cronjob(action="health")` tool can read live WorkManager state +
+        // CronTickWorker.lastEnqueueError / lastTickAt without crossing the
+        // hermes-android → app dependency boundary.
+        com.xiaomo.hermes.hermes.cron.cronHealthProbe = {
+            com.ai.assistance.operit.core.cron.CronHealthProbe.snapshot(applicationContext)
+        }
+        AppLogger.d(TAG, "【启动计时】R-AGENT-044 cronHealthProbe 已注入 - ${System.currentTimeMillis() - startTime}ms")
+
         // Initialize ActivityLifecycleManager to track the current activity
         ActivityLifecycleManager.initialize(this)
         AppLogger.d(TAG, "【启动计时】ActivityLifecycleManager初始化完成 - ${System.currentTimeMillis() - startTime}ms")

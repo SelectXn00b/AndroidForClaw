@@ -31,6 +31,10 @@ class CronTickWorker(
 ) : CoroutineWorker(appContext, workerParams) {
 
     override suspend fun doWork(): Result {
+        // R-AGENT-044: record tick start so the cron health probe can answer
+        // "when did the worker last fire". Written before the work itself so
+        // it reflects "the worker actually got scheduled" rather than success.
+        lastTickAt = System.currentTimeMillis()
         return try {
             val due = getDueJobs()
             if (due.isEmpty()) {
@@ -61,6 +65,22 @@ class CronTickWorker(
         const val INTERVAL_MINUTES: Long = 15L
 
         /**
+         * R-AGENT-044: most recent exception message from `enqueue` catch
+         * block (or null if the last enqueue succeeded / hasn't run yet).
+         * Read by the cron health probe so the agent can answer "why isn't
+         * cron working" without grepping logcat.
+         */
+        @Volatile
+        var lastEnqueueError: String? = null
+
+        /**
+         * R-AGENT-044: epoch-millis of the most recent `doWork` start, or
+         * `0L` if the worker has never ticked. Read by the cron health probe.
+         */
+        @Volatile
+        var lastTickAt: Long = 0L
+
+        /**
          * Idempotent enqueue. Safe to call from `OperitApplication.onCreate()`
          * on every cold start.
          *
@@ -87,7 +107,9 @@ class CronTickWorker(
                         request
                     )
                 AppLogger.d(TAG, "enqueued PeriodicWork '$UNIQUE_NAME' at ${INTERVAL_MINUTES}m")
+                lastEnqueueError = null
             } catch (e: Exception) {
+                lastEnqueueError = e.message ?: e.javaClass.simpleName
                 AppLogger.e(TAG, "failed to enqueue CronTickWorker", e)
                 throw e
             }

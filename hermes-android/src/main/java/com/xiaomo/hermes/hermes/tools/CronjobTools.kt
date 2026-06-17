@@ -3,6 +3,7 @@ package com.xiaomo.hermes.hermes.tools
 
 import com.google.gson.Gson
 import com.xiaomo.hermes.hermes.cron.createJob
+import com.xiaomo.hermes.hermes.cron.cronHealthProbe
 import com.xiaomo.hermes.hermes.cron.cronImmediateRunner
 import com.xiaomo.hermes.hermes.cron.getJob
 import com.xiaomo.hermes.hermes.cron.listJobs
@@ -17,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 /**
  * Android-side minimum cron interval, in minutes.
@@ -106,6 +108,92 @@ fun cronjob(
             "list" -> {
                 val jobs = listJobs(includeDisabled = includeDisabled).map { _formatJob(it) }
                 Gson().toJson(mapOf("success" to true, "count" to jobs.size, "jobs" to jobs))
+            }
+
+            "health" -> {
+                // R-AGENT-044: cron self-diagnostic snapshot. The probe is injected
+                // by `OperitApplication.onCreate` (app module) — null in unit tests
+                // / cold-start. We treat null probe as `worker_registered=false /
+                // worker_state="MISSING"` so the agent gets a deterministic answer.
+                val probe = cronHealthProbe
+                val workerSnapshot: Map<String, Any?> = if (probe == null) {
+                    mapOf(
+                        "worker_registered" to false,
+                        "worker_state" to "MISSING",
+                        "last_enqueue_error" to null,
+                        "last_tick_at" to null,
+                        "next_scheduled_at" to null,
+                    )
+                } else {
+                    try {
+                        runBlocking { probe() }
+                    } catch (e: Exception) {
+                        mapOf(
+                            "worker_registered" to false,
+                            "worker_state" to "MISSING",
+                            "last_enqueue_error" to (e.message ?: e.javaClass.simpleName),
+                            "last_tick_at" to null,
+                            "next_scheduled_at" to null,
+                        )
+                    }
+                }
+
+                val allJobs = try {
+                    listJobs(includeDisabled = true)
+                } catch (e: Exception) {
+                    emptyList<MutableMap<String, Any?>>()
+                }
+
+                // pending_due_jobs: next_run_at <= now AND state != "paused" AND
+                // enabled != false. Sort ascending by next_run_at (earliest first).
+                val nowEpoch = System.currentTimeMillis()
+                val pending = allJobs
+                    .filter { j ->
+                        val state = j["state"] as? String
+                        val enabled = j["enabled"] as? Boolean ?: true
+                        if (state == "paused" || !enabled) return@filter false
+                        val nextRunAt = j["next_run_at"] as? String ?: return@filter false
+                        val nextEpoch = _parseIsoToEpoch(nextRunAt) ?: return@filter false
+                        nextEpoch <= nowEpoch
+                    }
+                    .sortedBy { _parseIsoToEpoch(it["next_run_at"] as? String) ?: Long.MAX_VALUE }
+                    .map { j ->
+                        mapOf(
+                            "id" to j["id"],
+                            "name" to j["name"],
+                            "next_run_at" to j["next_run_at"],
+                        )
+                    }
+
+                // recent_runs: top 5 jobs by last_run_at desc, only those that
+                // have actually run (last_run_at non-null).
+                val recentRuns = allJobs
+                    .filter { it["last_run_at"] != null }
+                    .sortedByDescending { _parseIsoToEpoch(it["last_run_at"] as? String) ?: Long.MIN_VALUE }
+                    .take(5)
+                    .map { j ->
+                        mapOf(
+                            "id" to j["id"],
+                            "name" to j["name"],
+                            "last_run_at" to j["last_run_at"],
+                            "last_status" to j["last_status"],
+                            "last_error" to j["last_error"],
+                        )
+                    }
+
+                Gson().toJson(
+                    mapOf(
+                        "success" to true,
+                        "worker_registered" to workerSnapshot["worker_registered"],
+                        "worker_state" to workerSnapshot["worker_state"],
+                        "last_tick_at" to workerSnapshot["last_tick_at"],
+                        "next_scheduled_at" to workerSnapshot["next_scheduled_at"],
+                        "enqueue_last_error" to workerSnapshot["last_enqueue_error"],
+                        "immediate_runner_wired" to (cronImmediateRunner != null),
+                        "pending_due_jobs" to pending,
+                        "recent_runs" to recentRuns,
+                    )
+                )
             }
 
             else -> {
@@ -401,7 +489,8 @@ val CRONJOB_SCHEMA: Map<String, Any?> = mapOf(
         "Manage scheduled cron jobs with a single compressed tool.\n\n" +
             "Use action='create' to schedule a new job from a prompt or one or more skills.\n" +
             "Use action='list' to inspect jobs.\n" +
-            "Use action='update', 'pause', 'resume', 'remove', or 'run' to manage an existing job.\n\n" +
+            "Use action='update', 'pause', 'resume', 'remove', or 'run' to manage an existing job.\n" +
+            "Use action='health' to self-diagnose the cron subsystem.\n\n" +
             "To stop a job the user no longer wants: first action='list' to find the job_id, " +
             "then action='remove' with that job_id. Never guess job IDs — always list first.\n\n" +
             "Jobs run in a fresh session with no current-chat context, so prompts must be self-contained.\n" +
@@ -416,6 +505,17 @@ val CRONJOB_SCHEMA: Map<String, Any?> = mapOf(
             "in-process runner is wired (normal app runtime), or false during cold-start before " +
             "injection completes (job is still bumped via next_run_at as fallback). Use this " +
             "to test a job end-to-end on demand or to satisfy 'run it now' requests.\n\n" +
+            "Self-diagnostic: action='health' returns a snapshot of cron subsystem status. " +
+            "The JSON response contains: `worker_registered` (bool: WorkManager has the periodic " +
+            "tick worker registered), `worker_state` (string: ENQUEUED / RUNNING / FAILED / " +
+            "MISSING …), `last_tick_at` (ISO-8601 string or null: when the worker last actually " +
+            "fired), `next_scheduled_at` (ISO-8601 string or null: WorkManager's estimate for " +
+            "the next fire), `enqueue_last_error` (string or null: most recent enqueue exception " +
+            "message), `immediate_runner_wired` (bool: R-AGENT-043 in-process runner injected), " +
+            "`pending_due_jobs` (list of jobs whose next_run_at is in the past, sorted ascending; " +
+            "non-empty here while worker is healthy means a tick will pick them up shortly), and " +
+            "`recent_runs` (last 5 jobs by last_run_at desc with status / error). Use this when " +
+            "the user reports cron isn't firing or asks 'is my schedule healthy'.\n\n" +
             "Important safety rule: cron-run sessions should not recursively schedule more cron jobs."
         ),
     "parameters" to mapOf(
@@ -423,8 +523,9 @@ val CRONJOB_SCHEMA: Map<String, Any?> = mapOf(
         "properties" to mapOf(
             "action" to mapOf(
                 "type" to "string",
-                "description" to "One of: create, list, update, pause, resume, remove, run. " +
-                    "'run_now' and 'trigger' are accepted synonyms for 'run' (immediate fire)."
+                "description" to "One of: create, list, update, pause, resume, remove, run, health. " +
+                    "'run_now' and 'trigger' are accepted synonyms for 'run' (immediate fire). " +
+                    "'health' returns a self-diagnostic snapshot (no other args required)."
             ),
             "job_id" to mapOf(
                 "type" to "string",
@@ -628,4 +729,21 @@ fun _formatJob(job: Map<String, Any?>): Map<String, Any?> {
     val script = job["script"]
     if (script != null) result["script"] = script
     return result
+}
+
+/**
+ * R-AGENT-044: parse the ISO-8601 strings used by Jobs.kt (`next_run_at`,
+ * `last_run_at`, `created_at`) into millis-since-epoch for sort/compare.
+ *
+ * Returns `null` when the input is null/blank or fails to parse so health
+ * filters can defensively skip malformed records instead of crashing the
+ * whole snapshot.
+ */
+private fun _parseIsoToEpoch(iso: String?): Long? {
+    if (iso.isNullOrBlank()) return null
+    return try {
+        java.time.Instant.parse(iso).toEpochMilli()
+    } catch (_: Exception) {
+        null
+    }
 }
