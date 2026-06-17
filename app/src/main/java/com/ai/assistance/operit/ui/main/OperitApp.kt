@@ -250,6 +250,7 @@ fun OperitApp(
                 NavItem.Toolbox,
                 NavItem.ShizukuCommands,
                 NavItem.Workflow,
+                NavItem.CronJobs,
             )
         ),
         NavGroup(

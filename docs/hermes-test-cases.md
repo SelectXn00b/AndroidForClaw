@@ -1635,6 +1635,37 @@ R-AGENT-037 把 R-AGENT-036 的 `_applyPendingSteerToToolResults` / `_drainPendi
 
 ---
 
+## 域 AGENT — Cron Immediate Trigger (R-AGENT-043)
+
+R-AGENT-043 给 cron 子系统加"即时触发"路径——绕过 `CronTickWorker` 的 15min WorkManager 周期，让 agent 通过 `cronjob(action="run")` 工具或 UI 端的"立即触发"按钮在当前进程内立刻把指定 job 跑起来。架构对齐 R-AGENT-033 已立的 `cronOutboundDispatcher` 闭包注入模式（`hermes-android` 单向依赖 `app` 模块时通过 lambda 注入跨模块）。Python 上游对应 `cron/scheduler.py:702 run_job(job)` 的同步进程内执行语义。
+
+**架构合规要点**：
+- `Scheduler.kt` 加 `@Volatile var cronImmediateRunner: (suspend (job: Map<String, Any?>) -> Unit)?`（与 L82-84 `cronOutboundDispatcher` 同形态）
+- `CronjobTools.kt` `"run", "run_now", "trigger"` 分支调注入的 runner 而不是只更新 `next_run_at`；JSON 返回里加 `triggered_immediately: true/false`
+- 模块级 `_immediateTriggerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)`，`launch` fire-and-forget（agent 工具调用不能 block 在 cron job 全部跑完）
+- `OperitApplication.onCreate` 在 `CronTickWorker.enqueue(this)` 之后注入 `Scheduler.cronImmediateRunner = { job -> CronAgentRunner.run(applicationContext, job) }`
+
+| TC ID | R-ID | 输入 / 触发 | 期望 | 测试类型 | 实现 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-043-a | R-AGENT-043 | 源码扫描 `Scheduler.kt` | 文件包含 `var cronImmediateRunner` 声明，类型形态为 `(suspend (job: Map<String, Any?>) -> Unit)?`，含 `@Volatile`，初值 `null`（与 `cronOutboundDispatcher` 平行） | unit (源码扫描) | `SchedulerImmediateRunnerTest#TC-AGENT-043-a cronImmediateRunner field declared` 🔴 |
+| TC-AGENT-043-b | R-AGENT-043 | 源码扫描 `CronjobTools.kt` | 文件含 `_immediateTriggerScope`（模块级 `CoroutineScope`）+ `cronImmediateRunner` 引用 + `_immediateTriggerScope.launch` 调用 + `triggered_immediately` JSON key；都出现在 `"run", "run_now", "trigger"` 分支内 | unit (源码扫描) | `CronjobToolsImmediateTriggerTest#TC-AGENT-043-b run branch invokes runner via scope` 🔴 |
+| TC-AGENT-043-c | R-AGENT-043 | 源码扫描 `OperitApplication.kt` | 文件含 `Scheduler.cronImmediateRunner = ` 赋值，lambda body 含 `CronAgentRunner.run(applicationContext, ` 调用；赋值出现在 `CronTickWorker.enqueue(this)` 之后（保证 worker 已 enqueue 再注入 immediate path） | unit (源码扫描) | `OperitApplicationCronInjectionTest#TC-AGENT-043-c immediate runner injected after worker enqueue` 🔴 |
+| TC-AGENT-043-d | R-AGENT-043 | 设 `Scheduler.cronImmediateRunner = recordingLambda`；先 `addJob(...)` 写入测试 job；调 `cronjobToolImpl(action="run", job_id=<id>)` | recordingLambda 被调 1 次（job map 与 addJob 写入的内容一致）；返回 JSON 含 `"triggered_immediately": true`；`Jobs` 表里 job `next_run_at` 仍按 `triggerJob` 行为被推前到 now（对齐 Python `cron/scheduler.py:702`） | unit | `CronjobToolsImmediateTriggerTest#TC-AGENT-043-d run action invokes injected runner` 🔴 |
+| TC-AGENT-043-e | R-AGENT-043 | `Scheduler.cronImmediateRunner = null`（注入未发生）；`addJob(...)`；调 `cronjobToolImpl(action="run", job_id=<id>)` | 不抛异常；返回 JSON `"triggered_immediately": false`；`success: true`（仅落 `triggerJob` 走 next-tick 路径作为兜底） | unit | `CronjobToolsImmediateTriggerTest#TC-AGENT-043-e run action without runner falls back gracefully` 🔴 |
+| TC-AGENT-043-f | R-AGENT-043 | `Scheduler.cronImmediateRunner = { throw RuntimeException("boom") }`；调 `cronjobToolImpl(action="run", job_id=<id>)` | runner 抛异常**不**冒泡到工具调用方（`_immediateTriggerScope.launch` fire-and-forget 隔离）；工具返回 `"triggered_immediately": true` + `success: true`（agent 看到的是触发成功，runner 异常由 `CronAgentRunner.run` 内部 try/catch + `markJobRun(... success=false)` 处理） | unit | `CronjobToolsImmediateTriggerTest#TC-AGENT-043-f runner exception does not propagate` 🔴 |
+
+跑已落地 TC：
+
+```bash
+./gradlew :hermes-android:testDebugUnitTest --tests "com.xiaomo.hermes.hermes.cron.SchedulerImmediateRunnerTest"
+./gradlew :hermes-android:testDebugUnitTest --tests "com.xiaomo.hermes.hermes.tools.CronjobToolsImmediateTriggerTest"
+./gradlew :app:testDebugUnitTest --tests "com.ai.assistance.operit.core.application.OperitApplicationCronInjectionTest"
+```
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 GATEWAY — Busy-Input Mode (R-GATEWAY-035)
 
 R-GATEWAY-035 给 `GatewayRunner` 加 `_busyInputMode: String` 字段（默认 `"interrupt"`，可切 `"queue"`），并把现有 `queueDuringDrainEnabled()` 实现切到读这个字段。对齐 Python `gateway/run.py:608, 631, 1230-1231, 1389-1402`。本 R **只做字段加载 + getter 暴露 + queueDuringDrainEnabled 重写**——drain 路径完整 reject/queue 行为在 R-GATEWAY-037。
@@ -1751,6 +1782,40 @@ R-UI-062 是本组合特性的终端整合：把 R-AGENT-036/037 做的 `HermesA
 ./gradlew :app:testDebugUnitTest --tests "com.ai.assistance.operit.hermes.gateway.HermesGatewayControllerSteerWiringTest"
 ./gradlew :app:testDebugUnitTest --tests "com.ai.assistance.operit.ui.features.chat.components.style.input.agent.AgentChatInputSectionInsertButtonTest"
 ```
+
+---
+
+## 域 UI — Cron Jobs Sidebar Management (R-UI-063)
+
+R-UI-063 在侧边栏（`OperitApp.kt::navGroups` 的 "工具" 组）加 `NavItem.CronJobs` 入口，进入新写的 `CronJobsScreen.kt`，从 `Jobs.listJobs()` 读取所有定时任务并以列表呈现，每行支持 4 个操作：暂停（`Jobs.pauseJob`）/ 恢复（`Jobs.resumeJob`）/ 删除（`Jobs.removeJob`）/ 立即触发（直接调 `CronAgentRunner.run(context, job)`，UI 在 app 模块所以无需走 R-AGENT-043 的注入）。本 R **不**提供 UI 创建入口——按用户决策，创建 cron 任务保留通过 agent 自然语言对话注册的路径（"每天 9 点提醒我看新闻"）。Python 上游无对应（仅 Android UI 体验）。
+
+**架构合规要点**：
+- `NavItem.kt` 加 `object CronJobs : NavItem("cronjobs", R.string.nav_cron_jobs, Icons.Default.Schedule)`
+- `OperitScreens.kt` 加 `data object CronJobs : Screen(navItem = NavItem.CronJobs, titleRes = R.string.nav_cron_jobs)`
+- `OperitScreens.kt::OperitRouter.getScreenForNavItem` when 表加 `NavItem.CronJobs -> Screen.CronJobs`
+- `OperitApp.kt::navGroups` 在 `R.string.nav_group_tools` 组的 `listOf(...)` 中加 `NavItem.CronJobs`
+- `strings.xml` 加 `<string name="nav_cron_jobs">定时任务</string>`
+- 新文件 `app/src/main/java/com/ai/assistance/operit/ui/features/cron/screens/CronJobsScreen.kt`
+
+| TC ID | R-ID | 输入 / 触发 | 期望 | 测试类型 | 实现 / 状态 |
+|---|---|---|---|---|---|
+| TC-UI-063-a | R-UI-063 | 源码扫描 `NavItem.kt` | 文件含 `object CronJobs : NavItem(`，3 参数为 `"cronjobs"` + `R.string.nav_cron_jobs` + `Icons.Default.Schedule`（与同组 `Workflow` / `Toolbox` 形态一致） | unit (源码扫描) | `NavItemCronJobsTest#TC-UI-063-a CronJobs nav item declared` 🔴 |
+| TC-UI-063-b | R-UI-063 | 源码扫描 `OperitScreens.kt` | 文件含 `data object CronJobs : Screen(navItem = NavItem.CronJobs`；`OperitRouter.getScreenForNavItem` 的 when 表含 `NavItem.CronJobs -> Screen.CronJobs` 分支 | unit (源码扫描) | `OperitScreensCronJobsTest#TC-UI-063-b screen and router mapping declared` 🔴 |
+| TC-UI-063-c | R-UI-063 | 源码扫描 `OperitApp.kt` | `navGroups` 列表中 `R.string.nav_group_tools` 组的 `listOf(...)` 含 `NavItem.CronJobs`（与 `NavItem.Workflow` / `NavItem.Toolbox` / `NavItem.ShizukuCommands` 同组）；不在其他两组 | unit (源码扫描) | `OperitAppNavGroupsCronJobsTest#TC-UI-063-c CronJobs registered in tools group` 🔴 |
+| TC-UI-063-d | R-UI-063 | 源码扫描 `CronJobsScreen.kt` | 新文件存在；body 引用 `Jobs.listJobs(` + `Jobs.pauseJob(` + `Jobs.resumeJob(` + `Jobs.removeJob(` + `CronAgentRunner.run(`（5 个核心调用全部出现，对应"列表 + 4 个操作"） | unit (源码扫描) | `CronJobsScreenContractTest#TC-UI-063-d screen wires all 5 actions` 🔴 |
+| TC-UI-063-e | R-UI-063 | 源码扫描 `app/src/main/res/values/strings.xml` | 文件含 `<string name="nav_cron_jobs">定时任务</string>` | unit (源码扫描) | `CronJobsScreenContractTest#TC-UI-063-e nav_cron_jobs string resource declared` 🔴 |
+| TC-UI-063-f | R-UI-063 | 源码扫描 `CronJobsScreen.kt` | 文件**不**含 `addJob(` / `cronjob(action = "create"`（拒绝在 UI 提供创建入口；保留通过 agent 自然语言对话注册的路径）；只读 + 操作既有 job 的语义 | unit (源码扫描) | `CronJobsScreenContractTest#TC-UI-063-f screen does not expose create action` 🔴 |
+
+跑已落地 TC：
+
+```bash
+./gradlew :app:testDebugUnitTest --tests "com.ai.assistance.operit.ui.common.NavItemCronJobsTest"
+./gradlew :app:testDebugUnitTest --tests "com.ai.assistance.operit.ui.main.screens.OperitScreensCronJobsTest"
+./gradlew :app:testDebugUnitTest --tests "com.ai.assistance.operit.ui.main.OperitAppNavGroupsCronJobsTest"
+./gradlew :app:testDebugUnitTest --tests "com.ai.assistance.operit.ui.features.cron.screens.CronJobsScreenContractTest"
+```
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
 
 ---
 

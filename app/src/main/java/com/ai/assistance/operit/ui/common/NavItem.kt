@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.RateReview
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Token
@@ -71,4 +72,7 @@ sealed class NavItem(val route: String, val titleResId: Int, val icon: ImageVect
                 NavItem("feedback", R.string.nav_feedback, Icons.Default.RateReview)
         object HermesSettings :
                 NavItem("hermes_settings", R.string.screen_title_hermes_settings, Icons.Default.Forum)
+        // R-UI-063: sidebar entry for the cron jobs management screen.
+        object CronJobs :
+                NavItem("cronjobs", R.string.nav_cron_jobs, Icons.Default.Schedule)
 }

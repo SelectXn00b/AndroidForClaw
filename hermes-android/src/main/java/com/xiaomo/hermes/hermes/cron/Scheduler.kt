@@ -83,6 +83,27 @@ var cronOutboundDispatcher:
     (suspend (platform: String, chatId: String, text: String, threadId: String?) -> Boolean)? =
     null
 
+/**
+ * R-AGENT-043: immediate-trigger runner injection point.
+ *
+ * `app→hermes-android` is a single-direction dependency, so this module
+ * cannot import `CronAgentRunner` directly. The app module injects a
+ * lambda here at startup that runs a cron job in the current process,
+ * bypassing the WorkManager 15-minute periodic tick.
+ *
+ * Signature: `suspend (job: Map<String, Any?>) -> Unit`
+ *  - lambda is `suspend` because `CronAgentRunner.run` (the canonical
+ *    implementation) is suspending.
+ *  - exceptions raised by the runner are isolated by the caller's
+ *    `_immediateTriggerScope.launch` (fire-and-forget) and recorded
+ *    inside `CronAgentRunner` via `markJobRun(... success=false)`.
+ *  - `null` (default) means the immediate path is not wired; agent
+ *    `cronjob(action="run")` falls back to the next-tick semantics
+ *    via `triggerJob` only.
+ */
+@Volatile
+var cronImmediateRunner: (suspend (job: Map<String, Any?>) -> Unit)? = null
+
 // File-based lock directory
 private val _LOCK_DIR: File get() = File(getHermesHome(), "cron")
 private val _LOCK_FILE: File get() = File(_LOCK_DIR, ".tick.lock")

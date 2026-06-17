@@ -118,6 +118,7 @@
     <string name="chathistory_external_storage">外部存储</string>
 
     <string name="nav_workflow">工作流</string>
+    <string name="nav_cron_jobs">定时任务</string>
     <string name="nav_group_ai_features">AI 功能</string>
     <string name="nav_group_tools">工具</string>
     <string name="nav_group_system">系统</string>

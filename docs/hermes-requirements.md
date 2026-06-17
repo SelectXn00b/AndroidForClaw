@@ -2306,3 +2306,142 @@ fun steerActiveLoop(chatId: String, text: String): Boolean {
 - **C. §2 四件套** 维持零（不动 `hermes-android/`）
 - **D. 行为保持**: `isProcessing=false` 时插话按钮不可见；现有 send/cancel/queue 三态完全不变
 
+### R-AGENT-043: cron 任务即时触发（agent / UI 端绕过 WorkManager 15min 等待）
+**来源**:
+- 用户 2026-06-17 决策链：① "现在来处理定时器或者说是心跳功能不正常的问题，看看能不能直接在ui界面上添加，agent也可以调用。你先去调查一下" → ② AskUserQuestion 选 "第三 = agent 能从代码层手动触发任何定时任务"（与现有 `cronjob(action='trigger')` 工具区别在于即时性）→ ③ "按照你建议去做，剩下的给你做确定"
+- Python 上游 `reference/hermes-agent/cron/scheduler.py:702 run_job(job)` 是 source of truth：`run_job` 在 daemon ticker 之外可以被任意 caller 同步驱动，不必等下一个 tick。
+- R-AGENT-031（接通 cron 子系统）+ R-AGENT-035（cron tick → IM 投递）已落，但 `cronjob(action='run/trigger')` 当前只在 `Jobs.kt:603 triggerJob` 把 `next_run_at` 设为 now，真正执行仍要等下一次 `CronTickWorker.doWork()`，最坏要等 15 分钟。
+
+**背景**:
+- **当前路径**：用户/agent 调 `cronjob(action='run', job_id='xxx')` → `CronjobTools.kt:133-136 triggerJob(jobId)` → `Jobs.kt:603 updateJob(...)` 把 `next_run_at` 设成现在 → 返回 success → **等 ≤ 15 分钟** → `CronTickWorker.doWork()` → `getDueJobs()` → `CronAgentRunner.run()`。
+- **问题**：用户预期"立即触发"在 UI 按"触发"按钮 / agent 主动 run 时同步看到 agent 输出，而不是等 15 分钟。Python 上游同步语义在 `scheduler.py:run_job(job)` 处自然存在（无 WorkManager），Android 因为 worker 是周期触发就缺这一块。
+- **架构合规约束（与 R-AGENT-033 同款）**：`hermes-android` → `app` 是单向依赖，`CronjobTools.kt`（hermes-android）不能直接 import `CronAgentRunner`（app）。延用 R-AGENT-033 的注入模式：在 `Scheduler.kt` 顶层加一个 `var cronImmediateRunner` 注入点，`OperitApplication.onCreate` 在启动时注入指向 `CronAgentRunner.run` 的 lambda；hermes-android 侧 `cronjob(action='run')` 在调 `triggerJob` 后**通过 `cronImmediateRunner` 同步触发一次执行**，不阻塞 caller（`scope.launch` 派发，立即返回 toolResult）。
+
+**架构合规**:
+- **路径 1（注入式回调，不破坏单向依赖）**：在 `hermes-android/.../cron/Scheduler.kt` 顶层加一个 `@Volatile var cronImmediateRunner: (suspend (job: Map<String, Any?>) -> Unit)? = null` —— 完全照抄 R-AGENT-033 的 `cronOutboundDispatcher` 模式，签名简化为接受 job map 即可（`CronAgentRunner.run` 已是 `suspend fun run(context, job)` —— 注入的 lambda 在 closure 里 capture context）。
+- **路径 2（同时保持 R-AGENT-031 注入点不动）**：本 R 加的 `cronImmediateRunner` 与已有的 `cronOutboundDispatcher` 是独立 var，互不影响。`CronTickWorker` 仍走 `CronAgentRunner.run` 直调（不通过任何注入），所以新注入点只为 `cronjob(action='run')` 这一个 caller 服务。
+- **路径 3（在 cronjob tool 里捕获 launch scope）**：`cronjob` 是 top-level fun，没有 lifecycle scope。最干净是引入一个模块级 `_immediateTriggerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)` 给 fire-and-forget 用；scope 的生命周期跟着 process。
+
+**行为**:
+- **`Scheduler.kt` 注入点**（`hermes-android/.../cron/Scheduler.kt`）：
+  - 在已有 `cronOutboundDispatcher` 注入点（L82-84）下方追加：
+    ```kotlin
+    /**
+     * R-AGENT-043: immediate-execution dispatcher.
+     *
+     * Lets `cronjob(action='run')` bypass the 15-minute WorkManager tick
+     * wait by routing the trigger through the same path `CronTickWorker`
+     * uses. App module injects this lambda at startup so it fans out to
+     * `CronAgentRunner.run(context, job)`.
+     *
+     * Signature: `suspend (job) -> Unit` — fire-and-forget; errors are
+     * caught + logged inside the lambda.
+     */
+    @Volatile
+    var cronImmediateRunner:
+        (suspend (job: Map<String, Any?>) -> Unit)? = null
+    ```
+  - **不**新增任何其他字段（守 R-AGENT-031 路径 1 红线："Scheduler 不引入 Python 没有的字段"——除已豁免的 `cronOutboundDispatcher` 外仅再加这一个字段）。
+- **`CronjobTools.kt` 调用方**（`hermes-android/.../tools/CronjobTools.kt`）：
+  - L133-136 `"run", "run_now", "trigger" -> { ... }` 分支改写为：
+    1. 调 `triggerJob(jobId)` 把 `next_run_at` 提前（保留原行为，确保即使注入点未配置也能在下个 tick 兜底跑）
+    2. 取 `cronImmediateRunner` 引用，若非 null → 在 `_immediateTriggerScope.launch` 里调用 `runner(updated)`（fire-and-forget，不 block agent 回复）
+    3. 立即返回 `toolResult` 含 `triggered_immediately: true/false` 字段（让 LLM 知道是否走了即时路径）
+  - 模块级 scope：在 `CronjobTools.kt` 顶部新增：
+    ```kotlin
+    private val _immediateTriggerScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
+    )
+    ```
+- **`OperitApplication.kt` 注入侧**（`app/.../core/application/OperitApplication.kt`）：
+  - 在已有 `CronTickWorker.enqueue(this)`（L162）之后立刻设置：
+    ```kotlin
+    com.xiaomo.hermes.hermes.cron.cronImmediateRunner = { job ->
+        try {
+            CronAgentRunner.run(applicationContext, job)
+        } catch (t: Throwable) {
+            AppLogger.e("OperitApplication", "cronImmediateRunner failed: ${t.message}", t)
+        }
+    }
+    ```
+  - 注入位置：紧跟 R-AGENT-031 的 `CronTickWorker.enqueue` 调用之后；与 R-AGENT-033 注入 `cronOutboundDispatcher` 的位置自洽。
+
+**验收**:
+- **A. `Scheduler.kt` 注入点已落**：
+  - 文件含 `var cronImmediateRunner` 声明
+  - 含 `@Volatile` 注解 + `suspend (job: Map<String, Any?>) -> Unit` 签名（或字面包含 `suspend (job` + `-> Unit`）
+- **B. `CronjobTools.kt` 调用方接通**：
+  - `"run", "run_now", "trigger"` 分支函数体含 `cronImmediateRunner` 字面值
+  - 同分支含 `_immediateTriggerScope.launch` 字面值（fire-and-forget 派发证据）
+  - 返回的 toolResult JSON 含 `triggered_immediately` 字面值
+  - `_immediateTriggerScope` 顶部声明含 `SupervisorJob()` + `Dispatchers.IO`
+- **C. `OperitApplication.onCreate` 注入侧接通**：
+  - 函数体含 `cronImmediateRunner = ` 赋值（紧跟 `CronTickWorker.enqueue` 之后）
+  - 赋值 lambda 体含 `CronAgentRunner.run(` 调用
+- **D. 行为保持**：
+  - `triggerJob(jobId)` 仍被调（兜底：若 immediate runner 未注入，下个 tick 仍能跑）
+  - `cronImmediateRunner == null` 时 `cronjob(action='run')` 不抛异常，只是 `triggered_immediately=false`
+  - `CronTickWorker.doWork()` 行为完全不变（不走 immediate runner，仍直调 `CronAgentRunner.run`）
+- **E. §2 四件套**：
+  - `verify_align`：维持基线（hermes-android 只动注入点 + 调用方，不新增/删除文件）
+  - `scan_stubs`：维持零
+  - `deep_align`：维持零（`cronImmediateRunner` 是路径 1 已豁免的注入字段族，不抓"Python 没有的字段"）
+  - `scan_functional_stubs`：不增（理论 -1，因为现在 `cronjob(action='run')` 由 stub 状态变成 wired 状态）
+- **F. 单元测试**：见 TC-AGENT-043-a..d
+
+### R-UI-063: cron 任务管理 UI（侧边栏入口 + CronJobsScreen 列表/触发/暂停/删除）
+**来源**:
+- 用户 2026-06-17 直接指令：① "看看能不能直接在ui界面上添加" → ② AskUserQuestion 选 "添加到侧边栏"
+- R-AGENT-031 V/I 验收手测项要求 "app 内 chat UI 出现 ai 消息"，但**没**给用户"看见 / 管理 cron 任务列表"的 UI 入口；已落地的 cron 子系统对终端用户完全不可见，必须靠"问 agent 调 list"才能查询。
+- **不**对齐 Python 上游：Python Hermes 是 CLI 工具，没有 UI；这是 Android 平台特化需求，无 Python source-of-truth。
+
+**背景**:
+- **侧边栏现状**（`OperitApp.kt:236-264 navGroups`）：分 3 组（AI 功能 / 工具 / 系统）。cron 任务管理在概念上属于"工具"组（与 Workflow 同类），不放在"AI 功能"组（避免与 chat / memory 混淆）。
+- **数据层**：`Jobs.kt` 已有完整 CRUD（`listJobs / getJob / pauseJob / resumeJob / triggerJob / removeJob` 全 real）。UI 直接调这些函数即可，不需要新加 Repository。
+- **触发即时性**：UI 上的"立即触发"按钮走 R-AGENT-043 的 `cronImmediateRunner` 直调路径（不通过 `cronjob` tool，而是直接调 `CronAgentRunner.run`，因为 UI 已经在 app 模块内可以无障碍 import）。
+- **MVP scope**：列表 / 暂停 / 恢复 / 删除 / 立即触发 5 个动作。**不**覆盖：创建任务（用户在 chat 里跟 agent 说"every 30m..."更自然，不重复造 UI；后续 R 可加）/ 编辑任务 prompt（同上）/ 输出历史浏览（`<HERMES_HOME>/cron/output/{jobId}/*.md` 文件浏览，留 follow-up）。
+
+**架构合规**:
+- **新增 NavItem**：在 `NavItem.kt` 增 `object CronJobs : NavItem("cron_jobs", R.string.nav_cron_jobs, Icons.Default.Schedule)`
+- **新增 Screen**：在 `OperitScreens.kt` 加 `data object CronJobs : Screen(navItem = NavItem.CronJobs, titleRes = R.string.nav_cron_jobs)`
+- **新增 Composable**：`app/.../ui/features/cron/screens/CronJobsScreen.kt`（新模块路径，与 memory/workflow 同级）
+- **路由注册**：`OperitRouter.getScreenForNavItem` when 表加 `NavItem.CronJobs -> Screen.CronJobs` 行
+- **侧边栏注册**：`OperitApp.kt::navGroups` 的"工具"组（`R.string.nav_group_tools`）末尾加 `NavItem.CronJobs`
+- **strings.xml**：加 `<string name="nav_cron_jobs">定时任务</string>`（中文 default + 英文 values-en 两份；本项目以中文为主，英文可暂不加）
+
+**行为**:
+- **`CronJobsScreen.kt` 主 Composable**：
+  - 顶层 `Scaffold` + `LazyColumn`，每行展示一个 job
+  - 状态：`var jobs by remember { mutableStateOf(emptyList<Map<String,Any?>>()) }`，`LaunchedEffect(refreshTick) { jobs = withContext(Dispatchers.IO) { listJobs(includeDisabled = true) } }`
+  - 每行字段：`name` / `schedule_display` / `next_run_at` / `last_run_at` / `last_status` / `state`
+  - 每行 trailing 4 个 IconButton:
+    - **Trigger Now**（PlayArrow icon）→ 调用 `CronAgentRunner.run(context, job)` via `coroutineScope.launch` + `Toast.makeText("已触发，agent 后台执行中")`，并刷新列表
+    - **Pause/Resume**（Pause/PlayCircle icon，按 `state` 切换）→ 调用 `pauseJob` / `resumeJob`
+    - **Delete**（Delete icon）→ `AlertDialog` 确认 → 调用 `removeJob`
+  - 顶部"刷新"按钮（手动重新加载列表，因为数据是文件 JSON，无 Flow）
+  - 空列表显示提示文案："暂无定时任务。打开 AI 对话后让 agent 帮你创建（如：'每天 9 点提醒我看新闻'）。"
+- **`OperitApplication.kt`**：本 R 不动（R-AGENT-043 已注入 `cronImmediateRunner`；UI 是 app 模块内直调 `CronAgentRunner.run`，不依赖注入点）。
+
+**验收**:
+- **A. NavItem.CronJobs 注册**：
+  - `NavItem.kt` 含 `object CronJobs :` 声明 + `R.string.nav_cron_jobs` + `Icons.Default.Schedule`（或等价的"时间/闹钟"类 icon）
+- **B. Screen.CronJobs 注册 + 路由**：
+  - `OperitScreens.kt` 含 `data object CronJobs : Screen(navItem = NavItem.CronJobs` 声明
+  - `OperitRouter.getScreenForNavItem` 函数体含 `NavItem.CronJobs -> Screen.CronJobs` 字面 mapping
+- **C. 侧边栏注册**：
+  - `OperitApp.kt::navGroups` 的某个 NavGroup `items` 列表含 `NavItem.CronJobs`（用 grep 在文件全文找该字面值）
+- **D. CronJobsScreen 已落盘**：
+  - `app/src/main/java/com/ai/assistance/operit/ui/features/cron/screens/CronJobsScreen.kt` 文件存在
+  - 内含 `@Composable fun CronJobsScreen(` 函数声明
+  - 函数体含 `listJobs(` / `pauseJob(` / `resumeJob(` / `removeJob(` / `CronAgentRunner.run(` 五处调用
+  - 含 `next_run_at` / `last_run_at` / `last_status` 三个字段读取（job map key 字面值）
+- **E. strings.xml**：`app/src/main/res/values/strings.xml` 含 `<string name="nav_cron_jobs">定时任务</string>`
+- **F. 编译自检**：`./gradlew :app:compileDebugKotlin` 全绿
+- **G. §2 四件套**：维持零 / 不增（本 R 只动 app 模块 UI，不影响对齐）
+- **H. 手测验收**：
+  - APK 启动后侧边栏"工具"分组下出现"定时任务"入口
+  - 点开后能看到已创建任务列表（空时显示提示文案）
+  - 点"立即触发"按钮 → Toast 提示 + agent 在 chat 里给出执行结果（验证 R-AGENT-043 即时触发链路通）
+  - 点"暂停"→ 任务 state 变 paused，列表行同步更新
+  - 点"删除" → 确认对话框 → 列表行消失
+

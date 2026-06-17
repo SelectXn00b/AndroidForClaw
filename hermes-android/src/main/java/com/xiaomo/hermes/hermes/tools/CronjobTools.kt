@@ -3,6 +3,7 @@ package com.xiaomo.hermes.hermes.tools
 
 import com.google.gson.Gson
 import com.xiaomo.hermes.hermes.cron.createJob
+import com.xiaomo.hermes.hermes.cron.cronImmediateRunner
 import com.xiaomo.hermes.hermes.cron.getJob
 import com.xiaomo.hermes.hermes.cron.listJobs
 import com.xiaomo.hermes.hermes.cron.parseSchedule
@@ -12,6 +13,10 @@ import com.xiaomo.hermes.hermes.cron.resumeJob
 import com.xiaomo.hermes.hermes.cron.triggerJob
 import com.xiaomo.hermes.hermes.cron.updateJob
 import com.xiaomo.hermes.hermes.gateway.getSessionEnv
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * Android-side minimum cron interval, in minutes.
@@ -21,6 +26,21 @@ import com.xiaomo.hermes.hermes.gateway.getSessionEnv
  * One-shot schedules are unaffected: they fire once and don't loop.
  */
 const val ANDROID_CRON_MIN_INTERVAL_MINUTES = 15
+
+/**
+ * R-AGENT-043: scope that owns "immediate trigger" fire-and-forget launches.
+ *
+ * Agent tool calls must return synchronously (the JSON response shape).
+ * Running a cron job synchronously inside the tool call would block the
+ * agent's turn-loop on a full secondary agent invocation, so the run
+ * branch hands the job off to this background scope and returns
+ * `triggered_immediately: true` immediately.
+ *
+ * SupervisorJob isolates per-job exceptions so one bad runner cannot
+ * cancel the scope; exceptions are recorded inside `CronAgentRunner`
+ * via `markJobRun(... success=false)`.
+ */
+private val _immediateTriggerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 /**
  * Cronjob tool handler — port of tools/cronjob_tools.py.
@@ -131,8 +151,27 @@ fun cronjob(
                     }
 
                     "run", "run_now", "trigger" -> {
+                        // R-AGENT-043: bump next_run_at to now (cron parity), then
+                        // hand off to the injected immediate runner if wired.
                         val updated = triggerJob(jobId) ?: existing
-                        Gson().toJson(mapOf("success" to true, "job" to _formatJob(updated)))
+                        val runner = cronImmediateRunner
+                        var triggeredImmediately = false
+                        if (runner != null) {
+                            // Fire-and-forget on a SupervisorJob scope so:
+                            //   - the agent's tool call returns now (non-blocking)
+                            //   - runner exceptions don't propagate to the agent
+                            _immediateTriggerScope.launch {
+                                runner(updated)
+                            }
+                            triggeredImmediately = true
+                        }
+                        Gson().toJson(
+                            mapOf(
+                                "success" to true,
+                                "triggered_immediately" to triggeredImmediately,
+                                "job" to _formatJob(updated),
+                            )
+                        )
                     }
 
                     "update" -> _updateCronJob(

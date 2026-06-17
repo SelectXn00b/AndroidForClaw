@@ -162,6 +162,16 @@ class OperitApplication : Application(), ImageLoaderFactory, WorkConfiguration.P
         CronTickWorker.enqueue(this)
         AppLogger.d(TAG, "【启动计时】R-AGENT-031 CronTickWorker 已入队（PeriodicWork 15m KEEP） - ${System.currentTimeMillis() - startTime}ms")
 
+        // R-AGENT-043: inject the immediate-trigger runner so `cronjob(action="run")`
+        // and the sidebar Cron Jobs screen can fire jobs in-process, bypassing
+        // WorkManager's 15-minute periodic tick. The lambda lives in `app` module
+        // (where `CronAgentRunner` lives) and is plumbed into `Scheduler.kt`'s
+        // injection slot, mirroring the R-AGENT-033 `cronOutboundDispatcher` pattern.
+        com.xiaomo.hermes.hermes.cron.cronImmediateRunner = { job ->
+            com.ai.assistance.operit.core.cron.CronAgentRunner.run(applicationContext, job)
+        }
+        AppLogger.d(TAG, "【启动计时】R-AGENT-043 cronImmediateRunner 已注入 - ${System.currentTimeMillis() - startTime}ms")
+
         // Initialize ActivityLifecycleManager to track the current activity
         ActivityLifecycleManager.initialize(this)
         AppLogger.d(TAG, "【启动计时】ActivityLifecycleManager初始化完成 - ${System.currentTimeMillis() - startTime}ms")

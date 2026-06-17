@@ -26,6 +26,7 @@ import com.ai.assistance.operit.R
 import com.ai.assistance.operit.ui.common.NavItem
 import com.ai.assistance.operit.ui.features.about.screens.AboutScreen
 import com.ai.assistance.operit.ui.features.assistant.screens.AssistantConfigScreen
+import com.ai.assistance.operit.ui.features.cron.screens.CronJobsScreen
 import com.ai.assistance.operit.ui.features.chat.screens.AIChatScreen
 import com.ai.assistance.operit.ui.features.demo.screens.ShizukuDemoScreen
 import com.ai.assistance.operit.ui.features.help.screens.HelpScreen
@@ -806,6 +807,23 @@ sealed class Screen(
                 workflowId = workflowId,
                 onNavigateBack = onGoBack
             )
+        }
+    }
+
+    // R-UI-063: cron jobs management screen (sidebar entry).
+    data object CronJobs : Screen(navItem = NavItem.CronJobs, titleRes = R.string.nav_cron_jobs) {
+        @Composable
+        override fun Content(
+                navController: NavController,
+                navigateTo: ScreenNavigationHandler,
+                updateNavItem: NavItemChangeHandler,
+                onGoBack: () -> Unit,
+                hasBackgroundImage: Boolean,
+                onLoading: (Boolean) -> Unit,
+                onError: (String) -> Unit,
+                onGestureConsumed: (Boolean) -> Unit
+        ) {
+            CronJobsScreen()
         }
     }
 
@@ -1706,6 +1724,7 @@ object OperitRouter {
             NavItem.AssistantConfig -> Screen.AssistantConfig
             NavItem.Agreement -> Screen.Agreement
             NavItem.Workflow -> Screen.Workflow
+            NavItem.CronJobs -> Screen.CronJobs
             NavItem.ModelConfig -> Screen.ModelConfig
             NavItem.Feedback -> Screen.Feedback()
             else -> Screen.AiChat
