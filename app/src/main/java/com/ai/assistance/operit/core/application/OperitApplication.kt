@@ -157,10 +157,17 @@ class OperitApplication : Application(), ImageLoaderFactory, WorkConfiguration.P
         launchLegacyAutoNodeDeletionIfNeeded()
         AppLogger.d(TAG, "【启动计时】R-AGENT-041-a 散节点删除迁移任务已提交（异步IO） - ${System.currentTimeMillis() - startTime}ms")
 
-        // R-AGENT-031: enqueue the WorkManager-driven cron tick (15-minute period, KEEP policy).
+        // R-AGENT-031: enqueue the WorkManager-driven cron tick (15-minute period, UPDATE policy).
         // Must be after launchOrphanTagMigrationsIfNeeded so memory-side maintenance runs first.
-        CronTickWorker.enqueue(this)
-        AppLogger.d(TAG, "【启动计时】R-AGENT-031 CronTickWorker 已入队（PeriodicWork 15m KEEP） - ${System.currentTimeMillis() - startTime}ms")
+        // R-AGENT-031 bugfix (2026-06-18): enqueue now re-throws on failure so we wrap it in a
+        // log-only catch — onCreate must not crash the app, but the failure must be visible in
+        // logcat / future cron self-diagnostic tool (R-AGENT-044).
+        try {
+            CronTickWorker.enqueue(this)
+            AppLogger.d(TAG, "【启动计时】R-AGENT-031 CronTickWorker 已入队（PeriodicWork 15m UPDATE） - ${System.currentTimeMillis() - startTime}ms")
+        } catch (e: Exception) {
+            AppLogger.e(TAG, "R-AGENT-031 CronTickWorker.enqueue failed; cron disabled this session", e)
+        }
 
         // R-AGENT-043: inject the immediate-trigger runner so `cronjob(action="run")`
         // and the sidebar Cron Jobs screen can fire jobs in-process, bypassing

@@ -62,23 +62,34 @@ class CronTickWorker(
 
         /**
          * Idempotent enqueue. Safe to call from `OperitApplication.onCreate()`
-         * on every cold start — KEEP policy preserves the existing schedule
-         * if one is already pending.
+         * on every cold start.
+         *
+         * R-AGENT-031 bugfix (2026-06-18):
+         *  - switched from KEEP to UPDATE so a broken/cancelled unique work
+         *    record left over from a previous install or crash gets replaced
+         *    rather than preserved indefinitely. KEEP could leave the worker
+         *    permanently un-registered if any prior enqueue ever raised.
+         *  - re-throw on failure so `OperitApplication.onCreate` (or any
+         *    other caller) can surface the problem instead of letting cron
+         *    silently die. The caller is expected to wrap the call in a
+         *    log-only catch so onCreate doesn't crash the app, while still
+         *    leaving an actionable error in the log.
          */
         fun enqueue(context: Context) {
+            val request: PeriodicWorkRequest =
+                PeriodicWorkRequestBuilder<CronTickWorker>(INTERVAL_MINUTES, TimeUnit.MINUTES)
+                    .build()
             try {
-                val request: PeriodicWorkRequest =
-                    PeriodicWorkRequestBuilder<CronTickWorker>(INTERVAL_MINUTES, TimeUnit.MINUTES)
-                        .build()
                 WorkManager.getInstance(context.applicationContext)
                     .enqueueUniquePeriodicWork(
                         UNIQUE_NAME,
-                        ExistingPeriodicWorkPolicy.KEEP,
+                        ExistingPeriodicWorkPolicy.UPDATE,
                         request
                     )
                 AppLogger.d(TAG, "enqueued PeriodicWork '$UNIQUE_NAME' at ${INTERVAL_MINUTES}m")
             } catch (e: Exception) {
                 AppLogger.e(TAG, "failed to enqueue CronTickWorker", e)
+                throw e
             }
         }
     }
