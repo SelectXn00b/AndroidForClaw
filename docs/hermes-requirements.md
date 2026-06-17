@@ -723,13 +723,86 @@ MemoryScreen `#auto_summary` 列表为空（root 节点保留）；`#auto_summar
 
 ---
 
-#### R-AGENT-041-b: MemoryScreen chip 过滤族 + root 配色（占位）
+#### R-AGENT-041-b: MemoryScreen chip 过滤族 + root 配色
 
-**性质**: 占位。当前记录工程意图：
-- MemoryScreen 加 chip 过滤族 `#auto_root`（默认隐藏 / 仅看自动 / 全部三态）。
-- 节点配色 `pickNodeColorByAttributes` 增加 root 节点专属颜色（与普通节点视觉区分）。
+**来源**: R-AGENT-038 三 root 节点（`#auto_summary_root` / `#auto_extracted_root` / `#auto_summary_id_root`
+共享 `#auto_root` family tag）落地后，MemoryScreen 上 root 节点和普通 Person/Concept 节点视觉混在一起，
+用户难以一眼区分"这是聚合摘要枢纽"还是"普通记忆"；同时缺一个"默认隐藏 / 仅看 auto / 全部"三态过滤
+切换，让用户能在"看用户原创记忆"和"看自动归档枢纽"之间切。041-b 把这两件事做完。
 
-**前置依赖**: R-AGENT-041-a 完成（散节点删干净后 chip 过滤的视觉效果才纯净）。
+**性质**: 新功能（用户明确提出过"chip 过滤 + root 配色"，且是 R-AGENT-038/040/041-a 链路的视觉收尾）。
+
+**前置依赖**: R-AGENT-041-a 已 ship（散节点删干净后 chip 过滤的视觉效果才纯净）。041-c 已 ship（root
+详情页冷归档接通，041-b 不依赖 041-c 但可一起用）。
+
+**Python 上游**: 无。Hermes Python 上游不绘制 UI，UI 层是 Android 独有。
+
+**架构落点**:
+
+1. **配色 — `pickNodeColorByAttributes` 增加 root 专属色**（`data/repository/MemoryRepository.kt:3036`）：
+   - 三个 bucket 各自一个 hex（用 Material 调色板里与现有 GOLD/PURPLE/GATEWAY/GREEN/BLUE 区分明显的色）：
+     - `#auto_summary_root` → `Color(0xFFEF5350)`（红 — 对话压缩摘要，最显眼）
+     - `#auto_extracted_root` → `Color(0xFFFFA726)`（橘 — 自动抽取碎片）
+     - `#auto_summary_id_root` → `Color(0xFFAB47BC)`（紫红 — 历史编号碎片，与 PURPLE 0xFF9575CD
+       区分明显）
+   - 优先级：`#persistent_instruction` (gold) > `isDocumentNode` (purple) > root tags (3 色) >
+     `#gateway:*` (teal) > Person/Concept > LightGray。**root 优于 gateway** —— root 是"枢纽"语义，
+     比"来源平台"更结构化，应当先表达。
+   - 命中规则：扫整个 tagNames，**任意一个** root tag 命中即返回对应色（与 gateway 同款 startsWith
+     扫描风格）。三个 root tag 共存（不会发生，但写防御性逻辑）时按上述顺序短路返回。
+
+2. **过滤 — `MemoryViewModel` 加 `AutoRootFilter` 三态**（`viewmodel/MemoryViewModel.kt`）：
+   - 新 sealed class `AutoRootFilter`：`All`（默认 = 行为不变，全部显示）/ `HideAuto`（屏蔽所有
+     `#auto_root` 节点）/ `OnlyAuto`（只看 `#auto_root` 节点，可选 platform-集 = 三 bucket 任意子集）。
+   - `MemoryUiState` 加字段 `autoRootFilter: AutoRootFilter = AutoRootFilter.All`。
+   - 新 `applyAutoRootFilterToGraph(graph)` 与 `applyGatewayFilterToGraph` **并行**（不嵌套）：
+     `refreshGraph()` 里串成 `applyAutoRootFilterToGraph(applyGatewayFilterToGraph(baseGraph))`，
+     两个 filter **正交**，互不干扰。
+   - 新 handler `onAutoRootFilterChange(filter)` 与 `onGatewayFilterChange` 平行，`viewModelScope.launch`
+     重算 graph。
+   - **不**读 ObjectBox，只读 `Node.metadata["tags"]`（与 gateway filter 同源），保持 UI 层纯 in-memory
+     过滤、不触发新查询。
+   - **不动 LightGray sentinel** —— 仅过滤节点 + 剪悬挂边，不 `node.copy(color = …)`（保持 R-AGENT-249
+     不变量）。
+
+3. **UI — `MemoryScreen` chip row**（`screens/MemoryScreen.kt`）：
+   - 新私有 composable `AutoRootFilterChipRow`（与 `GatewayFilterChipRow` 平行；二者**同时显示**，
+     不互斥）。
+   - chip 集合：
+     - `R.string.memory_filter_auto_root_all` "全部" / "All"（`AutoRootFilter.All`）
+     - `R.string.memory_filter_auto_root_hide` "隐藏自动" / "Hide auto"（`AutoRootFilter.HideAuto`）
+     - 三个 per-bucket chip：`R.string.memory_filter_auto_root_summary` / `_extracted` / `_summary_id`
+       （多选，进 `AutoRootFilter.OnlyAuto(buckets: Set<String>)`；空集合=不进 OnlyAuto）。
+   - chip 早返回条件：当 graph 里没有任何 `#auto_root` 节点时整 row 不显示（与 gateway chip row 早返
+     回逻辑同款），避免对没有自动归档的用户产生视觉噪声。
+   - 在 `MemoryScreen` 调用点：在 `GatewayFilterChipRow` 之后渲染（lines 395-399 之后），保持
+     `MemorySearchBar → GatewayChipRow → AutoRootChipRow → GraphVisualizer` 顺序。
+
+4. **strings**：`memory_filter_auto_root_*`（4 条，覆盖 All / Hide / Summary / Extracted / Summary-id）
+   分别落 `values/strings.xml`（zh，挨着 `memory_filter_*` 现有 chunk）和 `values-en/strings.xml`（en）。
+
+**测试策略**: 混合：
+
+- **配色**：1 个真单测类 `MemoryRepositoryAutoRootColorTest.kt` —— pure-logic `pickNodeColorByAttributes`
+  调用，覆盖三 bucket 各自的色 + root tag 与 gateway tag 共存时 root 优先 + persistent_instruction 与
+  root 共存时 persistent_instruction 优先 + 没有 root tag 时回落原有行为。**ROI 高**，纯函数，零
+  Android 依赖。
+- **ViewModel filter 链**：1 个真单测类 `MemoryViewModelAutoRootFilterTest.kt` —— 用 fake graph（手
+  搓 `Node.metadata["tags"] = "#auto_summary_root,#auto_root"` 等）跑 `applyAutoRootFilterToGraph`，
+  覆盖 All / HideAuto / OnlyAuto 三态 + 与 gateway filter 共用一个 graph 时正交不干扰。**Robolectric
+  即可**（VM 已经被 R-AGENT-041-c VM 测包到）。
+- **UI 接线**：1 个 source-scan 测试 `MemoryScreenAutoRootChipWiringTest.kt` 验：
+  `AutoRootFilterChipRow` composable 存在 + `MemoryScreen` 渲染调用点 + 4 个 chip 字符串资源 + 早返
+  回条件（`isEmpty()` 早 return），无 mock Compose。
+- **不**写 instrumentation；**不**跑 §3 E2E（UI-only 视觉/交互改动，不触及 agent loop / API / 工具
+  派发）。
+
+**对应测试**: TC-AGENT-041-b-a/b/c/d/e/f/g（7 条）。
+
+**验收**: 单测 7 个全绿；§2 四件套全绿（functional_stubs 不增）；手测：旧 APK 升级到含 041-b 的
+APK，打开 MemoryScreen → 三 root 节点显示三种新色（不是 LightGray）→ chip row 出现"全部 / 隐藏自动 /
+摘要 / 抽取 / 历史"五个 chip → 切 HideAuto 后三 root 节点消失 → 切 OnlyAuto+只勾摘要 chip 后只剩
+`#auto_summary_root` 节点。
 
 ---
 

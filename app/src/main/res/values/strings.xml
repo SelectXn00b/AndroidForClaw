@@ -5623,6 +5623,12 @@
     <string name="memory_filter_all">全部</string>
     <string name="memory_filter_no_gateway">无网关</string>
     <string name="memory_filter_gateway_platform_format">网关·%1$s</string>
+    <!-- R-AGENT-041-b: auto-root chip 三态 + 三 bucket 过滤 -->
+    <string name="memory_filter_auto_root_all">自动:全部</string>
+    <string name="memory_filter_auto_root_hide">隐藏自动</string>
+    <string name="memory_filter_auto_root_summary">摘要</string>
+    <string name="memory_filter_auto_root_extracted">抽取</string>
+    <string name="memory_filter_auto_root_summary_id">历史</string>
     <string name="memory_error_refresh_folders">刷新文件夹列表失败: %1$s</string>
     <string name="memory_error_load_folder_graph">加载文件夹图谱失败: %1$s</string>
     <string name="memory_error_move_memories">移动记忆失败</string>

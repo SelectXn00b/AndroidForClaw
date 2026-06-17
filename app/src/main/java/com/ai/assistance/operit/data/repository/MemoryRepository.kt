@@ -3040,11 +3040,24 @@ internal fun pickNodeColorByAttributes(tagNames: List<String>, isDocumentNode: B
     if (isDocumentNode) {
         return Color(0xFF9575CD) // Purple for documents
     }
+    // R-AGENT-041-b (2026-06-17): R-AGENT-038 三 root 节点（auto_summary / auto_extracted /
+    // auto_summary_id）专属色。优先级排在 persistent_instruction (gold) / isDocumentNode (purple)
+    // 之后、`#gateway:*` (teal) 之前 —— root 是「枢纽」语义，比来源平台更结构化。
+    // 三 bucket 各自一色，与 GOLD/PURPLE/GATEWAY/GREEN/BLUE 视觉区分明显。
+    if (tagNames.contains("#auto_summary_root")) {
+        return Color(0xFFEF5350) // Red for auto_summary root (对话压缩摘要)
+    }
+    if (tagNames.contains("#auto_extracted_root")) {
+        return Color(0xFFFFA726) // Orange for auto_extracted root (自动抽取碎片)
+    }
+    if (tagNames.contains("#auto_summary_id_root")) {
+        return Color(0xFFAB47BC) // Purple-pink for auto_summary_id root (历史编号碎片)
+    }
     // R-AGENT-012 (2026-06-06): any tag starting with `#gateway:` (e.g. #gateway:feishu,
     // #gateway:wechat) → teal —— so MemoryScreen 上一眼能看出哪些节点来自 gateway 路径
     // (R-AGENT-010/011 自动总结) vs APP UI 创建的节点。
-    // 优先级低于 persistent_instruction (用户手写语义) + isDocumentNode (结构属性)，
-    // 高于 Person/Concept/默认 (来源比通用类别更值得突出)。
+    // 优先级低于 persistent_instruction (用户手写语义) + isDocumentNode (结构属性) + root tags
+    // (R-AGENT-041-b root > gateway)，高于 Person/Concept/默认。
     if (tagNames.any { it.startsWith("#gateway:") }) {
         return Color(0xFF26A69A) // Teal for gateway-sourced memories
     }

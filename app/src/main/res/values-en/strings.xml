@@ -5602,6 +5602,12 @@
     <string name="memory_filter_all">All</string>
     <string name="memory_filter_no_gateway">No Gateway</string>
     <string name="memory_filter_gateway_platform_format">Gateway · %1$s</string>
+    <!-- R-AGENT-041-b: auto-root chip three-state + per-bucket filter -->
+    <string name="memory_filter_auto_root_all">Auto: All</string>
+    <string name="memory_filter_auto_root_hide">Hide auto</string>
+    <string name="memory_filter_auto_root_summary">Summary</string>
+    <string name="memory_filter_auto_root_extracted">Extracted</string>
+    <string name="memory_filter_auto_root_summary_id">History</string>
     <string name="memory_error_refresh_folders">Failed to refresh folder list: %1$s</string>
     <string name="memory_error_load_folder_graph">Failed to load folder graph: %1$s</string>
     <string name="memory_error_move_memories">Failed to move memories</string>

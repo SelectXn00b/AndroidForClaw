@@ -683,6 +683,33 @@ R-AGENT-041-c = R-AGENT-038 数据闭环最后一公里。`MemoryArchiver` 已�
 
 ---
 
+## 域 AGENT — MemoryScreen chip 过滤族 + root 配色 (R-AGENT-041-b)
+
+R-AGENT-041-b = R-AGENT-038/040/041-a 链路视觉收尾。三 root 节点（`#auto_summary_root` /
+`#auto_extracted_root` / `#auto_summary_id_root` 共享 `#auto_root` family tag）落地后，MemoryScreen
+上 root 节点和 Person/Concept 节点视觉无差，难以一眼区分；同时缺一个三态过滤切换让用户在"看用户原创"和
+"看自动归档枢纽"之间切。本条把两件事做完：(1) `pickNodeColorByAttributes` 增加三 bucket 专属色
+（红/橘/紫红），(2) `MemoryViewModel` 加 `AutoRootFilter` 三态 + 与现有 `GatewayFilter` 正交并行，
+(3) `MemoryScreen` 加 `AutoRootFilterChipRow` 渲染在 `GatewayFilterChipRow` 之后。
+
+测试策略：混合 —— 配色是 pure-logic 函数（ROI 高，走真单测，仿 `MemoryRepositoryGatewayColorTest` 同款）；
+ViewModel filter 链是 in-memory 转换（ROI 高，走真单测）；UI 接线是 Compose（ROI 低，走 source-scan）。
+**不**跑 §3 E2E（UI-only 视觉/交互改动，不触及 agent loop / API / 工具派发）。
+
+| TC ID | 关联 R-ID | 输入 | 期望 | 类型 | 文件位置 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-041-b-a | R-AGENT-041-b | `pickNodeColorByAttributes(listOf("#auto_summary_root", "#auto_root"), false)` | 返回红色 `Color(0xFFEF5350)`（auto_summary 专属色）。 | unit | `MemoryRepositoryAutoRootColorTest#TC-AGENT-041-b-a auto_summary_root tag returns red` 🟢 |
+| TC-AGENT-041-b-b | R-AGENT-041-b | `pickNodeColorByAttributes(listOf("#auto_extracted_root", "#auto_root"), false)` 与 `pickNodeColorByAttributes(listOf("#auto_summary_id_root", "#auto_root"), false)` | 分别返回橘色 `Color(0xFFFFA726)` 和紫红 `Color(0xFFAB47BC)`，三 bucket 各自一色不互窜。 | unit | `MemoryRepositoryAutoRootColorTest#TC-AGENT-041-b-b auto_extracted and auto_summary_id roots return their own colors` 🟢 |
+| TC-AGENT-041-b-c | R-AGENT-041-b | `pickNodeColorByAttributes(listOf("#persistent_instruction", "#auto_summary_root", "#auto_root"), false)` 与 `pickNodeColorByAttributes(listOf("#auto_summary_root", "#auto_root", "#gateway:feishu"), false)` | 第一个返回 GOLD（`#persistent_instruction` 优先于 root）；第二个返回红色 root 色（root 优先于 `#gateway:*`）。守优先级排序：persistent_instruction > isDocumentNode > root > gateway > Person/Concept > LightGray。 | unit | `MemoryRepositoryAutoRootColorTest#TC-AGENT-041-b-c root tag priority sits between persistent_instruction and gateway` 🟢 |
+| TC-AGENT-041-b-d | R-AGENT-041-b | `applyAutoRootFilterToGraph` 输入：手搓 graph 含 5 节点（1 个 `#auto_summary_root` / 1 个 `#auto_extracted_root` / 1 个 `#auto_summary_id_root` / 1 个 `#gateway:feishu` / 1 个 `Person`），filter = `AutoRootFilter.HideAuto` | 返回 size = 2 的 nodes（只剩 gateway + Person，三 root 全部被屏蔽）；edges 同步剪悬挂边。 | unit | `MemoryViewModelAutoRootFilterTest#TC-AGENT-041-b-d HideAuto removes all auto_root nodes` 🟢 |
+| TC-AGENT-041-b-e | R-AGENT-041-b | 同上 graph，filter = `AutoRootFilter.OnlyAuto(setOf("#auto_summary_root"))` | 返回 size = 1 的 nodes（只剩 `#auto_summary_root`）；空 set 时（`OnlyAuto(emptySet())`）返回 size = 3（三 root 全部）。 | unit | `MemoryViewModelAutoRootFilterTest#TC-AGENT-041-b-e OnlyAuto with bucket subset filters to chosen buckets` 🟢 |
+| TC-AGENT-041-b-f | R-AGENT-041-b | 同上 graph，filter = `AutoRootFilter.HideAuto` 且 `gatewayFilter = GatewayFilter.ExcludeGateway` | 两个 filter 正交叠加：返回 size = 1 的 nodes（只剩 Person，gateway 被 gateway filter 屏蔽 + 三 root 被 auto-root filter 屏蔽）。守"两个 filter 互不干扰、可叠加"红线。 | unit | `MemoryViewModelAutoRootFilterTest#TC-AGENT-041-b-f auto_root filter and gateway filter compose orthogonally` 🟢 |
+| TC-AGENT-041-b-g | R-AGENT-041-b | 源码扫描：`ui/features/memory/screens/MemoryScreen.kt` | 必须含 (1) `AutoRootFilterChipRow` composable 声明（函数 / private fun 字面）；(2) MemoryScreen 主 layout 内对 `AutoRootFilterChipRow(` 的调用（与 `GatewayFilterChipRow(` 平行渲染，二者**同时存在**）；(3) 4 条新 string 资源引用：`memory_filter_auto_root_all` / `memory_filter_auto_root_hide` / `memory_filter_auto_root_summary` / `memory_filter_auto_root_extracted` / `memory_filter_auto_root_summary_id`（5 个，覆盖 All / Hide / 三 bucket）；(4) chip row 早返回 `isEmpty()` 判定（graph 没有任何 `#auto_root` 节点时整 row 不显示）。 | unit-scan | `MemoryScreenAutoRootChipWiringTest#TC-AGENT-041-b-g screen renders auto_root chip row alongside gateway chip row` 🟢 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — App Self-Awareness Prompt Injection (R-AGENT-030)
 
 R-AGENT-030 让主 agent 的 system prompt 注入「应用自我感知」段，告诉 agent HermesApp 内置了哪些用户视角的 UI 入口（工具箱 / Memory hub / Settings / Skill Recorder / Terminal 等），方便 agent 在被问"我去哪里 X"时给出导航式回答而非自己代劳或瞎猜。

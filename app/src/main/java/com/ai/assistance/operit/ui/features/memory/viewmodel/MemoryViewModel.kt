@@ -90,7 +90,11 @@ data class MemoryUiState(
 
         // --- R-AGENT-012: Gateway 来源过滤（飞书 / 微信等 IM 平台自动总结的记忆）---
         val availableGatewayPlatforms: List<String> = emptyList(),
-        val gatewayFilter: GatewayFilter = GatewayFilter.All
+        val gatewayFilter: GatewayFilter = GatewayFilter.All,
+
+        // --- R-AGENT-041-b: auto-root 三态过滤（隐藏 / 仅看 / 全部）---
+        val availableAutoRootBuckets: List<String> = emptyList(),
+        val autoRootFilter: AutoRootFilter = AutoRootFilter.All
 )
 
 /**
@@ -103,6 +107,57 @@ sealed class GatewayFilter {
     object All : GatewayFilter()
     data class OnlyGateway(val platforms: Set<String>) : GatewayFilter()
     object ExcludeGateway : GatewayFilter()
+}
+
+/**
+ * R-AGENT-041-b (2026-06-17): MemoryScreen auto-root 三态过滤。三 root 节点身上有
+ * bucket 专属 root tag（`#auto_summary_root` / `#auto_extracted_root` / `#auto_summary_id_root`）
+ * + 共享 family tag `#auto_root`（由 `MemoryArchiver.ensureRoot` 写入）。本过滤与
+ * `GatewayFilter` **正交**，由 `refreshGraph()` 串成 `applyAutoRootFilterToGraph(applyGateway...)`。
+ *
+ *  - All：默认，不过滤，行为与 R-041-b 之前一致
+ *  - HideAuto：屏蔽所有带 `#auto_root` family tag 的节点（只看用户原创 + gateway 自动总结）
+ *  - OnlyAuto(buckets)：只看选中的 bucket-specific root tag；空 set = 看全部三 root
+ */
+sealed class AutoRootFilter {
+    object All : AutoRootFilter()
+    object HideAuto : AutoRootFilter()
+    data class OnlyAuto(val buckets: Set<String>) : AutoRootFilter()
+}
+
+/**
+ * R-AGENT-041-b (2026-06-17): 顶层纯函数 —— 把 graph 按 `AutoRootFilter` 三态过滤。
+ * Node 的 root 身份从 `Node.metadata["tags"]`（逗号分隔字符串，由
+ * `MemoryRepository.buildGraphFromMemories` 注入）读出，与 gateway filter 同源。
+ * 本函数与 `applyGatewayFilterToGraph` 正交：可独立调用，也可串行叠加。
+ */
+fun applyAutoRootFilterToGraph(graph: Graph, filter: AutoRootFilter): Graph {
+    if (filter is AutoRootFilter.All) return graph
+
+    fun nodeTags(node: Node): List<String> {
+        val raw = node.metadata["tags"] ?: return emptyList()
+        return raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+    }
+
+    val filteredNodes = when (filter) {
+        is AutoRootFilter.All -> graph.nodes // 上面 early-return 已处理；保留 when 完整性
+        is AutoRootFilter.HideAuto -> graph.nodes.filterNot { node ->
+            nodeTags(node).contains("#auto_root")
+        }
+        is AutoRootFilter.OnlyAuto -> graph.nodes.filter { node ->
+            val tags = nodeTags(node)
+            if (!tags.contains("#auto_root")) return@filter false
+            if (filter.buckets.isEmpty()) true // 空 set = 看全部三 root
+            else tags.any { it in filter.buckets }
+        }
+    }
+
+    if (filteredNodes.size == graph.nodes.size) return graph
+    val filteredNodeIds = filteredNodes.map { it.id }.toSet()
+    val filteredEdges = graph.edges.filter {
+        it.sourceId in filteredNodeIds && it.targetId in filteredNodeIds
+    }
+    return Graph(filteredNodes, filteredEdges)
 }
 
 /** R-AGENT-003 后续：手动重复清理弹窗的状态机。 */
@@ -165,7 +220,31 @@ class MemoryViewModel(
         } else {
             repository.getGraphForFolder(selectedFolder)
         }
-        return applyGatewayFilterToGraph(baseGraph)
+        // R-AGENT-041-b: 两个 filter 正交叠加。先 gateway 再 auto-root，二者剪点+剪悬挂边的契约一致。
+        // 同时扫描 availableAutoRootBuckets（chip row 渲染依赖）。
+        scanAvailableAutoRootBuckets(baseGraph)
+        return applyAutoRootFilterToGraph(
+            applyGatewayFilterToGraph(baseGraph),
+            _uiState.value.autoRootFilter
+        )
+    }
+
+    /**
+     * R-AGENT-041-b: 扫描 graph 中实际存在的 root bucket tag，写到 `availableAutoRootBuckets`。
+     * MemoryScreen 的 `AutoRootFilterChipRow` 用这个判定整 row 是否显示（空 → 不显示）以及
+     * 该渲染哪几个 per-bucket chip。
+     */
+    private fun scanAvailableAutoRootBuckets(graph: Graph) {
+        val rootTags = setOf(
+            "#auto_summary_root", "#auto_extracted_root", "#auto_summary_id_root"
+        )
+        val seen = sortedSetOf<String>()
+        graph.nodes.forEach { node ->
+            extractNodeTags(node).forEach { tag ->
+                if (tag in rootTags) seen.add(tag)
+            }
+        }
+        _uiState.update { it.copy(availableAutoRootBuckets = seen.toList()) }
     }
 
     /**
@@ -232,6 +311,21 @@ class MemoryViewModel(
         }
     }
 
+    /** R-AGENT-041-b: UI chip 切换 auto-root 过滤模式，与 gateway filter 同款，触发图谱重算。 */
+    fun onAutoRootFilterChange(filter: AutoRootFilter) {
+        _uiState.update { it.copy(autoRootFilter = filter) }
+        viewModelScope.launch {
+            try {
+                val graphData = refreshGraph()
+                _uiState.update { it.copy(graph = graphData) }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(error = context.getString(R.string.memory_error_load_graph, e.message ?: "Unknown error"))
+                }
+            }
+        }
+    }
+
     /** Loads the entire memory graph from the repository. */
     fun loadMemoryGraph() {
         viewModelScope.launch {
@@ -277,7 +371,12 @@ class MemoryViewModel(
                             edgeWeight = config.edgeWeight
                         )
                     }
-                val graphData = applyGatewayFilterToGraph(repository.getGraphForMemories(memories))
+                val baseGraph = repository.getGraphForMemories(memories)
+                scanAvailableAutoRootBuckets(baseGraph)
+                val graphData = applyAutoRootFilterToGraph(
+                    applyGatewayFilterToGraph(baseGraph),
+                    _uiState.value.autoRootFilter
+                )
                 _uiState.update { it.copy(graph = graphData, isLoading = false) }
             } catch (e: Exception) {
                 _uiState.update {

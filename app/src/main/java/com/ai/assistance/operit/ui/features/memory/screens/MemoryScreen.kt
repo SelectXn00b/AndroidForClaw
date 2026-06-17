@@ -71,6 +71,7 @@ import com.ai.assistance.operit.ui.features.memory.screens.dialogs.LinkMemoryDia
 import com.ai.assistance.operit.ui.features.memory.screens.dialogs.MemoryInfoDialog
 import com.ai.assistance.operit.ui.features.memory.screens.dialogs.EdgeInfoDialog
 import com.ai.assistance.operit.ui.features.memory.screens.dialogs.EditEdgeDialog
+import com.ai.assistance.operit.ui.features.memory.viewmodel.AutoRootFilter
 import com.ai.assistance.operit.ui.features.memory.viewmodel.GatewayFilter
 import com.ai.assistance.operit.ui.features.memory.viewmodel.MemoryViewModel
 import com.ai.assistance.operit.ui.features.memory.viewmodel.MemoryViewModelFactory
@@ -396,6 +397,15 @@ fun MemoryScreen() {
                     availableGatewayPlatforms = uiState.availableGatewayPlatforms,
                     gatewayFilter = uiState.gatewayFilter,
                     onFilterChange = { viewModel.onGatewayFilterChange(it) }
+                )
+
+                // R-AGENT-041-b (2026-06-17): auto-root 三态过滤 chip 行。与 gateway chip 行平行
+                // 渲染（同时存在）；仅当 graph 含至少一个 root bucket（availableAutoRootBuckets 非空）
+                // 时显示，避免无自动归档的用户看到空 chip 行。
+                AutoRootFilterChipRow(
+                    availableAutoRootBuckets = uiState.availableAutoRootBuckets,
+                    autoRootFilter = uiState.autoRootFilter,
+                    onFilterChange = { viewModel.onAutoRootFilterChange(it) }
                 )
 
                 // R-AGENT-025 (2026-06-12): 一键清理所有 #auto_summary 节点
@@ -751,6 +761,76 @@ private fun GatewayFilterChipRow(
                 label = {
                     Text(stringResource(R.string.memory_filter_gateway_platform_format, platform))
                 }
+            )
+        }
+    }
+}
+
+/**
+ * R-AGENT-041-b (2026-06-17): MemoryScreen auto-root 三态过滤 chip 行。
+ *
+ * 三态：
+ *  - 自动:全部（[AutoRootFilter.All]）—— 默认，不过滤
+ *  - 隐藏自动（[AutoRootFilter.HideAuto]）—— 屏蔽所有 `#auto_root` 节点（只看用户原创 + gateway）
+ *  - 三个 per-bucket chip（多选 → [AutoRootFilter.OnlyAuto]）：摘要 / 抽取 / 历史
+ *
+ * 早返回：当 [availableAutoRootBuckets] 空（graph 没有任何 `#auto_root` 节点）时整 row 不显示，
+ * 避免无自动归档的用户看到空 chip 行（与 [GatewayFilterChipRow] 同款守门）。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AutoRootFilterChipRow(
+    availableAutoRootBuckets: List<String>,
+    autoRootFilter: AutoRootFilter,
+    onFilterChange: (AutoRootFilter) -> Unit
+) {
+    if (availableAutoRootBuckets.isEmpty()) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        FilterChip(
+            selected = autoRootFilter is AutoRootFilter.All,
+            onClick = { onFilterChange(AutoRootFilter.All) },
+            label = { Text(stringResource(R.string.memory_filter_auto_root_all)) }
+        )
+        Spacer(Modifier.width(8.dp))
+        FilterChip(
+            selected = autoRootFilter is AutoRootFilter.HideAuto,
+            onClick = { onFilterChange(AutoRootFilter.HideAuto) },
+            label = { Text(stringResource(R.string.memory_filter_auto_root_hide)) }
+        )
+        val selectedBuckets = (autoRootFilter as? AutoRootFilter.OnlyAuto)?.buckets ?: emptySet()
+        // 三个 per-bucket chip：仅当 graph 实际含该 bucket 时才渲染（与 availableAutoRootBuckets
+        // 同源，避免显示永远空的 bucket chip）
+        val bucketLabelMap = mapOf(
+            "#auto_summary_root" to R.string.memory_filter_auto_root_summary,
+            "#auto_extracted_root" to R.string.memory_filter_auto_root_extracted,
+            "#auto_summary_id_root" to R.string.memory_filter_auto_root_summary_id
+        )
+        availableAutoRootBuckets.forEach { bucketTag ->
+            val labelRes = bucketLabelMap[bucketTag] ?: return@forEach
+            Spacer(Modifier.width(8.dp))
+            val isSelected = bucketTag in selectedBuckets
+            FilterChip(
+                selected = isSelected,
+                onClick = {
+                    val newSet = if (isSelected) {
+                        selectedBuckets - bucketTag
+                    } else {
+                        selectedBuckets + bucketTag
+                    }
+                    if (newSet.isEmpty()) {
+                        // 取消所有 bucket → 回到 All（避免空集合等同 "看全部 root" 造成歧义）
+                        onFilterChange(AutoRootFilter.All)
+                    } else {
+                        onFilterChange(AutoRootFilter.OnlyAuto(newSet))
+                    }
+                },
+                label = { Text(stringResource(labelRes)) }
             )
         }
     }
