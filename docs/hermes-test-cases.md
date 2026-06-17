@@ -1669,6 +1669,53 @@ R-AGENT-043 给 cron 子系统加"即时触发"路径——绕过 `CronTickWorke
 
 ---
 
+## 域 AGENT — Cron Self-Diagnostic Tool (R-AGENT-044)
+
+R-AGENT-044 给 cron 子系统加自检工具 `cronjob(action="health")`，让 agent 主动诊断 worker 是否存活、是否 enqueue 失败、最近 N 次 tick 时间、有没有 due 但未跑的任务、immediate runner 是否被注入。Bug A（KEEP→UPDATE+throw）虽然能让 enqueue 失败时崩出来，但 agent 端缺一个"我现在能不能用 cron"的查询入口；本 R 是观测面（observability），与 R-AGENT-031 的执行面互补。无 Python 上游对应（Android 平台特有的诊断面，对接 WorkManager）。
+
+| TC ID | R-ID | 输入 | 期望输出 | 类型 | 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-044-a | R-AGENT-044 | 源码扫描 `CronjobTools.kt` `CRONJOB_SCHEMA` `action` enum | enum 含 `"health"`；schema description 列出 `health` 返回的所有字段（`worker_registered` / `worker_state` / `last_tick_at` / `next_scheduled_at` / `pending_due_jobs` / `recent_runs` / `immediate_runner_wired` / `enqueue_last_error`） | unit (源码扫描) | `CronjobToolsHealthTest#TC-AGENT-044-a schema advertises health action` 🔴 |
+| TC-AGENT-044-b | R-AGENT-044 | 调 `cronjobToolImpl(action="health")`（mock WorkManager 返回 `WorkInfo.State.ENQUEUED` for unique work `cron-tick-worker`） | 返回 JSON `success=true` + `worker_registered=true` + `worker_state="ENQUEUED"` + `next_scheduled_at` 非空 ISO-8601 | unit | `CronjobToolsHealthTest#TC-AGENT-044-b health reports running worker` 🔴 |
+| TC-AGENT-044-c | R-AGENT-044 | mock `WorkManager.getWorkInfosForUniqueWork` 返回空 list（worker 从未 enqueue / 已被取消） | `worker_registered=false` + `worker_state="MISSING"` + `enqueue_last_error` 含最近一次 enqueue 异常 message（来自 R-AGENT-031 fix 的 throw 路径，需在 `CronTickWorker` 加 `@Volatile var lastEnqueueError: String?` 由 catch 块写入） | unit | `CronjobToolsHealthTest#TC-AGENT-044-c health detects missing worker` 🔴 |
+| TC-AGENT-044-d | R-AGENT-044 | `Jobs` 表写入 2 条 `next_run_at` < now、1 条 `next_run_at` > now、1 条 `paused=true`；调 health | `pending_due_jobs` 列出前 2 条的 `id` + `next_run_at`（不含未到期/已暂停的）；按 `next_run_at` 升序 | unit | `CronjobToolsHealthTest#TC-AGENT-044-d health lists overdue jobs` 🔴 |
+| TC-AGENT-044-e | R-AGENT-044 | `Scheduler.cronImmediateRunner = null`（OperitApplication 注入未发生） / `= someLambda`（已注入）两种状态 | `immediate_runner_wired` 分别为 `false` / `true`，与 R-AGENT-043 注入开关一致 | unit | `CronjobToolsHealthTest#TC-AGENT-044-e health reflects immediate runner state` 🔴 |
+
+跑已落地 TC：
+
+```bash
+./gradlew :hermes-android:testDebugUnitTest --tests "com.xiaomo.hermes.hermes.tools.CronjobToolsHealthTest"
+```
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
+## 域 AGENT — App-Chat Origin for Cron (R-AGENT-045)
+
+R-AGENT-045 把 cron 的"来源会话"（`origin_platform` / `origin_chat_id`）从只支持 gateway-platform（Telegram/Weixin/...）扩展到也支持 in-app chat（`origin_platform="app"` + `origin_chat_id=<chatId>`）。当前 `CronAgentRunner.deliver()` 只走 `HermesGatewayController.send`，对 `app` origin 没分支，导致 in-app 注册的 cron 任务跑完后回复无法回到原 chat。本 R 把 `app` 平台落地为：cron 触发时通过 `R-AGENT-033` 的 `HERMES_SESSION_*` ThreadLocal 把 chat_id 透传给 agent loop，agent 回复直接走 `ChatViewModel` 的 in-app pipeline，与用户主动发消息的路径一致。Python 上游无对应（Android 特有，对接 in-app chat session）。
+
+| TC ID | R-ID | 输入 | 期望输出 | 类型 | 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-045-a | R-AGENT-045 | 源码扫描 `ExternalChatRequestExecutor.kt::execute()` | 函数体在调 agent loop 之前必须 `setSessionVars("app", chatId)`（R-AGENT-033 ThreadLocal API），出现在调 `EnhancedAIService` 之前；finally 块清理 ThreadLocal | unit (源码扫描) | `ExternalChatRequestExecutorSessionVarsTest#TC-AGENT-045-a app-chat sets session vars before agent loop` 🔴 |
+| TC-AGENT-045-b | R-AGENT-045 | 源码扫描 `CronAgentRunner.kt::deliver()` | `when (origin_platform)` 必须有 `"app" -> ...` 分支；分支内部调 `ChatViewModel.deliverCronReply(chatId, text)` 或等价 `ExternalChatRequestExecutor.deliverToAppChat(chatId, text)` 路径；不再 fallthrough 到 `gateway.send` | unit (源码扫描) | `CronAgentRunnerAppOriginTest#TC-AGENT-045-b deliver routes app origin to in-app pipeline` 🔴 |
+| TC-AGENT-045-c | R-AGENT-045 | cron job `origin_platform="app"`, `origin_chat_id="chat-123"`；触发 `CronAgentRunner.run` | mock 的 `appChatDeliver` lambda 被调 1 次 with `("chat-123", <agent reply text>)`；mock 的 `gateway.send` **不**被调 | unit | `CronAgentRunnerAppOriginTest#TC-AGENT-045-c app origin invokes app deliver only` 🔴 |
+| TC-AGENT-045-d | R-AGENT-045 | cron job `origin_platform=null`（兼容旧 jobs.json 没有 origin 字段的记录） | `deliver()` 不抛异常；走 fallback 路径（默认 origin = `app` + chat_id = `"system"`）或者跳过递送（按本 R 决策选其一并在测试断言里固定） | unit | `CronAgentRunnerAppOriginTest#TC-AGENT-045-d null origin gracefully handled` 🔴 |
+| TC-AGENT-045-e | R-AGENT-045 | cron job `origin_platform="telegram"`, `origin_chat_id="tg-456"`（与 R-GW-008 一致） | `gateway.send("telegram", "tg-456", text)` 被调 1 次；`appChatDeliver` **不**被调（保持原 gateway 路径不回归） | unit | `CronAgentRunnerAppOriginTest#TC-AGENT-045-e telegram origin still routes via gateway` 🔴 |
+| TC-AGENT-045-f | R-AGENT-045 | 源码扫描 `cronjobToolImpl` 的 add 分支 | 当 `HERMES_SESSION_PLATFORM == "app"` 时，写入 jobs.json 的新 job 必须自动带 `origin_platform="app"` + `origin_chat_id=<HERMES_SESSION_CHAT_ID>`（不需要 agent 显式传参）；出现在 `Jobs.addJob` 调用之前 | unit (源码扫描) | `CronjobToolsAppOriginTest#TC-AGENT-045-f add inherits app session origin` 🔴 |
+
+跑已落地 TC：
+
+```bash
+./gradlew :app:testDebugUnitTest --tests "com.ai.assistance.operit.external.chat.ExternalChatRequestExecutorSessionVarsTest"
+./gradlew :hermes-android:testDebugUnitTest --tests "com.xiaomo.hermes.hermes.cron.CronAgentRunnerAppOriginTest"
+./gradlew :hermes-android:testDebugUnitTest --tests "com.xiaomo.hermes.hermes.tools.CronjobToolsAppOriginTest"
+```
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 GATEWAY — Busy-Input Mode (R-GATEWAY-035)
 
 R-GATEWAY-035 给 `GatewayRunner` 加 `_busyInputMode: String` 字段（默认 `"interrupt"`，可切 `"queue"`），并把现有 `queueDuringDrainEnabled()` 实现切到读这个字段。对齐 Python `gateway/run.py:608, 631, 1230-1231, 1389-1402`。本 R **只做字段加载 + getter 暴露 + queueDuringDrainEnabled 重写**——drain 路径完整 reject/queue 行为在 R-GATEWAY-037。

@@ -2445,3 +2445,84 @@ fun steerActiveLoop(chatId: String, text: String): Boolean {
   - 点"暂停"→ 任务 state 变 paused，列表行同步更新
   - 点"删除" → 确认对话框 → 列表行消失
 
+---
+
+### R-AGENT-044: cron 健康自诊断工具（agent 可主动调）
+
+**状态**: 待实现（仅文档草案，2026-06-18 立项）
+
+**Python 上游**: 无（Android 平台特有，源于 R-AGENT-031 WorkManager 链路在生产环境的可观测性缺口）。
+
+**用户故事**: 用户问 agent "我的定时任务能不能正常跑"时，agent 没有任何工具能直接回答——只能让用户手动看 jobs.json / logcat。R-AGENT-031 的 enqueue 失败（即便 R-AGENT-031 bugfix 已修了静默吞，但仍可能因 WorkManager init 失败、SDK quirk、电池策略等触发）只在 logcat 可见，agent 无法自陈状态。
+
+**行为**: 新增工具 `cron_health_check()`，无参数，注册到 ToolDispatcher（与 `cronjob` 平级）。返回 JSON：
+
+| 字段 | 类型 | 含义 | 数据来源 |
+|---|---|---|---|
+| `worker_registered` | bool | WorkManager 是否能找到 `hermes_cron_tick` unique periodic work | `WorkManager.getWorkInfosForUniqueWork` |
+| `worker_state` | string | 该 work 当前 `WorkInfo.State`（ENQUEUED / RUNNING / SUCCEEDED / FAILED / BLOCKED / CANCELLED） | 同上 |
+| `last_tick_at` | long? | 上次 `doWork()` 完成时间戳（ms） | SharedPreferences（在 `CronTickWorker.doWork` Result.success 之前落） |
+| `next_scheduled_at` | long? | WorkManager 估算的下次触发时间 | `WorkInfo.nextScheduleTimeMillis`（API 31+） |
+| `pending_due_jobs` | int | 当前 `getDueJobs()` 数 | `Jobs.getDueJobs()` |
+| `recent_runs` | array | 最近 5 次 cron job 执行历史，按时间倒序 | jobs.json 的 `last_run_at` / `last_status` / `last_error` |
+| `immediate_runner_wired` | bool | `Scheduler.cronImmediateRunner` 是否非 null | hermes-android `cronImmediateRunner` 顶层 var |
+| `enqueue_last_error` | string? | 上次 enqueue 失败的 message（R-AGENT-031 bugfix 后 catch 块写到 SharedPreferences） | SharedPreferences key `cron.enqueue.last_error` |
+
+**入口**: 工具名 `cron_health_check`。Schema 注册到 `CRONJOB_HEALTH_SCHEMA`（与 `CRONJOB_SCHEMA` 平级），同步加入 `SystemToolPrompts.getAIAllCategoriesEn/Cn` 的相应 category（建议复用 cronjob 的 category 标签，让两个工具一起被声明给 LLM）。
+
+**与 R-AGENT-031 的关系**:
+- 不替换任何既有路径，纯新增观测工具
+- 依赖 R-AGENT-031 bugfix 已落地（commit `f2feedee` 起 enqueue 失败会被 OperitApplication 的 log-only catch 捕获 + 写到 logcat）；**本需求要把 last_error 同时落到 SharedPreferences** 以便此工具读
+
+**验收**:
+- 在 cron 全绿状态下调用：返回 `worker_registered=true`，`worker_state ∈ {ENQUEUED, RUNNING}`，`pending_due_jobs >= 0`，`enqueue_last_error=null`
+- 模拟 enqueue 失败（mock WorkManager throw）：app 不闪退；调用工具返回 `worker_registered=false`，`enqueue_last_error` 非空，agent 能据此告诉用户"cron 当前没启动，原因 X"
+- LLM 能仅凭 schema 描述就主动调（不靠 system prompt 提示）：在测试 chat 里问"我定时任务还能跑吗"，agent 应该自己 dispatch `cron_health_check` 而不是只靠 `cronjob(action=list)` 猜
+
+---
+
+### R-AGENT-045: app 内聊天创建的 cron job 必须能回到原 chat
+
+**状态**: 待实现（仅文档草案，2026-06-18 立项）
+
+**Python 上游**: 无直接对应（Python Hermes 没有 app-internal chat 概念，只有 IM 入站）。本需求按 R-AGENT-033 (IM 路径 `setSessionVars` 范式) 同构扩展到 app chat 入站点。
+
+**用户故事**: 用户在 app 内自己的聊天界面让 agent 建定时任务，到点 cron 触发后，输出却没回到那个 chat（current behavior：因为 `_originFromEnv` 在 app chat 路径下没注入 session env vars，`origin` 为 null，`deliver` 默认 `local`，再加上 jobs.json 没存创建时的 chat_id，`CronAgentRunner.run` 走的是 `executor.createIfNone` 后端 fallback 出来的新 chat —— AI 反馈的 "deliver=local" bug 就是这个根因）。
+
+**根因**:
+- IM 路径走 `Run.kt::_handleMessage` → `setSessionVars(platform, chatId, threadId)` → tool dispatch 期间 `_originFromEnv()` 读到 → `createJob` 把 origin 落盘 → cron tick 时 `CronAgentRunner.deliver` 走 origin 分支调 `dispatchOutgoing`
+- app 内 chat 路径走 `ExternalChatRequestExecutor.execute()`，**完全没人调 setSessionVars** —— `_originFromEnv()` 返回 null，`origin` 字段是 null，`deliver` 默认成 `local`
+
+**行为**:
+
+A. **`ExternalChatRequestExecutor.execute()` 入站点注入 session vars**（与 IM 路径同构）：
+
+```kotlin
+val resolvedChatId = ... // 实际写入的 chat id（agent loop 启动前就要确定）
+SessionContext.setSessionVars(
+    platform = "app",
+    chatId = resolvedChatId,
+    threadId = null,
+)
+try {
+    // 原 agent loop 调用
+} finally {
+    SessionContext.clearSessionVars()
+}
+```
+
+B. **`CronAgentRunner.deliver()` 识别 `originPlatform == "app"`**：在该分支下不调 `HermesGatewayController.dispatchOutgoing`（因为 "app" 不是 IM platform，dispatchOutgoing 找不到 adapter 必返 false → 报 deliver error），而是走已有的 `writeLocalChatNote(originChatId, ...)`，确保 cron 输出落到原 chat A 而不是 fallback 出来的新 chat。
+
+C. **兼容老 jobs.json**：origin 为 null 的老 job 走 `result.chatId` (executor.createIfNone) 路径，与 R-AGENT-031 baseline 一致；不崩。
+
+**与 R-AGENT-031-h / R-AGENT-035-c 的关系**:
+- R-AGENT-031-h 守 deliver 路径必须含 `ChatHistoryManager` + `addMessage` ✅ 不变
+- R-AGENT-035-c 守 deliver 在 origin 分支也保留 local chat write ✅ 不变
+- 本需求**不删任何既有写入路径**，只是补一条 "app platform → 写到 origin chat_id（来自 jobs.json origin map）" 的精确寻址，而不是 fallback 到 `executor.createIfNone` 创新 chat
+
+**验收**:
+- 在 app chat A 让 agent 建一个 cron job，到点触发，cron 输出（包括 `[CRON] ...` note）必须出现在 chat A 而不是新建的 chat
+- 在 IM (Telegram/Feishu/WeChat) 创建的 cron 行为不变：依然走 `dispatchOutgoing`
+- 老 jobs.json（origin 为 null）兼容：fallback 到 `executor.createIfNone`，不崩
+
+
