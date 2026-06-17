@@ -10,6 +10,10 @@ import com.ai.assistance.operit.data.model.AITool
 import com.ai.assistance.operit.data.model.ToolResult
 import com.ai.assistance.operit.data.model.ToolParameter
 import com.ai.assistance.operit.util.AppLogger
+import com.xiaomo.hermes.hermes.gateway.clearCronAutoDeliverVars
+import com.xiaomo.hermes.hermes.gateway.clearSessionVars
+import com.xiaomo.hermes.hermes.gateway.setCronAutoDeliverVars
+import com.xiaomo.hermes.hermes.gateway.setSessionVars
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.runBlocking
@@ -41,6 +45,15 @@ class ExternalChatRequestExecutor(context: Context) {
     private val appContext = context.applicationContext
 
     suspend fun execute(request: ExternalChatRequest): ExternalChatResult {
+        // R-AGENT-045: 把 in-app chat 的 origin 透传给 agent loop —— 这样
+        // 本回合内 agent 调 `cronjob(action="create")` 时，
+        // `_originFromEnv()` 能从 ThreadLocal 读到 platform="app" + chat_id，
+        // 把 in-app origin 落进 jobs.json，cron 触发后能定位回原 chat。
+        // 与 R-AGENT-033 的 IM 入口（_handleMessage）对称：那边 platform 是
+        // telegram/weixin 等，这边是 "app"。
+        val resolvedChatIdHint = request.chatId?.trim()?.takeIf { it.isNotBlank() }.orEmpty()
+        setSessionVars(platform = "app", chatId = resolvedChatIdHint)
+        setCronAutoDeliverVars(platform = "app", chatId = resolvedChatIdHint)
         return try {
             when (val preparation = prepareRequest(request)) {
                 is PreparationResult.Failed -> preparation.result
@@ -64,6 +77,9 @@ class ExternalChatRequestExecutor(context: Context) {
                 success = false,
                 error = e.message ?: "Unknown error"
             )
+        } finally {
+            clearSessionVars()
+            clearCronAutoDeliverVars()
         }
     }
 

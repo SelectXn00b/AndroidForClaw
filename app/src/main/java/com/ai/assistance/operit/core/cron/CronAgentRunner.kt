@@ -178,6 +178,20 @@ object CronAgentRunner {
             return
         }
 
+        // R-AGENT-045: app-origin 短路 —— in-app chat 没有 IM adapter，
+        // dispatchOutgoing 会返回 false → 抛 IllegalStateException →
+        // markJobRun 误记 last_delivery_error。writeLocalChatNote 已经在
+        // 顶部无条件调过了，cron 输出已经落进 in-app chat 历史，所以这里
+        // 直接 return，不进 gateway 派发路径。
+        if (originPlatform == "app") {
+            AppLogger.d(
+                TAG,
+                "deliver: job '$jobId' origin=app chatId=$originChatId; " +
+                    "in-app chat note already written, skipping IM dispatch"
+            )
+            return
+        }
+
         AppLogger.d(
             TAG,
             "deliver: job '$jobId' dispatching to platform=$originPlatform chatId=$originChatId thread=$originThreadId len=${body.length}"
