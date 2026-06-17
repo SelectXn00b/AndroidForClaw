@@ -410,6 +410,12 @@ val CRONJOB_SCHEMA: Map<String, Any?> = mapOf(
             "NOTE: The agent's final response is auto-delivered to the target. Put the primary\n" +
             "user-facing content in the final response. Cron jobs run autonomously with no user\n" +
             "present — they cannot ask questions or request clarification.\n\n" +
+            "Immediate trigger: action='run' (synonyms: 'run_now', 'trigger') fires the job " +
+            "immediately on a background scope — it does NOT wait for the next 15-minute " +
+            "worker tick. The JSON response includes `triggered_immediately: true` when the " +
+            "in-process runner is wired (normal app runtime), or false during cold-start before " +
+            "injection completes (job is still bumped via next_run_at as fallback). Use this " +
+            "to test a job end-to-end on demand or to satisfy 'run it now' requests.\n\n" +
             "Important safety rule: cron-run sessions should not recursively schedule more cron jobs."
         ),
     "parameters" to mapOf(
@@ -417,7 +423,8 @@ val CRONJOB_SCHEMA: Map<String, Any?> = mapOf(
         "properties" to mapOf(
             "action" to mapOf(
                 "type" to "string",
-                "description" to "One of: create, list, update, pause, resume, remove, run"
+                "description" to "One of: create, list, update, pause, resume, remove, run. " +
+                    "'run_now' and 'trigger' are accepted synonyms for 'run' (immediate fire)."
             ),
             "job_id" to mapOf(
                 "type" to "string",

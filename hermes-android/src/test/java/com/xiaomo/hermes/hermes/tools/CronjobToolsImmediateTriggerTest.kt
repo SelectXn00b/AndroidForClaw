@@ -194,6 +194,59 @@ class CronjobToolsImmediateTriggerTest {
         )
     }
 
+    // -------- TC-AGENT-043-g (schema discoverability) --------
+    /**
+     * TC-AGENT-043-g: the agent-facing `CRONJOB_SCHEMA` must advertise the
+     * immediate-trigger semantics of action='run' so the LLM can correctly
+     * use the new R-AGENT-043 capability and interpret the response shape
+     * without relying on out-of-band documentation. Specifically:
+     *   - description must mention immediate-trigger semantics
+     *     ("immediate" + the fact that it bypasses the 15-minute worker tick),
+     *   - description must mention the `triggered_immediately` response key,
+     *   - synonyms `run_now` and `trigger` must be listed somewhere in the
+     *     schema (description text or action parameter description) so the
+     *     agent knows they map to the same immediate path.
+     */
+    @Test
+    fun `TC-AGENT-043-g schema advertises immediate trigger semantics`() {
+        // Pull the CRONJOB_SCHEMA literal text out of the source so we test
+        // exactly what the agent will see (description strings are static).
+        val schemaIdx = source.indexOf("CRONJOB_SCHEMA")
+        assertTrue("TC-AGENT-043-g: CRONJOB_SCHEMA declaration not found", schemaIdx >= 0)
+        // Heuristic: scan from CRONJOB_SCHEMA to end of file — the schema is
+        // the last top-level declaration before the helper functions section.
+        val schemaSlice = source.substring(schemaIdx)
+
+        // (1) Description must mention immediate-trigger semantics. Accept
+        //     any phrasing containing "immediate" near "run" so we don't pin
+        //     to one exact sentence.
+        assertTrue(
+            "TC-AGENT-043-g: schema description must mention immediate-trigger semantics " +
+                "for action='run' (look for word 'immediate' near 'run')",
+            Regex("""(?is)immediate[\s\S]{0,120}run|run[\s\S]{0,120}immediate""")
+                .containsMatchIn(schemaSlice)
+        )
+
+        // (2) The `triggered_immediately` response key must be advertised so
+        //     the agent knows what to expect in the JSON response.
+        assertTrue(
+            "TC-AGENT-043-g: schema must mention `triggered_immediately` response field " +
+                "so the agent can interpret the run-action JSON return value",
+            schemaSlice.contains("triggered_immediately")
+        )
+
+        // (3) Synonyms must be listed somewhere in the schema text so the
+        //     agent knows `run_now` / `trigger` are valid action values.
+        assertTrue(
+            "TC-AGENT-043-g: schema must list `run_now` synonym for action='run'",
+            schemaSlice.contains("run_now")
+        )
+        assertTrue(
+            "TC-AGENT-043-g: schema must list `trigger` synonym for action='run'",
+            Regex("""\btrigger\b""").containsMatchIn(schemaSlice)
+        )
+    }
+
     private fun toolsPath(): String {
         val candidates = listOf(
             File("src/main/java/com/xiaomo/hermes/hermes/tools/CronjobTools.kt"),
