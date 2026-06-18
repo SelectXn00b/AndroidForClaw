@@ -182,6 +182,10 @@ class ExternalChatRequestExecutor(context: Context) {
                     )
                 )
             }
+            // R-AGENT-045 hole fix: 复用 listChats 的结果把"当前 chat_id"
+            // 写进 ThreadLocal，让 _originFromEnv() 能读到非空 chat_id。
+            setSessionVars(platform = "app", chatId = currentChatId)
+            setCronAutoDeliverVars(platform = "app", chatId = currentChatId)
         }
 
         if (request.createNewChat) {
@@ -195,6 +199,24 @@ class ExternalChatRequestExecutor(context: Context) {
                     parameters = params
                 )
             )
+            // R-AGENT-045 hole fix: createNewChat 在 StandardChatManagerTool
+            // 内部把"当前 chat"指向了新建的 chat_id，但 execute() 顶部
+            // setSessionVars 时 request.chatId 还是空，ThreadLocal 写的是
+            // chatId=""，导致 _originFromEnv() 在 isNotEmpty() 检查失败
+            // 返回 null —— jobs.json 的 origin 字段就是 null，cron 跑完
+            // 没法精确定位回这个新 chat。
+            //
+            // 修法：createNewChat 返回后立刻 listChats 拿 currentChatId，
+            // re-set ThreadLocal，让本回合内 agent 调 cronjob(create) 时
+            // _originFromEnv 能读到 platform="app" + chat_id=<newId>。
+            val resolvedChatId = (chatTool.listChats(AITool(name = "list_chats"))
+                .result as? ChatListResultData)
+                ?.currentChatId
+                ?.takeIf { it.isNotBlank() }
+            if (resolvedChatId != null) {
+                setSessionVars(platform = "app", chatId = resolvedChatId)
+                setCronAutoDeliverVars(platform = "app", chatId = resolvedChatId)
+            }
         }
 
         val sendParams = mutableListOf(

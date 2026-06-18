@@ -298,20 +298,22 @@ log "jobs.json contains job_id=$JOB_ID"
 
 # origin: platform=app + chat_id 必须存在（R-AGENT-045）
 #
-# ⚠️ 已知 R-AGENT-045 残留 hole（待修）：
-#   ExternalChatRequestExecutor.kt:54 在 setSessionVars 时如果 request.chatId
-#   为空（典型场景：create_new_chat=true 没传 chat_id），ThreadLocal 写入
-#   chatId=""，_originFromEnv() 因 chat_id.isNotEmpty() 检查失败返回 null，
-#   jobs.json origin 字段就是 null。
+# R-AGENT-045 部分 wiring（hole 已部分修：见 TC-AGENT-045-g）：
+#   ExternalChatRequestExecutor.prepareRequest() 在 createNewChat() 之后立刻
+#   listChats() 拿 currentChatId 并 re-setSessionVars + re-setCronAutoDeliverVars
+#   覆盖 execute() 顶部用 request.chatId（可能为空）写入的 ThreadLocal。
 #
-#   修法（未做，留给后续 commit）：在 prepareRequest 里 createNewChat() 后
-#   立刻 listChats 拿 currentChatId 并 re-set ThreadLocal；或者把 chat_id
-#   resolved 时机推到 sendMessageToAI 调用前再 setSessionVars。
+#   ⚠️ 已知残留 hole（架构层）：源码侧 ThreadLocal 已写对的 chat_id，但 in-app
+#   chat 的 agent loop 真正跑在 AIForegroundService 的独立线程/进程上下文里，
+#   ExternalChatRequestExecutor 所在线程的 ThreadLocal 不会传递过去 ——
+#   `_originFromEnv()` 在 cron tool dispatch 那一刻读取的是 service 线程，
+#   还是会拿到空。修法需要另开 commit 改 origin 传递机制（非 ThreadLocal，
+#   可能改成 message metadata / 进程级 map keyed by request_id）。
 #
-#   暂时降级为 warn，让 e2e 在 cronjob 核心链路 (registration / firing /
-#   on-disk state) 上能 GREEN，但保留这条作为该 hole 的回归 marker。
+#   暂时保留 warn —— 源码 wiring 已锁（TC-AGENT-045-g 守），但跨服务边界
+#   的 ThreadLocal 传播仍是 hole，待后续设计。
 if ! grep -qE "\"platform\":[[:space:]]*\"app\"" <<< "$JOBS_JSON"; then
-  warn "jobs.json origin.platform != 'app' — R-AGENT-045 in-app origin propagation 仍有 hole（已知，待修）"
+  warn "jobs.json origin.platform != 'app' — R-AGENT-045 跨 AIForegroundService 线程边界 ThreadLocal 不传播（已知架构 hole，源码 wiring 已就位）"
 else
   log "jobs.json origin.platform=app (R-AGENT-045 origin propagation OK)"
 fi

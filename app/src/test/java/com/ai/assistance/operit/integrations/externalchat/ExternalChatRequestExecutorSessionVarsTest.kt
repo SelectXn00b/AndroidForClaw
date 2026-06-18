@@ -77,6 +77,63 @@ class ExternalChatRequestExecutorSessionVarsTest {
         )
     }
 
+    /**
+     * TC-AGENT-045-g: createNewChat 后必须再 setSessionVars 一次拿 resolved chat_id。
+     *
+     * 修的 bug：execute() 顶部 setSessionVars 时 request.chatId 可能为空（典型场景：
+     * `create_new_chat=true` 没传 chat_id），ThreadLocal 写的是 chatId=""，
+     * `_originFromEnv()` 因 `isNotEmpty()` 检查失败返回 null —— jobs.json origin
+     * 字段就是 null，cron 跑完无法精确定位回这个新 chat。
+     *
+     * 修法：prepareRequest() 内部 createNewChat() 调用之后立刻 listChats() 拿
+     * currentChatId，re-set ThreadLocal，让本回合内 agent 调 cronjob(create) 时
+     * _originFromEnv 能读到 platform="app" + chat_id=<新 id>。
+     *
+     * 同样 `!createNewChat && chatId.isNullOrBlank() && !createIfNone` 路径下
+     * 用 listChats 拿到 currentChatId 时也要 re-set ThreadLocal。
+     */
+    @Test
+    fun `TC-AGENT-045-g re-sets session vars after createNewChat resolves chat id`() {
+        // prepareRequest 必须含 createNewChat 调用
+        val createNewChatIdx = Regex("""chatTool\.createNewChat\s*\(""")
+            .find(source)?.range?.first ?: -1
+        assertTrue(
+            "prepareRequest() 必须调用 `chatTool.createNewChat(...)` —— create_new_chat=true 路径",
+            createNewChatIdx >= 0
+        )
+
+        // createNewChat 之后必须再有一次 listChats —— 用来拿 resolved currentChatId
+        val afterCreate = source.substring(createNewChatIdx)
+        assertTrue(
+            "prepareRequest() 在 `createNewChat(...)` 之后必须再调 `listChats(...)` —— " +
+                "拿到新建 chat 的 chat_id 用来 re-set ThreadLocal，否则 origin 字段为 null。",
+            Regex("""chatTool\.listChats\s*\(""").containsMatchIn(afterCreate)
+        )
+
+        // createNewChat 之后必须再调一次 setSessionVars —— 用 resolved chat_id 覆盖空值
+        assertTrue(
+            "prepareRequest() 在 `createNewChat(...)` 之后必须再调 `setSessionVars(platform = \"app\", ...)` —— " +
+                "用 listChats 返回的 currentChatId 覆盖 execute() 顶部写入的空 chat_id。",
+            Regex("""setSessionVars\s*\(\s*platform\s*=\s*"app"""").containsMatchIn(afterCreate)
+        )
+        assertTrue(
+            "prepareRequest() 在 `createNewChat(...)` 之后必须再调 `setCronAutoDeliverVars(platform = \"app\", ...)` —— " +
+                "对称同步 cron auto-deliver ThreadLocal。",
+            Regex("""setCronAutoDeliverVars\s*\(\s*platform\s*=\s*"app"""").containsMatchIn(afterCreate)
+        )
+
+        // 同样 !createNewChat && chatId.isNullOrBlank() 路径下，listChats 返回的
+        // currentChatId 也必须 re-set ThreadLocal —— 即 source 中 setSessionVars
+        // 至少出现 2 次（execute 顶部 1 次 + prepareRequest 内部 1 次）
+        val setSessionCount = Regex("""setSessionVars\s*\(""").findAll(source).count()
+        assertTrue(
+            "ExternalChatRequestExecutor.kt 中 `setSessionVars(...)` 至少要出现 2 次：" +
+                "execute() 顶部用 request.chatId（可能为空）写一次 + prepareRequest() 用 resolved chat_id 再写一次。" +
+                "实际出现 $setSessionCount 次。",
+            setSessionCount >= 2
+        )
+    }
+
     // ----- helpers -----
 
     private fun appSrcMainRoot(): File {
