@@ -153,7 +153,7 @@ HermesApp 必须提供与 Python Hermes 等价的 agent turn-loop 内核。Pytho
    - **三层选择**（`OpenCodeZenCatalog.selectDefaultFreeModelLive`）：
      1. **live**: GET `https://opencode.ai/zen/v1/models` with `Authorization: Bearer public`，过滤 id 以 `-free` 结尾的取第一个（OpenCode Zen 自有命名约定，且 endpoint 实际服务的 model 列表是 models.dev `opencode` 的严格子集）
      2. **catalog**: 回退到 models.dev `opencode` provider，`tool_call==true && cost.input==0` 且不命中 `NOISE_PATTERN` → 按 `release_date` 倒序 → 取第一个
-     3. **baseline**: 全空时退回 `BASELINE_FREE_MODEL = "nemotron-3-super-free"`（已验证 live endpoint 接受；早期 plan 候选 `qwen/qwen3-coder` 与 `grok-code` 在 models.dev `opencode` 里有但 live endpoint 401 ModelError，已排除）
+     3. **baseline**: 全空时退回 `BASELINE_FREE_MODEL = "nemotron-3-ultra-free"`（2026-06-18 由 `nemotron-3-super-free` 切换：上游 OpenCode Zen catalog 下架 super-free，`curl https://opencode.ai/zen/v1/models -H 'Authorization: Bearer public'` 验证 ultra-free 在列且 chat/completions 接受；早期 plan 候选 `qwen/qwen3-coder` 与 `grok-code` 在 models.dev `opencode` 里有但 live endpoint 401 ModelError，已排除）
 6. **首次启动默认 provider**：`OPENCODE_ZEN`（取代旧 `OPENROUTER + BuiltInKeyProvider`）；不再嵌入加密 key。
 7. **彻底废弃旧路径**：`BuiltInKeyProvider.kt` 整文件移除；`ApiPreferences.DEFAULT_API_*` 改 OpenCode Zen 公开值；无 fallback、无 feature flag——按 §0 "彻底切换"。
 

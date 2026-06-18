@@ -59,8 +59,14 @@ object OpenCodeZenCatalog {
      * `qwen/qwen3-coder` and `grok-code` are present in models.dev's
      * `opencode` provider but the live endpoint returns 401 ModelError for
      * them (R-AGENT-002 implementation note).
+     *
+     * 2026-06-18: switched from `nemotron-3-super-free` (now removed from
+     * the live catalog — request returns
+     * `401 ModelError: Model nemotron-3-super-free is not supported`) to
+     * `nemotron-3-ultra-free`, which is in the live `-free` set and returns
+     * a normal completion under `Authorization: Bearer public`.
      */
-    const val BASELINE_FREE_MODEL: String = "nemotron-3-super-free"
+    const val BASELINE_FREE_MODEL: String = "nemotron-3-ultra-free"
 
     private val gson = Gson()
     private val httpClient: OkHttpClient by lazy {
@@ -156,7 +162,7 @@ object OpenCodeZenCatalog {
             // Prefer the empirically verified BASELINE id when the live tier
             // serves it; other `-free` candidates from `/v1/models` may have
             // their own per-model demo quotas (observed: deepseek-v4-flash-free
-            // returning FreeUsageLimitError while nemotron-3-super-free works).
+            // returning FreeUsageLimitError while nemotron-3-ultra-free works).
             if (live.contains(BASELINE_FREE_MODEL)) return BASELINE_FREE_MODEL
             val freeFromLive = live.firstOrNull { it.endsWith("-free") }
             if (freeFromLive != null) return freeFromLive

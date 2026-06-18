@@ -5,7 +5,7 @@
 #   1. run-as rm 清掉 api_settings + model_configs DataStore（保留 Keystore + gateway 凭证）
 #   2. 安装 APK
 #   3. 广播 SET_API_KEY，写入 default 配置（provider=OPENCODE_ZEN, key="public",
-#      endpoint=opencode.ai/zen/v1/chat/completions, model=nemotron-3-super-free）
+#      endpoint=opencode.ai/zen/v1/chat/completions, model=nemotron-3-ultra-free）
 #      —— 与 ConfigurationScreen 里点 "使用 OpenCode Zen 免费模型" 按钮等价
 #   4. 启动 app
 #   5. 发 external chat（带 TOKEN，要求 agent 一行回显 TOKEN）
@@ -38,15 +38,20 @@ pass() { printf '\033[1;32m[PASS]\033[0m %s\n' "$*"; }
 #   PROVIDER_ID = "opencode-zen"          (registry name only)
 #   PUBLIC_API_KEY = "public"             (literal — not a secret)
 #   DEFAULT_ENDPOINT = "https://opencode.ai/zen/v1/chat/completions"
-#   BASELINE_FREE_MODEL = "nemotron-3-super-free"
+#   BASELINE_FREE_MODEL = "nemotron-3-ultra-free"
 #     (verified against live https://opencode.ai/zen/v1/models with
 #      Authorization: Bearer public — earlier candidates `qwen/qwen3-coder`
 #      and `grok-code` are present in models.dev's `opencode` provider but
-#      the live endpoint returns 401 ModelError for them.)
+#      the live endpoint returns 401 ModelError for them.
+#      2026-06-18: switched from `nemotron-3-super-free` (now removed from
+#      the live catalog — request returns
+#      `401 ModelError: Model nemotron-3-super-free is not supported`) to
+#      `nemotron-3-ultra-free`, the in-list `-free` successor verified to
+#      respond on `Bearer public`.)
 KEY="public"
 PROVIDER="OPENCODE_ZEN"
 ENDPOINT="https://opencode.ai/zen/v1/chat/completions"
-MODEL="nemotron-3-super-free"
+MODEL="nemotron-3-ultra-free"
 log "OpenCode Zen public-key path: provider=$PROVIDER endpoint=$ENDPOINT model=$MODEL"
 
 ### 1. 设备

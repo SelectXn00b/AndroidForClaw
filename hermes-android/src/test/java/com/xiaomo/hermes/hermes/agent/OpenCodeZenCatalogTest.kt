@@ -200,7 +200,7 @@ class OpenCodeZenCatalogTest {
             "https://opencode.ai/zen/v1/chat/completions",
             OpenCodeZenCatalog.DEFAULT_ENDPOINT
         )
-        assertEquals("nemotron-3-super-free", OpenCodeZenCatalog.BASELINE_FREE_MODEL)
+        assertEquals("nemotron-3-ultra-free", OpenCodeZenCatalog.BASELINE_FREE_MODEL)
     }
 
     /**
@@ -238,7 +238,7 @@ class OpenCodeZenCatalogTest {
      * TC-AGENT-200-i: when BASELINE_FREE_MODEL is among live `-free` ids,
      * prefer it over the first-`-free` semantic. Empirical observation:
      * other live `-free` ids (e.g. deepseek-v4-flash-free) return
-     * FreeUsageLimitError on shared public-key while nemotron-3-super-free
+     * FreeUsageLimitError on shared public-key while nemotron-3-ultra-free
      * works. Stability > naive ordering.
      */
     @Test
