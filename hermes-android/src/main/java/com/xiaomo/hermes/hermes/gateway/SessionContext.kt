@@ -1,6 +1,10 @@
 /** 1:1 对齐 hermes/gateway/session_context.py */
 package com.xiaomo.hermes.hermes.gateway
 
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlinx.coroutines.asContextElement
+
 /**
  * Session-scoped context variables for the Hermes gateway.
  *
@@ -142,4 +146,54 @@ fun getSessionEnv(name: String, default: String = ""): String {
         }
     }
     return System.getProperty(name, default)
+}
+
+/**
+ * R-AGENT-045 跨线程修：把当前线程的 session ThreadLocal 快照打包成
+ * `CoroutineContext`，让 `withContext(sessionContextElement()) { ... }`
+ * 在跨 dispatcher（典型场景：`withContext(Dispatchers.IO)`）切换协程
+ * 调度线程后仍能从 ThreadLocal 读到原值。
+ *
+ * **为什么需要**
+ *
+ * `ExternalChatRequestExecutor.execute()` 在 broadcast receiver 线程上
+ * `setSessionVars(platform = "app", chatId = ...)`。但 `chatTool.sendMessageToAI`
+ * 内部进 `EnhancedAIService.sendMessage` 后立刻 `withContext(Dispatchers.IO)`
+ * 切到 IO 线程池——目标线程不是写入 ThreadLocal 的源线程，
+ * `getSessionEnv()` 读到 `_UNSET` → fallback 到 `System.getProperty` →
+ * 拿到空 → `CronjobTools._originFromEnv()` `isNotEmpty()` 失败返回 null
+ * → 落进 jobs.json 的 `origin` 字段为 null。这就是 e2e Stage C
+ * `"origin": null` 的根因。
+ *
+ * **怎么修**
+ *
+ * 上游 Python 用 `contextvars.ContextVar` + `copy_context().run(func)`
+ * （`reference/hermes-agent/gateway/run.py:8108-8112`），asyncio task 切换
+ * 到 threadpool 时复制 contextvars 快照随 callable 一起带过去。Kotlin
+ * 协程的等价物是 `ThreadLocal<T>.asContextElement(value)` —— 协程进
+ * 新线程时 `updateThreadContext` 把值塞进新线程的 ThreadLocal，离开时
+ * `restoreThreadContext` 还原。把所有 session ThreadLocal 各包一个
+ * `asContextElement` 后 `+` 起来，就是当前线程 session 状态的"协程级
+ * 快照"。`withContext(sessionContextElement()) { ... }` 内部的所有协程
+ * 跳转（含嵌套 `withContext(Dispatchers.IO)`）都会带着这份快照走。
+ *
+ * **使用约束**
+ *
+ * 调用者必须先在当前线程上 `setSessionVars` / `setCronAutoDeliverVars`
+ * 写值，再调本函数构造 element。本函数读取的是**当前线程当下**的值，
+ * 不是 `_UNSET` 就一并打包；`_UNSET` 的 ThreadLocal 跳过（不污染目标
+ * 线程的"未设置"状态）。
+ */
+fun sessionContextElement(): CoroutineContext {
+    var ctx: CoroutineContext = EmptyCoroutineContext
+    for ((_, threadLocal) in _VAR_MAP) {
+        val value: Any? = threadLocal.get()
+        if (value != null && value !== _UNSET) {
+            // asContextElement 接受 T value（这里的 T = Any），协程在新线程上
+            // 会把 threadLocal.set(value) 然后离开时还原。和 Python
+            // copy_context().run(func) 语义一致：跨线程仍读得到 value。
+            ctx = ctx + threadLocal.asContextElement(value)
+        }
+    }
+    return ctx
 }

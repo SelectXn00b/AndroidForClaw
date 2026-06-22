@@ -12,11 +12,13 @@ import com.ai.assistance.operit.data.model.ToolParameter
 import com.ai.assistance.operit.util.AppLogger
 import com.xiaomo.hermes.hermes.gateway.clearCronAutoDeliverVars
 import com.xiaomo.hermes.hermes.gateway.clearSessionVars
+import com.xiaomo.hermes.hermes.gateway.sessionContextElement
 import com.xiaomo.hermes.hermes.gateway.setCronAutoDeliverVars
 import com.xiaomo.hermes.hermes.gateway.setSessionVars
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 
 class ExternalChatStreamingSession(
     val requestId: String,
@@ -59,7 +61,19 @@ class ExternalChatRequestExecutor(context: Context) {
                 is PreparationResult.Failed -> preparation.result
                 is PreparationResult.Ready -> {
                     try {
-                        val sendResult = preparation.chatTool.sendMessageToAI(preparation.sendTool)
+                        // R-AGENT-045 跨线程修：把当前线程的 session ThreadLocal 快照
+                        // （含 prepareRequest 内部 listChats / createNewChat fallback
+                        // 写入的最终 chat_id）随协程上下文带过去。`sendMessageToAI`
+                        // 内部进 `EnhancedAIService.sendMessage` 后会立即
+                        // `withContext(Dispatchers.IO)` 切线程——没这层 wrap 的话
+                        // IO 线程读 ThreadLocal 拿到 _UNSET → fallback System.getProperty
+                        // → 空 → `_originFromEnv()` `isNotEmpty()` 失败 → null →
+                        // jobs.json 的 origin 字段为 null（cron 跑完无法定位回原 chat）。
+                        // 等价 Python `copy_context().run(func)`
+                        // （reference/hermes-agent/gateway/run.py:8108-8112）。
+                        val sendResult = withContext(sessionContextElement()) {
+                            preparation.chatTool.sendMessageToAI(preparation.sendTool)
+                        }
                         toExternalChatResult(
                             requestId = preparation.requestId,
                             sendResult = sendResult,
@@ -88,7 +102,11 @@ class ExternalChatRequestExecutor(context: Context) {
             when (val preparation = prepareRequest(request)) {
                 is PreparationResult.Failed -> ExternalChatStreamingStartResult.Failed(preparation.result)
                 is PreparationResult.Ready -> {
-                    when (val startResult = preparation.chatTool.startMessageToAIStream(preparation.sendTool)) {
+                    // R-AGENT-045 跨线程修（流式分支同 execute()）：startMessageToAIStream
+                    // 内部同样会跨 dispatcher，不带 sessionContextElement 的话 origin 同样会丢。
+                    when (val startResult = withContext(sessionContextElement()) {
+                        preparation.chatTool.startMessageToAIStream(preparation.sendTool)
+                    }) {
                         is MessageSendStreamStartResult.Failed -> {
                             preparation.cleanup()
                             ExternalChatStreamingStartResult.Failed(

@@ -134,6 +134,58 @@ class ExternalChatRequestExecutorSessionVarsTest {
         )
     }
 
+    /**
+     * TC-AGENT-045-h-2: `sendMessageToAI` 必须被 `withContext(sessionContextElement(`
+     * 包裹——否则当 `EnhancedAIService.sendMessage` 内部 `withContext(Dispatchers.IO)`
+     * 切到 IO 线程池时，源线程上 setSessionVars 写入的 ThreadLocal 不会
+     * 跟过去，`_originFromEnv()` 读到空 → null → jobs.json origin = null
+     * （e2e Stage C `"origin": null` 故障的根因）。
+     *
+     * 守 wiring 不被回归砍掉。
+     */
+    @Test
+    fun `TC-AGENT-045-h-2 wraps sendMessageToAI in sessionContextElement`() {
+        // 1) 必须 import sessionContextElement
+        assertTrue(
+            "ExternalChatRequestExecutor.kt 必须 import `sessionContextElement` —— " +
+                "R-AGENT-045 跨线程 origin 传播 helper（等价 Python copy_context().run）",
+            Regex("""import\s+com\.xiaomo\.hermes\.hermes\.gateway\.sessionContextElement""")
+                .containsMatchIn(source)
+        )
+        // 2) 必须 import kotlinx.coroutines.withContext
+        assertTrue(
+            "ExternalChatRequestExecutor.kt 必须 import `kotlinx.coroutines.withContext`。",
+            Regex("""import\s+kotlinx\.coroutines\.withContext""").containsMatchIn(source)
+        )
+        // 3) 必须有 `withContext(sessionContextElement(` 模式
+        //    （宽松：允许 `sessionContextElement()` 后面紧跟 `)` 或参数）
+        val wrapPattern = Regex("""withContext\s*\(\s*sessionContextElement\s*\(""")
+        assertTrue(
+            "execute() 必须用 `withContext(sessionContextElement()) { ... }` 包裹 " +
+                "`sendMessageToAI(...)` —— sendMessageToAI 内部会跨 Dispatchers.IO，" +
+                "不包裹 → ThreadLocal 不传播 → in-app cron origin 在 jobs.json 落盘时为 null。",
+            wrapPattern.containsMatchIn(source)
+        )
+
+        // 4) 至少要包裹 `sendMessageToAI(` —— 直接搜两者出现的相对顺序：
+        //    任意 `withContext(sessionContextElement(` 必须在某个 `sendMessageToAI(`
+        //    之前出现，且距离不远（同一个 try 块）
+        val wrapMatches = wrapPattern.findAll(source).map { it.range.first }.toList()
+        val sendMatches = Regex("""\.sendMessageToAI\s*\(""").findAll(source)
+            .map { it.range.first }.toList()
+        assertTrue(
+            "execute() 必须实际调用 `sendMessageToAI(` —— 否则没有 agent dispatch。",
+            sendMatches.isNotEmpty()
+        )
+        assertTrue(
+            "至少有一个 `sendMessageToAI(` 调用必须在 `withContext(sessionContextElement(` 块内 " +
+                "（即源码里 wrap 的位置在它之前不超过 400 字符）—— 否则 wrap 可能挂在别处。",
+            sendMatches.any { sendIdx ->
+                wrapMatches.any { wrapIdx -> wrapIdx < sendIdx && sendIdx - wrapIdx < 400 }
+            }
+        )
+    }
+
     // ----- helpers -----
 
     private fun appSrcMainRoot(): File {

@@ -298,22 +298,31 @@ log "jobs.json contains job_id=$JOB_ID"
 
 # origin: platform=app + chat_id 必须存在（R-AGENT-045）
 #
-# R-AGENT-045 部分 wiring（hole 已部分修：见 TC-AGENT-045-g）：
+# R-AGENT-045 部分 wiring（hole 已部分修：见 TC-AGENT-045-g + TC-AGENT-045-h-1/2）：
 #   ExternalChatRequestExecutor.prepareRequest() 在 createNewChat() 之后立刻
 #   listChats() 拿 currentChatId 并 re-setSessionVars + re-setCronAutoDeliverVars
 #   覆盖 execute() 顶部用 request.chatId（可能为空）写入的 ThreadLocal。
+#   execute() 内部又用 `withContext(sessionContextElement()) { sendMessageToAI(...) }`
+#   把 ThreadLocal 快照（等价 Python copy_context().run）随协程上下文带到
+#   sendMessageToAI 内部的 Dispatchers.IO 跳转里。
 #
-#   ⚠️ 已知残留 hole（架构层）：源码侧 ThreadLocal 已写对的 chat_id，但 in-app
-#   chat 的 agent loop 真正跑在 AIForegroundService 的独立线程/进程上下文里，
-#   ExternalChatRequestExecutor 所在线程的 ThreadLocal 不会传递过去 ——
-#   `_originFromEnv()` 在 cron tool dispatch 那一刻读取的是 service 线程，
-#   还是会拿到空。修法需要另开 commit 改 origin 传递机制（非 ThreadLocal，
-#   可能改成 message metadata / 进程级 map keyed by request_id）。
+#   ⚠️ 已知残留 hole（架构层）：service 端 `MessageCoordinationDelegate` 的
+#   `coroutineScope.launch { ... }` 是 fire-and-forget 启动 service-scope
+#   协程，**不继承 caller 的 CoroutineContext**——所以 sessionContextElement
+#   传不进 service 端真正跑 agent loop 的协程。在 cron tool dispatch 那一刻
+#   `_originFromEnv()` 读的是 service scope 的 ThreadLocal，仍拿到空。
 #
-#   暂时保留 warn —— 源码 wiring 已锁（TC-AGENT-045-g 守），但跨服务边界
-#   的 ThreadLocal 传播仍是 hole，待后续设计。
+#   修法需要改 service 端接口签名（让 sendUserMessage 接受
+#   coroutineContext 参数，launch 时用 `launch(callerCtx) { ... }`），
+#   或把 origin 改成 message metadata（在 cron tool dispatch 处通过 user
+#   message 传递）。两者都要改 5 层接口（StandardChatManagerTool →
+#   ChatServiceCore → MessageCoordinationDelegate → MessageProcessingDelegate
+#   → EnhancedAIService），单独立 commit。
+#
+#   暂时保留 warn —— 源码 wiring 已锁（TC-AGENT-045-g + TC-AGENT-045-h-1/2 守），
+#   但跨 service-scope launch 边界的 ThreadLocal 传播仍是 hole，待后续设计。
 if ! grep -qE "\"platform\":[[:space:]]*\"app\"" <<< "$JOBS_JSON"; then
-  warn "jobs.json origin.platform != 'app' — R-AGENT-045 跨 AIForegroundService 线程边界 ThreadLocal 不传播（已知架构 hole，源码 wiring 已就位）"
+  warn "jobs.json origin.platform != 'app' — R-AGENT-045 跨 service-scope launch 边界 ThreadLocal 不传播（已知架构 hole，sessionContextElement helper 已上但救不了 service-scope launch）"
 else
   log "jobs.json origin.platform=app (R-AGENT-045 origin propagation OK)"
 fi

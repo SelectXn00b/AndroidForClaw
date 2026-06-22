@@ -1704,6 +1704,8 @@ R-AGENT-045 把 cron 的"来源会话"（`origin_platform` / `origin_chat_id`）
 | TC-AGENT-045-e | R-AGENT-045 | 源码扫描 `deliver()` non-app origin 路径 | `gateway.dispatchOutgoing(` 调用必须保留；app 短路必须 `originPlatform == "app"` 形式（specific），不是无条件 return —— telegram/weixin 等仍走 IM | unit (源码扫描) | `CronAgentRunnerAppOriginTest#TC-AGENT-045-e non-app origin still routes via gateway dispatchOutgoing` 🟢 |
 | TC-AGENT-045-f | R-AGENT-045 | ThreadLocal 设 `(platform="app", chat_id="chat-123")`；调 `_originFromEnv()` | 返回 `mapOf("platform"="app", "chat_id"="chat-123", "chat_name"=...)`；`thread_id=""` 被识别为 null —— R-AGENT-033 ThreadLocal 路径透传 app sentinel | unit (behavior) | `CronjobToolsAppOriginTest#TC-AGENT-045-f originFromEnv reads app session origin from ThreadLocal` 🟢 |
 | TC-AGENT-045-g | R-AGENT-045 | 源码扫描 `ExternalChatRequestExecutor.prepareRequest()` | `createNewChat(...)` 调用之后必须再调一次 `listChats(...)` 拿 `currentChatId` 并 `setSessionVars(platform = "app", chatId = <非空>)` + `setCronAutoDeliverVars(...)` —— 否则 `create_new_chat=true` 没传 chat_id 时 ThreadLocal 写入 `chatId=""`，`_originFromEnv()` 因 `isNotEmpty()` 检查失败返回 null，jobs.json origin 字段为 null（cron 跑完无法精确定位回原 chat）。同样 `!createNewChat && chatId.isNullOrBlank()` 路径用 `currentChatId` 时也要 re-set ThreadLocal | unit (源码扫描) | `ExternalChatRequestExecutorSessionVarsTest#TC-AGENT-045-g re-sets session vars after createNewChat resolves chat id` 🟢 |
+| TC-AGENT-045-h-1 | R-AGENT-045 | 行为测试：在线程 T1 上 `setSessionVars(platform="app", chatId="c-1") + setCronAutoDeliverVars(platform="app", chatId="c-1")`，把 `sessionContextElement()` 套进 `withContext(...) { withContext(Dispatchers.IO) { getSessionEnv("HERMES_SESSION_PLATFORM") / HERMES_SESSION_CHAT_ID / HERMES_CRON_AUTO_DELIVER_PLATFORM / HERMES_CRON_AUTO_DELIVER_CHAT_ID } }` —— 跨 dispatcher 跳后仍要读到 `"app"` / `"c-1"` | 4 个 ThreadLocal 值跨线程后非空 —— 等价 Python `copy_context().run(func)`（`reference/hermes-agent/gateway/run.py:8108-8112`）。守跨 `Dispatchers.IO` 边界 origin 不丢（修当前 jobs.json `origin: null` bug） | unit (behavior, kotlinx-coroutines-test) | `SessionContextElementTest#TC-AGENT-045-h-1 sessionContextElement propagates session vars across Dispatchers.IO hop` 🔴 |
+| TC-AGENT-045-h-2 | R-AGENT-045 | 源码扫描 `ExternalChatRequestExecutor.kt::execute()` | `chatTool.sendMessageToAI(` 调用必须被 `withContext(sessionContextElement(` 包裹（同时 import `sessionContextElement` + `kotlinx.coroutines.withContext`）—— 没包裹 → `sendMessageToAI` 内部 `withContext(Dispatchers.IO)` 时 origin 丢，`_originFromEnv()` 返回 null。守 wiring 不被回归砍掉 | unit (源码扫描) | `ExternalChatRequestExecutorSessionVarsTest#TC-AGENT-045-h-2 wraps sendMessageToAI in sessionContextElement` 🔴 |
 
 跑已落地 TC：
 
@@ -1711,6 +1713,7 @@ R-AGENT-045 把 cron 的"来源会话"（`origin_platform` / `origin_chat_id`）
 ./gradlew :app:testDebugUnitTest --tests "com.ai.assistance.operit.external.chat.ExternalChatRequestExecutorSessionVarsTest"
 ./gradlew :hermes-android:testDebugUnitTest --tests "com.xiaomo.hermes.hermes.cron.CronAgentRunnerAppOriginTest"
 ./gradlew :hermes-android:testDebugUnitTest --tests "com.xiaomo.hermes.hermes.tools.CronjobToolsAppOriginTest"
+./gradlew :hermes-android:testDebugUnitTest --tests "com.xiaomo.hermes.hermes.gateway.SessionContextElementTest"
 ```
 
 状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
