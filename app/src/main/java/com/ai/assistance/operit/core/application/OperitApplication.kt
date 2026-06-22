@@ -188,6 +188,21 @@ class OperitApplication : Application(), ImageLoaderFactory, WorkConfiguration.P
         }
         AppLogger.d(TAG, "【启动计时】R-AGENT-044 cronHealthProbe 已注入 - ${System.currentTimeMillis() - startTime}ms")
 
+        // TC-CRON-EXACT (bugfix to R-AGENT-031): inject the AlarmManager-backed
+        // short-delay scheduler so `cronjob(action="create")` with a once-type
+        // schedule firing within 15 minutes ("remind me in 5 minutes") doesn't
+        // wait for the next 15-min PeriodicWork tick (15-20+ min observed delay).
+        // See `Scheduler.kt:cronShortDelayScheduler` and
+        // `CronExactAlarmScheduler.kt` for the full rationale.
+        com.xiaomo.hermes.hermes.cron.cronShortDelayScheduler = { jobId, runAtMillis ->
+            com.ai.assistance.operit.core.cron.CronExactAlarmScheduler.schedule(
+                applicationContext,
+                jobId,
+                runAtMillis
+            )
+        }
+        AppLogger.d(TAG, "【启动计时】TC-CRON-EXACT cronShortDelayScheduler 已注入 - ${System.currentTimeMillis() - startTime}ms")
+
         // Initialize ActivityLifecycleManager to track the current activity
         ActivityLifecycleManager.initialize(this)
         AppLogger.d(TAG, "【启动计时】ActivityLifecycleManager初始化完成 - ${System.currentTimeMillis() - startTime}ms")

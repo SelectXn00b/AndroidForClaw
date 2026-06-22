@@ -5,6 +5,7 @@ import com.google.gson.Gson
 import com.xiaomo.hermes.hermes.cron.createJob
 import com.xiaomo.hermes.hermes.cron.cronHealthProbe
 import com.xiaomo.hermes.hermes.cron.cronImmediateRunner
+import com.xiaomo.hermes.hermes.cron.cronShortDelayScheduler
 import com.xiaomo.hermes.hermes.cron.getJob
 import com.xiaomo.hermes.hermes.cron.listJobs
 import com.xiaomo.hermes.hermes.cron.parseSchedule
@@ -348,6 +349,11 @@ private fun _createCronJob(
         script = _normalizeOptionalJobValue(script),
     )
 
+    // TC-CRON-EXACT: route once-jobs firing within 15 minutes to AlarmManager
+    // (`cronShortDelayScheduler` injection point). The 15-min PeriodicWork tick
+    // can't service them in time — see Scheduler.kt:cronShortDelayScheduler doc.
+    _maybeScheduleShortDelayAlarm(job)
+
     return Gson().toJson(
         mapOf(
             "success" to true,
@@ -444,6 +450,9 @@ private fun _updateCronJob(
     if (updates.isEmpty()) return toolError("No updates provided.")
 
     val updated = updateJob(jobId, updates) ?: existing
+    // TC-CRON-EXACT: same routing on schedule change (e.g. user moves the
+    // reminder forward). Idempotent: re-scheduling the same alarm replaces it.
+    _maybeScheduleShortDelayAlarm(updated)
     return Gson().toJson(mapOf("success" to true, "job" to _formatJob(updated)))
 }
 
@@ -745,5 +754,57 @@ private fun _parseIsoToEpoch(iso: String?): Long? {
         java.time.Instant.parse(iso).toEpochMilli()
     } catch (_: Exception) {
         null
+    }
+}
+
+/**
+ * TC-CRON-EXACT (bugfix to R-AGENT-031):
+ *
+ * Routes "once" jobs that fire within 15 minutes from now to the AlarmManager-
+ * backed exact-alarm scheduler injected at startup
+ * (`Scheduler.cronShortDelayScheduler`).
+ *
+ * **Why only `kind == "once"`**: interval/cron jobs already get serviced by
+ * the existing 15-min `CronTickWorker` PeriodicWork tick — and `_createCronJob`
+ * rejects sub-15-min intervals upstream (`ANDROID_CRON_MIN_INTERVAL_MINUTES`).
+ * Once-jobs have no minimum, so a "remind me in 5 minutes" produces a
+ * `next_run_at` that the 15-min poll can miss by 10–15 minutes; AlarmManager
+ * is the only Android API that fires it precisely.
+ *
+ * **Why the `15`-minute boundary**: matches the PeriodicWork tick — for any
+ * delta ≥ 15 min the next tick is always sufficient to catch the job, so we
+ * don't waste an alarm slot. < 15 min means the next tick is too late.
+ *
+ * **Idempotent**: AlarmManager.setExactAndAllowWhileIdle replaces an alarm
+ * with the same PendingIntent (we key by jobId), so calling this on update
+ * is safe even if the job was already scheduled.
+ *
+ * **No-op when injection slot is null** (unit tests / cold-start): falls
+ * back to the existing 15-min PeriodicWork path. That preserves the bug
+ * pre-injection but keeps unit tests of `_createCronJob` working without
+ * a Context.
+ */
+@Suppress("UNCHECKED_CAST")
+private fun _maybeScheduleShortDelayAlarm(job: Map<String, Any?>) {
+    val scheduler = cronShortDelayScheduler ?: return
+    val schedule = job["schedule"] as? Map<String, Any?> ?: return
+    val kind = schedule["kind"] as? String ?: return
+    if (kind != "once") return
+    val jobId = job["id"] as? String ?: return
+    val nextRunAtIso = job["next_run_at"] as? String ?: return
+    val runAtMillis = _parseIsoToEpoch(nextRunAtIso) ?: return
+    val now = System.currentTimeMillis()
+    val deltaMillis = runAtMillis - now
+    // Only bypass for short-delay jobs. ≥ 15 min → existing CronTickWorker tick
+    // handles it. < 0 (already overdue) → still alarm so the next-tick wait
+    // doesn't add another 15 minutes on top of overdueness.
+    val cutoffMillis = ANDROID_CRON_MIN_INTERVAL_MINUTES * 60_000L
+    if (deltaMillis >= cutoffMillis) return
+    try {
+        scheduler.invoke(jobId, runAtMillis)
+    } catch (_: Throwable) {
+        // Ignore: scheduler failures are platform-level (e.g. SCHEDULE_EXACT_ALARM
+        // permission denied on Android 12+). Job is still persisted; CronTickWorker
+        // will catch it on the next 15-min tick — late, but not lost.
     }
 }

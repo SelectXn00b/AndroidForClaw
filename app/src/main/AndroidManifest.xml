@@ -500,6 +500,18 @@
             </intent-filter>
         </receiver>
 
+        <!--
+            TC-CRON-EXACT (bugfix to R-AGENT-031): receives exact alarms stamped
+            by CronExactAlarmScheduler for once-type cron jobs firing within
+            15 minutes. exported=false because only AlarmManager (system_server)
+            needs to deliver to it — exporting would let any app fake-trigger
+            our cron jobs.
+        -->
+        <receiver
+            android:name=".core.cron.CronExactAlarmReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
     </application>
 
 </manifest>

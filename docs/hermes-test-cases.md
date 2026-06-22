@@ -1543,6 +1543,37 @@ R-AGENT-031 把 hermes-android 已存在的 cron 数据层（`Jobs.kt` CRUD / �
 
 ---
 
+## 域 CRON — Exact-Alarm Short-Delay Path (TC-CRON-EXACT)
+
+**bugfix（不动 R 文档）**：R-AGENT-031 设计的"15 分钟 PeriodicWork 轮询"是 cron 调度唯一的 OS-level 触发器。对 ≥15 分钟周期的 job 没问题；但**`once` 类型且 delta < 15 分钟**的 job（典型场景：用户说"5 分钟后提醒我喝水"）会卡到下一次 15 分钟 tick 才被 `getDueJobs()` 扫到，实测延迟 15–20+ 分钟，用户体感"定时器坏了"。
+
+R-AGENT-031 既有 TC-AGENT-031-c 的 15 分钟最小 interval guard 是针对 **interval 类型**的设计选择（不希望 schedule 间隔比 worker 周期还小），保留不动；但 **once 类型**没有 "interval 周期"概念，单次到期，延迟无法靠下一次 tick 弥补——必须独立调度。
+
+**修法**：
+- `app` 模块新增 `CronExactAlarmScheduler` + `CronExactAlarmReceiver`，用 `AlarmManager.setExactAndAllowWhileIdle(RTC_WAKEUP, ...)` 绑定 PendingIntent；Receiver 收到后异步 `CronAgentRunner.run(context, jobId)`。
+- `hermes-android.cron.Scheduler.kt` 新增顶层注入点 `cronShortDelayScheduler: ((jobId: String, runAtMillis: Long) -> Unit)?`（mirror 既有 `cronImmediateRunner` / `cronOutboundDispatcher` 模式）。
+- `CronjobTools._createCronJob` / `_updateCronJob` 在调 `Jobs.createJob`/`Jobs.updateJob` 后，若新 job 的 `schedule.kind == "once"` 且距离 `next_run_at` < 15 分钟，调用注入点把 jobId + epoch millis 派发出去；不命中条件继续走既有 `CronTickWorker` 路径（保持 1:1 与 Python 上游对齐）。
+- `OperitApplication.onCreate` 把 lambda 注入指向 `CronExactAlarmScheduler.schedule`。
+- `AndroidManifest.xml` 注册 `CronExactAlarmReceiver`（`SCHEDULE_EXACT_ALARM` 权限 manifest L59 已声明）。
+
+**为什么 hermes-android 不直接 import AlarmManager**：模块依赖方向是 `app → hermes-android` 单向（CLAUDE.md §1）。AlarmManager 是 Android-specific API，不能进 hermes-android（它要保持 Python 1:1 翻译可读性）。所以走和 R-AGENT-033 同样的"hermes-android 顶层 var lambda 注入点 + app 模块在 onCreate 注入"模式。
+
+**测试策略**：源码扫描（unit-scan）守 wiring，配合 §3 E2E "5 分钟后提醒" 手测兜底（≤6 分钟收到提醒 = PASS，>10 分钟 = FAIL）。
+
+| TC ID | 关联 R | 输入 / 触发 | 期望 | 测试类型 | 实现 / 状态 |
+|---|---|---|---|---|---|
+| TC-CRON-EXACT-a | R-AGENT-031 | 源码扫描：`hermes-android/.../cron/Scheduler.kt` 顶层 | 必须含 `cronShortDelayScheduler` 字面值；类型签名含 `(jobId` + `runAtMillis` + `Long`（顶层注入点变量声明，mirror `cronImmediateRunner` / `cronOutboundDispatcher`）。 | unit-scan | `CronExactAlarmSchedulerWiringTest#TC-CRON-EXACT-a Scheduler exposes cronShortDelayScheduler injection point` 🔴 |
+| TC-CRON-EXACT-b | R-AGENT-031 | 源码扫描：`hermes-android/.../tools/CronjobTools.kt` 的 `_createCronJob` / `_updateCronJob` 函数体 | 必须含 `cronShortDelayScheduler` 引用至少 1 次；必须含 `15` + `kind` + `once` 字面值（路由判断"once 类型 + delta<15min → 走 AlarmManager"）。 | unit-scan | `CronExactAlarmSchedulerWiringTest#TC-CRON-EXACT-b CronjobTools dispatches once-short-delay jobs to scheduler` 🔴 |
+| TC-CRON-EXACT-c | R-AGENT-031 | 源码扫描：`app/.../core/cron/CronExactAlarmScheduler.kt` | 必须存在 `class CronExactAlarmScheduler` / object；必须含 `AlarmManager` 引用 + `setExactAndAllowWhileIdle` 字面值（API 23+ 精确 alarm，doze 模式也能触发）；必须含 `RTC_WAKEUP` 字面值（按墙钟时间触发并唤醒设备）；必须含 `PendingIntent` + `CronExactAlarmReceiver` 字面值（绑 Receiver）。 | unit-scan | `CronExactAlarmSchedulerWiringTest#TC-CRON-EXACT-c CronExactAlarmScheduler uses setExactAndAllowWhileIdle with RTC_WAKEUP` 🔴 |
+| TC-CRON-EXACT-d | R-AGENT-031 | 源码扫描：`app/.../core/cron/CronExactAlarmReceiver.kt` | 必须存在 `class CronExactAlarmReceiver : BroadcastReceiver`；`onReceive` 函数体必须含 `Intent` 取 `jobId` 字面值；必须调 `CronAgentRunner` 引用（不能跳过 Runner 直接 dispatch agent，否则 R-AGENT-031 [CRON CONTEXT] prompt 前缀会丢）。 | unit-scan | `CronExactAlarmSchedulerWiringTest#TC-CRON-EXACT-d CronExactAlarmReceiver dispatches via CronAgentRunner` 🔴 |
+| TC-CRON-EXACT-e | R-AGENT-031 | 源码扫描：`app/.../OperitApplication.kt` 的 `onCreate()` | 必须含 `cronShortDelayScheduler` 赋值（`Scheduler.cronShortDelayScheduler = ...` 形式）；赋值 lambda 内必须 invoke `CronExactAlarmScheduler.schedule` 或等价方法字面值（注入 wiring 守卫）。 | unit-scan | `CronExactAlarmSchedulerWiringTest#TC-CRON-EXACT-e OperitApplication injects cronShortDelayScheduler on startup` 🔴 |
+| TC-CRON-EXACT-f | R-AGENT-031 | 源码扫描：`app/src/main/AndroidManifest.xml` | `<receiver>` 节点必须含 `android:name=".core.cron.CronExactAlarmReceiver"`；属性 `android:exported="false"`（不允许外部 app 触发，避免被外部劫持伪造 cron 触发）；`SCHEDULE_EXACT_ALARM` 权限节点必须保持声明（manifest L59 既有）。 | unit-scan | `CronExactAlarmSchedulerWiringTest#TC-CRON-EXACT-f AndroidManifest registers CronExactAlarmReceiver with exported=false` 🔴 |
+| TC-CRON-EXACT-g | R-AGENT-031 | 端到端验证（手测）：用户在 chat 里说"5 分钟后提醒我喝水"，agent 调 `cronjob(action="create", schedule="in 5 minutes", ...)` | 5–6 分钟内（不是 15+ 分钟）原 chat 收到 ai 回复"喝水提醒"；logcat 含 `CronExactAlarmReceiver` + `CronAgentRunner` tag。**Deferred to §3 E2E + 手测**（`SCHEDULE_EXACT_ALARM` 在用户设备需开"精确闹钟"权限，CI 拿不到稳定结果）。 | manual / E2E | `(no unit test; manual verification required)` 🔴 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — Cron→IM Delivery Loop (R-AGENT-033)
 
 R-AGENT-033 补 R-AGENT-031 设计层就没做的 cron→IM 投递回路。R-AGENT-031 验收 D 只要求"写 Room DB + 通知活动 chat UI"——结果飞书/Telegram bot 触发的 cron 任务到点后，回复永远到不了 IM。本 R 修 3 个独立 bug：(A) Run.kt::_handleMessage 没调 `setSessionVars`，(B) CronjobTools._originFromEnv 用 `System.getenv` 在 Android 永远返 null，(C) Scheduler.deliverResult 没人接 cron→IM 直投通道。

@@ -134,6 +134,41 @@ var cronImmediateRunner: (suspend (job: Map<String, Any?>) -> Unit)? = null
 @Volatile
 var cronHealthProbe: (suspend () -> Map<String, Any?>)? = null
 
+/**
+ * TC-CRON-EXACT (bugfix to R-AGENT-031): short-delay exact-alarm injection point.
+ *
+ * `app→hermes-android` is a single-direction dependency, so this module
+ * cannot import `AlarmManager` (Android-specific) directly. The app module
+ * injects a lambda here at startup pointing at `CronExactAlarmScheduler`,
+ * which wraps `AlarmManager.setExactAndAllowWhileIdle(RTC_WAKEUP, ...)`.
+ *
+ * **Why a separate path**: the only OS-level cron trigger today is the
+ * 15-minute `PeriodicWorkRequest` tick (`CronTickWorker`). For "once" jobs
+ * with delta-to-fire < 15 minutes (typical: "remind me in 5 minutes"),
+ * the job sits in jobs.json waiting for the next tick — observed delay
+ * 15-20+ minutes, breaking the user-facing timer. AlarmManager is the
+ * only Android API that fires precisely (even in doze mode, with
+ * `setExactAndAllowWhileIdle`) without needing a foreground service.
+ *
+ * **Routing decision** (in `CronjobTools._createCronJob` / `_updateCronJob`):
+ *  - `schedule.kind == "once"` AND `delta-to-fire < 15min` → invoke this
+ *    lambda; the scheduler stamps a per-job alarm.
+ *  - otherwise → existing `CronTickWorker` path handles it on next tick.
+ *
+ * Signature: `(jobId: String, runAtMillis: Long) -> Unit`
+ *  - `jobId`: persisted job id (the alarm intent carries it as an extra;
+ *    the receiver re-resolves the full job record from jobs.json by id).
+ *  - `runAtMillis`: epoch wall-clock ms (matches `RTC_WAKEUP` semantics).
+ *  - non-suspending: `AlarmManager.setExactAndAllowWhileIdle` is itself
+ *    non-blocking, no need to bring suspend into the contract.
+ *
+ * `null` (default) means the bypass is not wired (unit tests / cold-start
+ * before `OperitApplication.onCreate` injection); short-delay once-jobs
+ * fall back to the 15-min PeriodicWork tick (the bug we're fixing).
+ */
+@Volatile
+var cronShortDelayScheduler: ((jobId: String, runAtMillis: Long) -> Unit)? = null
+
 // File-based lock directory
 private val _LOCK_DIR: File get() = File(getHermesHome(), "cron")
 private val _LOCK_FILE: File get() = File(_LOCK_DIR, ".tick.lock")
