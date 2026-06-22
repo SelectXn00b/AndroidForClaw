@@ -29,7 +29,11 @@ import com.ai.assistance.operit.data.preferences.ModelConfigManager
 import com.ai.assistance.operit.data.preferences.UserPreferencesManager
 import com.ai.assistance.operit.ui.floating.ui.fullscreen.XmlTextProcessor
 import com.ai.assistance.operit.ui.features.chat.webview.workspace.WorkspaceBackupManager
+import com.xiaomo.hermes.hermes.gateway.clearCronAutoDeliverVars
+import com.xiaomo.hermes.hermes.gateway.clearSessionVars
 import com.xiaomo.hermes.hermes.gateway.sessionContextElement
+import com.xiaomo.hermes.hermes.gateway.setCronAutoDeliverVars
+import com.xiaomo.hermes.hermes.gateway.setSessionVars
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -439,7 +443,14 @@ class MessageProcessingDelegate(
             suppressUserMessageInHistory: Boolean = false,
             isGroupOrchestrationTurn: Boolean = false,
             groupParticipantNamesText: String? = null,
-            isSubTask: Boolean = false
+            isSubTask: Boolean = false,
+            // R-AGENT-045 C-route 显式参数管道之第 5 层（终点）。
+            // 这两值在 line ~530 `coroutineScope.launch(...)` 块的**第一行**被
+            // 重写回 ThreadLocal —— 跨过 service-scope launch 边界后让下游
+            // AIMessageManager cold stream / agent loop / `_originFromEnv()`
+            // 可读，不再依赖 caller 线程上是否还存在 session vars 快照。
+            originPlatformOverride: String? = null,
+            originChatIdOverride: String? = null
     ) {
         val rawMessageText = messageTextOverride ?: _userMessage.value.text
         // 群组编排模式下，允许空消息（后续成员不需要用户消息）
@@ -502,6 +513,8 @@ class MessageProcessingDelegate(
                     isGroupOrchestrationTurn = isGroupOrchestrationTurn,
                     groupParticipantNamesText = groupParticipantNamesText,
                     isSubTask = isSubTask,
+                    originPlatformOverride = originPlatformOverride,
+                    originChatIdOverride = originChatIdOverride,
                 )
             }
             return
@@ -528,6 +541,27 @@ class MessageProcessingDelegate(
             // 1:1 对齐 Python copy_context().run（reference/hermes-agent/gateway/run.py:8108-8112）
             // 在派生新 task 时立即捕获 contextvars 快照的语义。
             coroutineScope.launch(Dispatchers.IO + sessionContextElement()) {
+            // R-AGENT-045 C-route 终点：在 launch 内线程上**重新写入** session
+            // ThreadLocal。caller 链上的 sessionContextElement() 快照只能携带
+            // launch 调用那一刻当前线程的 ThreadLocal —— 但前一层
+            // `MessageCoordinationDelegate` (line ~292) 的 chatId-blank 分支会
+            // `coroutineScope.launch { sendMessageInternal(...) }` 派生新协程
+            // 砍 CoroutineContext.Element，等到 caller 进到这里时当前线程已经空。
+            // 通过 originPlatformOverride / originChatIdOverride 显式参数（4 层
+            // 管道，TC-AGENT-045-i-6）把值送到这里再写回 ThreadLocal，下游
+            // AIMessageManager cold stream / agent loop / `_originFromEnv()` 才读得到。
+            // finally 块 clear*Vars 防线程复用时污染下个请求。
+            if (originPlatformOverride != null) {
+                setSessionVars(
+                    platform = originPlatformOverride,
+                    chatId = originChatIdOverride.orEmpty()
+                )
+                setCronAutoDeliverVars(
+                    platform = originPlatformOverride,
+                    chatId = originChatIdOverride.orEmpty()
+                )
+            }
+            try {
             val sendUserMessageStartTime = messageTimingNow()
             // 检查这是否是聊天中的第一条用户消息（忽略AI的开场白）
             val isFirstMessage = getChatHistory(chatId).none { it.sender == "user" }
@@ -1213,6 +1247,14 @@ class MessageProcessingDelegate(
                 val currentJob = coroutineContext[Job]
                 if (currentJob != null && chatRuntime.sendJob === currentJob) {
                     chatRuntime.sendJob = null
+                }
+            }
+            } finally {
+                // R-AGENT-045 C-route 终点：清理 launch 内线程的 session ThreadLocal，
+                // 防止线程池复用时污染下个请求的 origin。对应 line ~544 的 setSessionVars 写入。
+                if (originPlatformOverride != null) {
+                    clearSessionVars()
+                    clearCronAutoDeliverVars()
                 }
             }
         }

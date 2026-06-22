@@ -2,6 +2,7 @@ package com.ai.assistance.operit.integrations.externalchat
 
 import android.content.Context
 import com.ai.assistance.operit.core.tools.ChatListResultData
+import com.ai.assistance.operit.core.tools.ChatCreationResultData
 import com.ai.assistance.operit.core.tools.MessageSendResultData
 import com.ai.assistance.operit.core.tools.defaultTool.standard.MessageSendStreamSession
 import com.ai.assistance.operit.core.tools.defaultTool.standard.MessageSendStreamStartResult
@@ -12,6 +13,7 @@ import com.ai.assistance.operit.data.model.ToolParameter
 import com.ai.assistance.operit.util.AppLogger
 import com.xiaomo.hermes.hermes.gateway.clearCronAutoDeliverVars
 import com.xiaomo.hermes.hermes.gateway.clearSessionVars
+import com.xiaomo.hermes.hermes.gateway.getSessionEnv
 import com.xiaomo.hermes.hermes.gateway.sessionContextElement
 import com.xiaomo.hermes.hermes.gateway.setCronAutoDeliverVars
 import com.xiaomo.hermes.hermes.gateway.setSessionVars
@@ -211,7 +213,7 @@ class ExternalChatRequestExecutor(context: Context) {
             request.group?.trim()?.takeIf { it.isNotBlank() }?.let {
                 params += ToolParameter(name = "group", value = it)
             }
-            chatTool.createNewChat(
+            val createResult = chatTool.createNewChat(
                 AITool(
                     name = "create_new_chat",
                     parameters = params
@@ -224,12 +226,12 @@ class ExternalChatRequestExecutor(context: Context) {
             // 返回 null —— jobs.json 的 origin 字段就是 null，cron 跑完
             // 没法精确定位回这个新 chat。
             //
-            // 修法：createNewChat 返回后立刻 listChats 拿 currentChatId，
-            // re-set ThreadLocal，让本回合内 agent 调 cronjob(create) 时
-            // _originFromEnv 能读到 platform="app" + chat_id=<newId>。
-            val resolvedChatId = (chatTool.listChats(AITool(name = "list_chats"))
-                .result as? ChatListResultData)
-                ?.currentChatId
+            // 修法：直接用 createNewChat 返回的 ChatCreationResultData.chatId
+            // re-set ThreadLocal。listChats 会偶发性返回 currentChatId=null
+            // （chatHistoryManager.currentChatIdFlow 还没 emit 新值）—— 用
+            // createNewChat 自己的返回值最直接。
+            val resolvedChatId = (createResult.result as? ChatCreationResultData)
+                ?.chatId
                 ?.takeIf { it.isNotBlank() }
             if (resolvedChatId != null) {
                 setSessionVars(platform = "app", chatId = resolvedChatId)
@@ -245,6 +247,27 @@ class ExternalChatRequestExecutor(context: Context) {
                 sendParams += ToolParameter(name = "chat_id", value = it)
             }
         }
+
+        // R-AGENT-045 C-route 起点：把 origin 作为**显式 ToolParameter** 注入
+        // sendTool.parameters。`sessionContextElement()` 路径只能管"同一协程"内嵌
+        // `withContext`，但 caller 链里 `MessageCoordinationDelegate.sendUserMessage`
+        // (line ~292) 在 chatId-blank 分支会 `coroutineScope.launch { ... }` 派生
+        // 新协程，**不继承** caller `CoroutineContext.Element`（含我们包的 ThreadLocal
+        // 快照）—— 这是架构层的洞，靠 ThreadLocal 路径包不掉。修法是显式参数：
+        // 把 origin 穿过 5 层接口（StandardChatManagerTool → ChatServiceCore →
+        // MessageCoordinationDelegate → MessageProcessingDelegate），到达
+        // service-scope launch 边界另一侧后立刻**重新写入** ThreadLocal
+        // （见 MessageProcessingDelegate.kt line ~530 launch 块第一行）。
+        //
+        // resolvedOriginChatId 取最终能确定的 chat_id：优先 request.chatId（caller 显式指定），
+        // 其次回落到 prepareRequest 顶部 setSessionVars 的 chatIdHint（execute() 顶部读到的值）。
+        // createNewChat 路径下创建后的 currentChatId 已经在前面 setSessionVars/setCronAutoDeliverVars
+        // 时落到 ThreadLocal 上，但显式参数走的是同一份 currentChatId 数据流。
+        sendParams += ToolParameter(name = "__origin_platform", value = "app")
+        val resolvedOriginChatId = request.chatId?.trim()?.takeIf { it.isNotBlank() }
+            ?: getSessionEnv("HERMES_SESSION_CHAT_ID").takeIf { it.isNotBlank() }
+            ?: ""
+        sendParams += ToolParameter(name = "__origin_chat_id", value = resolvedOriginChatId)
 
         return PreparationResult.Ready(
             requestId = requestId,

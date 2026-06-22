@@ -235,7 +235,10 @@ class ChatServiceCore(
         proxySenderNameOverride: String? = null,
         chatModelConfigIdOverride: String? = null,
         chatModelIndexOverride: Int? = null,
-        isSubTask: Boolean = false
+        isSubTask: Boolean = false,
+        // R-AGENT-045 C-route 显式参数管道之第 2 层。
+        originPlatformOverride: String? = null,
+        originChatIdOverride: String? = null
     ) {
         messageCoordinationDelegate.sendUserMessage(
             promptFunctionType = promptFunctionType,
@@ -245,7 +248,9 @@ class ChatServiceCore(
             proxySenderNameOverride = proxySenderNameOverride,
             chatModelConfigIdOverride = chatModelConfigIdOverride,
             chatModelIndexOverride = chatModelIndexOverride,
-            isSubTask = isSubTask
+            isSubTask = isSubTask,
+            originPlatformOverride = originPlatformOverride,
+            originChatIdOverride = originChatIdOverride
         )
     }
 

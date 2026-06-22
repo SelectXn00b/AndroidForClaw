@@ -102,18 +102,24 @@ class ExternalChatRequestExecutorSessionVarsTest {
             createNewChatIdx >= 0
         )
 
-        // createNewChat 之后必须再有一次 listChats —— 用来拿 resolved currentChatId
+        // createNewChat 之后必须用其返回值（ChatCreationResultData.chatId）拿到 resolved chat_id。
+        //
+        // 历史教训（why 改 TC）：原本要求 createNewChat 之后再 `listChats()` 拿
+        // currentChatId，但 e2e 实测 `listChats` 偶发性返回 currentChatId=null —
+        // chatHistoryManager.currentChatIdFlow 还没 emit 新值就被读了。
+        // createNewChat 自己的 ToolResult 直接含 newChatId，更可靠。
         val afterCreate = source.substring(createNewChatIdx)
         assertTrue(
-            "prepareRequest() 在 `createNewChat(...)` 之后必须再调 `listChats(...)` —— " +
-                "拿到新建 chat 的 chat_id 用来 re-set ThreadLocal，否则 origin 字段为 null。",
-            Regex("""chatTool\.listChats\s*\(""").containsMatchIn(afterCreate)
+            "prepareRequest() 在 `createNewChat(...)` 之后必须用其返回值 `ChatCreationResultData.chatId` " +
+                "解析新 chat_id —— listChats 偶发性返回 null（chatHistoryManager.currentChatIdFlow " +
+                "未 emit 新值），createNewChat 自己的 ToolResult 是 source of truth。",
+            Regex("""ChatCreationResultData""").containsMatchIn(afterCreate)
         )
 
         // createNewChat 之后必须再调一次 setSessionVars —— 用 resolved chat_id 覆盖空值
         assertTrue(
             "prepareRequest() 在 `createNewChat(...)` 之后必须再调 `setSessionVars(platform = \"app\", ...)` —— " +
-                "用 listChats 返回的 currentChatId 覆盖 execute() 顶部写入的空 chat_id。",
+                "用 createNewChat 返回的 chatId 覆盖 execute() 顶部写入的空 chat_id。",
             Regex("""setSessionVars\s*\(\s*platform\s*=\s*"app"""").containsMatchIn(afterCreate)
         )
         assertTrue(
@@ -187,6 +193,58 @@ class ExternalChatRequestExecutorSessionVarsTest {
     }
 
     // ----- helpers -----
+
+    /**
+     * TC-AGENT-045-i-4: prepareRequest() 必须把 origin 作为**显式参数**写进
+     * `sendTool.parameters` —— 即 `__origin_platform="app"` + `__origin_chat_id=<resolved>`
+     * 两个 `ToolParameter` 注入到 `sendParams`。
+     *
+     * 为什么必须这样：
+     *
+     * `sessionContextElement()` 路径只能管"同一协程"内嵌的 `withContext`。但
+     * caller 链路里 `MessageCoordinationDelegate.sendUserMessage`（line ~292）
+     * 在 `chatIdOverride.isNullOrBlank()` 分支会调 `coroutineScope.launch { ... }`
+     * 派生新协程，**不继承** caller 的 `CoroutineContext.Element`（含我们包的
+     * ThreadLocal 快照）—— 这是架构层的洞，靠 `withContext(sessionContextElement())`
+     * 包不掉。修法是 C-route：把 origin 作为**显式参数**穿过 5 层接口
+     * （StandardChatManagerTool → ChatServiceCore → MessageCoordinationDelegate
+     * → MessageProcessingDelegate），到达 service-scope launch 边界另一侧后
+     * 立刻**重新写入** ThreadLocal（见 TC-AGENT-045-i-7）。
+     *
+     * 本 TC 守 C-route 起点：`sendTool.parameters` 必须含这两个键。
+     */
+    @Test
+    fun `TC-AGENT-045-i-4 injects origin params into sendTool`() {
+        // 1) sendParams 构造点必须 append `__origin_platform=app` ToolParameter
+        assertTrue(
+            "prepareRequest() 必须给 sendParams 注入 `__origin_platform=\"app\"` ToolParameter —— " +
+                "C-route 起点，绕过 service-scope launch 砍 CoroutineContext.Element 的架构洞。",
+            Regex(
+                """ToolParameter\s*\(\s*name\s*=\s*"__origin_platform"\s*,\s*value\s*=\s*"app"\s*\)"""
+            ).containsMatchIn(source)
+        )
+
+        // 2) sendParams 构造点必须 append `__origin_chat_id=<resolved id>` ToolParameter
+        //    宽松匹配 value 形式（变量 / 表达式都可），只校验键名。
+        assertTrue(
+            "prepareRequest() 必须给 sendParams 注入 `__origin_chat_id` ToolParameter（value 由 prepareRequest " +
+                "内部解析的 currentChatId / request.chatId 提供）。",
+            Regex("""ToolParameter\s*\(\s*name\s*=\s*"__origin_chat_id"""")
+                .containsMatchIn(source)
+        )
+
+        // 3) 注入位置约束：必须在 `PreparationResult.Ready(...)` 之前 —— 即 sendParams
+        //    最终被打包进 sendTool 之前注入。
+        val readyIdx = Regex("""PreparationResult\.Ready\s*\(""").find(source)?.range?.first ?: -1
+        val originPlatformIdx = Regex(
+            """ToolParameter\s*\(\s*name\s*=\s*"__origin_platform""""
+        ).find(source)?.range?.first ?: -1
+        assertTrue(
+            "`__origin_platform` ToolParameter 注入必须出现在 `PreparationResult.Ready(...)` 之前 —— " +
+                "否则没进 sendTool。readyIdx=$readyIdx, originPlatformIdx=$originPlatformIdx",
+            originPlatformIdx in 0 until readyIdx
+        )
+    }
 
     private fun appSrcMainRoot(): File {
         val candidate = File("src/main/java/com/ai/assistance/operit")

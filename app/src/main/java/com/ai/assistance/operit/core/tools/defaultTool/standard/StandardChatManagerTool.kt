@@ -1229,6 +1229,16 @@ class StandardChatManagerTool(private val context: Context) {
                 val targetChatId = tool.parameters.find { it.name == "chat_id" }?.value?.trim()
                 val hasTargetChat = !targetChatId.isNullOrBlank()
 
+                // R-AGENT-045 C-route 中段：从 tool.parameters 取出
+                // ExternalChatRequestExecutor 注入的 origin 显式参数，往下 forward
+                // 给 ChatServiceCore.sendUserMessage —— 4 层管道之第 1 层。
+                // 这两个值最终在 MessageProcessingDelegate 的 launch 块第一行被
+                // 重写回 ThreadLocal，让下游 cron `_originFromEnv()` 读到。
+                val originPlatformOverride = tool.parameters.find { it.name == "__origin_platform" }
+                    ?.value?.trim()?.takeIf { it.isNotBlank() }
+                val originChatIdOverride = tool.parameters.find { it.name == "__origin_chat_id" }
+                    ?.value?.trim()?.takeIf { it.isNotBlank() }
+
                 if (hasTargetChat) {
                     val chatExists = core.chatHistories.value.any { it.id == targetChatId }
                     if (!chatExists) {
@@ -1271,7 +1281,9 @@ class StandardChatManagerTool(private val context: Context) {
                         roleCardIdOverride = roleCardId,
                         chatIdOverride = preflightChatId,
                         messageTextOverride = message,
-                        proxySenderNameOverride = proxySenderName
+                        proxySenderNameOverride = proxySenderName,
+                        originPlatformOverride = originPlatformOverride,
+                        originChatIdOverride = originChatIdOverride
                     )
                 } else {
                     // 发送消息（包含总结逻辑），由 Coordination 处理 chatId 默认
@@ -1279,7 +1291,9 @@ class StandardChatManagerTool(private val context: Context) {
                         promptFunctionType = PromptFunctionType.CHAT,
                         roleCardIdOverride = roleCardId,
                         messageTextOverride = message,
-                        proxySenderNameOverride = proxySenderName
+                        proxySenderNameOverride = proxySenderName,
+                        originPlatformOverride = originPlatformOverride,
+                        originChatIdOverride = originChatIdOverride
                     )
                 }
 

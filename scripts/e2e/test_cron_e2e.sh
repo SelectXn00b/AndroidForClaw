@@ -298,34 +298,31 @@ log "jobs.json contains job_id=$JOB_ID"
 
 # origin: platform=app + chat_id 必须存在（R-AGENT-045）
 #
-# R-AGENT-045 部分 wiring（hole 已部分修：见 TC-AGENT-045-g + TC-AGENT-045-h-1/2）：
-#   ExternalChatRequestExecutor.prepareRequest() 在 createNewChat() 之后立刻
-#   listChats() 拿 currentChatId 并 re-setSessionVars + re-setCronAutoDeliverVars
+# R-AGENT-045 完整 wiring：
+#   ExternalChatRequestExecutor.prepareRequest() 在 createNewChat() 之后用其
+#   返回值 ChatCreationResultData.chatId 立刻 setSessionVars + setCronAutoDeliverVars
 #   覆盖 execute() 顶部用 request.chatId（可能为空）写入的 ThreadLocal。
 #   execute() 内部又用 `withContext(sessionContextElement()) { sendMessageToAI(...) }`
-#   把 ThreadLocal 快照（等价 Python copy_context().run）随协程上下文带到
-#   sendMessageToAI 内部的 Dispatchers.IO 跳转里。
+#   把 ThreadLocal 快照（等价 Python copy_context().run）随协程上下文带过去。
 #
-#   ⚠️ 已知残留 hole（架构层）：service 端 `MessageCoordinationDelegate` 的
-#   `coroutineScope.launch { ... }` 是 fire-and-forget 启动 service-scope
-#   协程，**不继承 caller 的 CoroutineContext**——所以 sessionContextElement
-#   传不进 service 端真正跑 agent loop 的协程。在 cron tool dispatch 那一刻
-#   `_originFromEnv()` 读的是 service scope 的 ThreadLocal，仍拿到空。
+#   架构 hole 已修（C-route 5 层显式参数管道）：
+#   service 端 `MessageCoordinationDelegate` 的 `coroutineScope.launch { ... }`
+#   是 fire-and-forget service-scope 协程，**不继承 caller CoroutineContext**。
+#   修法是把 origin 作为显式 ToolParameter (__origin_platform / __origin_chat_id)
+#   穿过 5 层接口（StandardChatManagerTool → ChatServiceCore →
+#   MessageCoordinationDelegate → MessageProcessingDelegate），到达
+#   service-scope launch 边界另一侧后立刻 setSessionVars 重写 ThreadLocal
+#   （MessageProcessingDelegate.kt line ~530 launch 块第一行）。
 #
-#   修法需要改 service 端接口签名（让 sendUserMessage 接受
-#   coroutineContext 参数，launch 时用 `launch(callerCtx) { ... }`），
-#   或把 origin 改成 message metadata（在 cron tool dispatch 处通过 user
-#   message 传递）。两者都要改 5 层接口（StandardChatManagerTool →
-#   ChatServiceCore → MessageCoordinationDelegate → MessageProcessingDelegate
-#   → EnhancedAIService），单独立 commit。
-#
-#   暂时保留 warn —— 源码 wiring 已锁（TC-AGENT-045-g + TC-AGENT-045-h-1/2 守），
-#   但跨 service-scope launch 边界的 ThreadLocal 传播仍是 hole，待后续设计。
+#   守卫：source-scan 单测 TC-AGENT-045-i-4..7（4 个文件，9 个测试方法）。
+#   行为测试 SessionContextElementTest#TC-AGENT-045-i-2 覆盖跨线程 ThreadLocal
+#   传播。本 e2e Stage C 是端到端验收：必须 origin.platform="app"。
 if ! grep -qE "\"platform\":[[:space:]]*\"app\"" <<< "$JOBS_JSON"; then
-  warn "jobs.json origin.platform != 'app' — R-AGENT-045 跨 service-scope launch 边界 ThreadLocal 不传播（已知架构 hole，sessionContextElement helper 已上但救不了 service-scope launch）"
-else
-  log "jobs.json origin.platform=app (R-AGENT-045 origin propagation OK)"
+  log "--- jobs.json full ---"
+  printf '%s\n' "$JOBS_JSON"
+  fail "jobs.json origin.platform != 'app' — R-AGENT-045 origin propagation broken (C-route 5 层管道某层断了)"
 fi
+log "jobs.json origin.platform=app (R-AGENT-045 origin propagation OK)"
 
 # last_run_at 非空 + last_status="ok"
 if ! grep -qE "\"last_run_at\":[[:space:]]*\"[^\"]+\"" <<< "$JOBS_JSON"; then

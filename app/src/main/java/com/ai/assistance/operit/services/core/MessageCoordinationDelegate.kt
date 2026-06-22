@@ -282,13 +282,21 @@ class MessageCoordinationDelegate(
         proxySenderNameOverride: String? = null,
         chatModelConfigIdOverride: String? = null,
         chatModelIndexOverride: Int? = null,
-        isSubTask: Boolean = false
+        isSubTask: Boolean = false,
+        // R-AGENT-045 C-route 显式参数管道之第 3 层。
+        originPlatformOverride: String? = null,
+        originChatIdOverride: String? = null
     ) {
         // 仅在没有指定 chatId 的情况下，才需要确保有当前对话
         if (chatIdOverride.isNullOrBlank() && chatHistoryDelegate.currentChatId.value == null) {
             AppLogger.d(TAG, "当前没有活跃对话，自动创建新对话")
 
             // 使用 coroutineScope 启动协程
+            // R-AGENT-045 注意：此处 `coroutineScope.launch { ... }` 是 service-scope
+            // 派生新协程，**不**继承 caller 的 CoroutineContext.Element（含 ThreadLocal
+            // 快照）。但 originPlatformOverride / originChatIdOverride 是 Kotlin
+            // closure capture 进 launch 块的**普通值**，跨 launch 边界存活，照常 forward。
+            // 这是 C-route 显式参数管道为什么必要的核心原因。
             coroutineScope.launch {
                 // 使用现有的createNewChat方法创建新对话
                 chatHistoryDelegate.createNewChat()
@@ -320,7 +328,9 @@ class MessageCoordinationDelegate(
                     proxySenderNameOverride = proxySenderNameOverride,
                     chatModelConfigIdOverride = chatModelConfigIdOverride,
                     chatModelIndexOverride = chatModelIndexOverride,
-                    isSubTask = isSubTask
+                    isSubTask = isSubTask,
+                    originPlatformOverride = originPlatformOverride,
+                    originChatIdOverride = originChatIdOverride
                 )
             }
         } else {
@@ -333,7 +343,9 @@ class MessageCoordinationDelegate(
                 proxySenderNameOverride = proxySenderNameOverride,
                 chatModelConfigIdOverride = chatModelConfigIdOverride,
                 chatModelIndexOverride = chatModelIndexOverride,
-                isSubTask = isSubTask
+                isSubTask = isSubTask,
+                originPlatformOverride = originPlatformOverride,
+                originChatIdOverride = originChatIdOverride
             )
         }
     }
@@ -458,7 +470,10 @@ class MessageCoordinationDelegate(
         enableGroupOrchestration: Boolean = true,
         isGroupOrchestrationTurn: Boolean = false,
         groupParticipantNamesText: String? = null,
-        isSubTask: Boolean = false
+        isSubTask: Boolean = false,
+        // R-AGENT-045 C-route 显式参数管道之第 4 层。
+        originPlatformOverride: String? = null,
+        originChatIdOverride: String? = null
     ) {
         // 如果不是自动续写，更新当前的 promptFunctionType
         if (!isAutoContinuation) {
@@ -640,7 +655,10 @@ class MessageCoordinationDelegate(
             suppressUserMessageInHistory = suppressUserMessageInHistory,
             isGroupOrchestrationTurn = isGroupOrchestrationTurn,
             groupParticipantNamesText = groupParticipantNamesText,
-            isSubTask = isSubTask
+            isSubTask = isSubTask,
+            // R-AGENT-045 C-route 显式参数管道之第 4→5 层 forward。
+            originPlatformOverride = originPlatformOverride,
+            originChatIdOverride = originChatIdOverride
         )
 
         // 只有在非续写（即用户主动发送）时才清空附件和UI状态
