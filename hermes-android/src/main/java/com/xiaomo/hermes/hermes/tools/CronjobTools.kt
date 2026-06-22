@@ -747,9 +747,38 @@ fun _formatJob(job: Map<String, Any?>): Map<String, Any?> {
  * Returns `null` when the input is null/blank or fails to parse so health
  * filters can defensively skip malformed records instead of crashing the
  * whole snapshot.
+ *
+ * **Bugfix to TC-CRON-EXACT (2026-06-23)**: `Jobs.kt::formatIsoDate` writes
+ * timestamps via `SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ")`, which
+ * emits zone offsets as `+0800` (no colon). `java.time.Instant.parse`
+ * requires strict ISO-8601 (`Z` or `+08:00` with colon) and throws on
+ * `+0800` — that means this helper returned `null` for **every** real
+ * `next_run_at` produced by Jobs.kt, breaking the AlarmManager short-delay
+ * route entirely. We try `SimpleDateFormat` (Jobs.kt's own format) first
+ * so the round-trip works, and fall back to `Instant.parse` for the
+ * rarer ISO-8601 strict inputs (e.g. tests or upstream-style `Z` suffix).
  */
-private fun _parseIsoToEpoch(iso: String?): Long? {
+private fun _parseIsoToEpoch(iso: String?): Long? = parseIsoToEpochInternal(iso)
+
+/**
+ * Module-internal entry point for [_parseIsoToEpoch] so unit tests can
+ * exercise the parser directly without going through Context-bound
+ * `createJob` paths. Behaviour identical to the file-private wrapper —
+ * see that doc-comment for the bugfix history.
+ */
+internal fun parseIsoToEpochInternal(iso: String?): Long? {
     if (iso.isNullOrBlank()) return null
+    // Primary path: parse the format Jobs.kt actually writes.
+    // `SimpleDateFormat` with `Z` accepts RFC822-style `+0800` offsets.
+    try {
+        val sdf = java.text.SimpleDateFormat(
+            "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+            java.util.Locale.US
+        )
+        return sdf.parse(iso)?.time
+    } catch (_: Exception) {
+        // fall through to ISO-8601 strict parse
+    }
     return try {
         java.time.Instant.parse(iso).toEpochMilli()
     } catch (_: Exception) {
