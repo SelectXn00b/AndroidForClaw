@@ -29,6 +29,7 @@ import com.ai.assistance.operit.data.preferences.ModelConfigManager
 import com.ai.assistance.operit.data.preferences.UserPreferencesManager
 import com.ai.assistance.operit.ui.floating.ui.fullscreen.XmlTextProcessor
 import com.ai.assistance.operit.ui.features.chat.webview.workspace.WorkspaceBackupManager
+import com.xiaomo.hermes.hermes.gateway.sessionContextElement
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -518,7 +519,15 @@ class MessageProcessingDelegate(
         setChatInputProcessingState(chatId, EnhancedInputProcessingState.Processing(context.getString(R.string.message_processing)))
 
         val sendJob =
-            coroutineScope.launch(Dispatchers.IO) {
+            // R-AGENT-045 跨 service-scope launch 边界修：launch context 上
+            // `+ sessionContextElement()`，把当前线程上 setSessionVars / setCronAutoDeliverVars
+            // 写入的 ThreadLocal 快照（含 platform="app" + chat_id）随新协程一起带过去。
+            // 没这个 `+` —— service-scope launch 不继承 caller CoroutineContext，
+            // launched 协程从 IO 线程池拉的线程上没 ThreadLocal 写入，下游
+            // CronjobTools._originFromEnv() 读到空 → null → jobs.json origin 字段 null。
+            // 1:1 对齐 Python copy_context().run（reference/hermes-agent/gateway/run.py:8108-8112）
+            // 在派生新 task 时立即捕获 contextvars 快照的语义。
+            coroutineScope.launch(Dispatchers.IO + sessionContextElement()) {
             val sendUserMessageStartTime = messageTimingNow()
             // 检查这是否是聊天中的第一条用户消息（忽略AI的开场白）
             val isFirstMessage = getChatHistory(chatId).none { it.sender == "user" }

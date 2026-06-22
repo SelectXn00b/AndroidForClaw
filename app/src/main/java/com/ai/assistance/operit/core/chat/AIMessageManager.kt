@@ -33,6 +33,7 @@ import com.ai.assistance.operit.util.LocaleUtils
 import com.ai.assistance.operit.util.stream.SharedStream
 import com.ai.assistance.operit.util.stream.share
 import com.ai.assistance.operit.util.stream.shareRevisable
+import com.xiaomo.hermes.hermes.gateway.sessionContextElement
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -422,8 +423,15 @@ object AIMessageManager {
             if (pluginExecution != null) {
                 activeMessageProcessingControllerByChatId[chatKey] = pluginExecution.controller
                 AppLogger.d(TAG, "消息处理插件已接管消息处理")
+                // R-AGENT-045 跨 share() 边界修：share() 内部用 `scope.launch { upstream.collect ... }`
+                // 把 cold stream 的 producer 块绑到这个 scope 上跑。如果直接传 `AIMessageManager.scope`
+                // （静态 SupervisorJob），那条 launch 不带任何 ThreadContextElement —— caller
+                // 这层 withContext(sessionContextElement()) 包的快照断在这里。
+                // 修法：派生一个继承静态 scope 生命周期但带本次请求 session 快照的子 scope。
+                // sessionContextElement() 在当前线程上读 ThreadLocal 当下值（已被 caller 设好）。
+                val sessionAwareScope = CoroutineScope(scope.coroutineContext + sessionContextElement())
                 val pluginStream = pluginExecution.stream.share(
-                    scope = scope,
+                    scope = sessionAwareScope,
                     onComplete = {
                         activeMessageProcessingControllerByChatId.remove(chatKey)
                         activeEnhancedAiServiceByChatId.remove(chatKey)
@@ -477,7 +485,11 @@ object AIMessageManager {
                 stream = enableStream,
                 isSubTask = isSubTask
             ).shareRevisable(
-                scope = scope,
+                // R-AGENT-045 跨 shareRevisable() 边界修：见上方 plugin 路径同名注释。
+                // 默认路径下 EnhancedAIService.sendMessage 返回的 cold stream 块里就跑
+                // agent loop + tool dispatch + CronjobTools._originFromEnv()。如果 share 用
+                // 裸的静态 scope，所有这些都在没 session ThreadLocal 的线程上跑 → origin null。
+                scope = CoroutineScope(scope.coroutineContext + sessionContextElement()),
                 onComplete = {
                     activeMessageProcessingControllerByChatId.remove(chatKey)
                     activeEnhancedAiServiceByChatId.remove(chatKey)
