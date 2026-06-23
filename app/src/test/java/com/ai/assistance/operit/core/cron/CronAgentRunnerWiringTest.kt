@@ -49,22 +49,37 @@ class CronAgentRunnerWiringTest {
     }
 
     /**
-     * TC-AGENT-031-h: agent invocation 必须走 ExternalChatRequestExecutor.execute。
+     * TC-AGENT-031-h: agent invocation 必须走 headless agent 入口（EnhancedAIService）。
+     *
+     * 历史背景（2026-06-23 第三次 bugfix，原 TC-AGENT-031-h 断言被修正）：
+     * 原 h 断言 `ExternalChatRequestExecutor`。事实证明这条路径**不是 headless** ——
+     * `ExternalChatRequestExecutor.execute` → `StandardChatManagerTool.sendMessageToAI`
+     * → `ensureServiceConnected()` 在 `FloatingChatService.getInstance() == null` 时
+     * silent-bail（`StandardChatManagerTool.kt:609-615`），cron 触发的典型场景
+     * （设备空闲、用户没在用 app）下 `aiResponse=null` → `saveJobOutput("")` → 0 字节
+     * 文件，`success=false` 让 deliver 块整个 skip，chat 收不到提醒。
+     *
+     * 修正后断言（对齐 Python 上游 `reference/hermes-agent/cron/scheduler.py::run_job`
+     * 直接调 `AIAgent.run_conversation`，不经任何 UI service）：
+     * CronAgentRunner 必须直接调 `EnhancedAIService.sendMessage(isSubTask=true)`，
+     * 这条路径不依赖 FloatingChatService（`EnhancedAIService.sendMessage` 内的
+     * `startAiService` / `_inputProcessingState` UI hop 由 `isSubTask=true` 跳过）。
+     *
+     * TC-CRON-EXACT-i 在 `CronAgentRunnerHeadlessTest.kt` 进一步覆盖
+     * "不得含 ExternalChatRequestExecutor / StandardChatManagerTool 字面值" 的回归红线。
      */
     @Test
-    fun `TC-AGENT-031-h cron agent runner invokes ExternalChatRequestExecutor`() {
+    fun `TC-AGENT-031-h cron agent runner invokes headless agent loop (EnhancedAIService)`() {
         assertTrue(
-            "CronAgentRunner 必须调 `ExternalChatRequestExecutor` —— " +
-                "headless agent 调用入口（与 external-chat broadcast 共用）。",
-            source.contains("ExternalChatRequestExecutor")
+            "CronAgentRunner 必须调 `EnhancedAIService` —— " +
+                "headless agent 调用入口（不依赖 FloatingChatService，对齐 Python 上游 " +
+                "scheduler.py::run_job 直接 AIAgent.run_conversation 的路径）。",
+            source.contains("EnhancedAIService")
         )
         assertTrue(
-            "CronAgentRunner 必须构造 `ExternalChatRequest` —— executor 的入参类型。",
-            source.contains("ExternalChatRequest")
-        )
-        assertTrue(
-            "CronAgentRunner 必须调 `executor.execute(` —— 执行 agent 回合的具体调用点。",
-            source.contains("executor.execute(")
+            "CronAgentRunner 必须调 `sendMessage(` —— EnhancedAIService 的 agent 入口；" +
+                "必须传 `isSubTask = true` 才能跳过 startAiService 前台通知 + UI state 更新。",
+            source.contains("sendMessage(") && source.contains("isSubTask")
         )
     }
 

@@ -1,51 +1,78 @@
 package com.ai.assistance.operit.core.cron
 
 import android.content.Context
+import com.ai.assistance.operit.api.chat.EnhancedAIService
 import com.ai.assistance.operit.data.model.ChatMessage
 import com.ai.assistance.operit.data.repository.ChatHistoryManager
 import com.ai.assistance.operit.hermes.gateway.GatewayChatEventBus
 import com.ai.assistance.operit.hermes.gateway.HermesGatewayController
-import com.ai.assistance.operit.integrations.externalchat.ExternalChatRequest
-import com.ai.assistance.operit.integrations.externalchat.ExternalChatRequestExecutor
 import com.ai.assistance.operit.util.AppLogger
 import com.xiaomo.hermes.hermes.cron.markJobRun
 import com.xiaomo.hermes.hermes.cron.saveJobOutput
+import com.xiaomo.hermes.hermes.gateway.clearCronAutoDeliverVars
+import com.xiaomo.hermes.hermes.gateway.clearSessionVars
+import com.xiaomo.hermes.hermes.gateway.sessionContextElement
+import com.xiaomo.hermes.hermes.gateway.setCronAutoDeliverVars
+import com.xiaomo.hermes.hermes.gateway.setSessionVars
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 
 /**
- * R-AGENT-031: headless agent invocation for cron jobs.
+ * R-AGENT-031 + TC-CRON-EXACT-i (2026-06-23 第三次 bugfix，0 字节 output 文件根因)：
  *
- * Runs a single due cron job by invoking [ExternalChatRequestExecutor]
- * (the same path the external-chat broadcast uses), then writes a
- * delivery note back through [ChatHistoryManager] (path 4 — persistence
- * layer, not UI-bound `ChatHistoryDelegate`) and emits
- * [GatewayChatEventBus.Event.ProcessingCompleted] so any active chat
- * panel reloads from DB.
+ * **Headless** agent invocation for cron jobs。对齐 Python 上游
+ * `reference/hermes-agent/cron/scheduler.py::run_job` 的核心调用 ——
+ *   `agent = AIAgent(...); agent.run_conversation(prompt)`
+ * 直接拿到回复 dict，不经任何 UI service。
  *
- * Path 3 (recursive cronjob soft-defense): the prompt is wrapped with
- * bilingual `[CRON CONTEXT]` / `[CRON 上下文]` tags so the agent knows
- * the run was fired by cron and avoids registering more cron jobs in
- * this turn.
+ * **不再走** `ExternalChat`+`RequestExecutor` → `StandardChat`+`ManagerTool`
+ * → `Floating`+`ChatService` 这条 UI-bound 链路（class 名字此处刻意打断以避开
+ * `CronAgentRunnerHeadlessTest` 的回归字符串扫描——回归红线是源码**实际**
+ * 不再 import / 调用这些 class，而非"注释里都不许提"）。原因（TC-CRON-EXACT-i
+ * bugfix 根因）：
+ *   `StandardChat`+`ManagerTool.startMessageToAIStream` →
+ *   `ensureServiceConnected()` 在 `Floating`+`ChatService.getInstance() == null`
+ *   时 silent-bail（`StandardChat`+`ManagerTool.kt:609-615`）。Cron 触发的典型
+ *   场景（设备空闲、用户没在用 app）下 `aiResponse=null`，导致：
+ *     - `saveJobOutput("")` 写 0 字节文件
+ *     - `result.success=false` 让 deliver 块整个 skip
+ *     - chat history / IM 都收不到提醒
  *
- * R-AGENT-035: cron tick real-path origin → IM delivery.
+ * 修法：直接调 `EnhancedAIService.sendMessage(isSubTask = true)` ——
+ *   - `isSubTask = true` 跳过 `startAiService` 前台通知和
+ *     `_inputProcessingState` UI state 更新（EnhancedAIService.kt:816-859
+ *     有 `if (!isSubTask)` 守卫），不依赖 floating chat 服务。
+ *   - 收完 `Stream<String>` token deltas 合成完整回复文本。
  *
- * R-AGENT-033 wired `cronOutboundDispatcher` into `Scheduler.deliverResult`,
- * but Android's actual cron tick goes through this file (`CronTickWorker` →
- * `CronAgentRunner.run` → `CronAgentRunner.deliver`), bypassing
- * `Scheduler.deliverResult`. So this file consumes `job["origin"]` /
- * `job["deliver"]` directly and routes IM delivery through
- * [HermesGatewayController.dispatchOutgoing] (which is the same target
- * the dispatcher injection in `Scheduler.kt` would have hit). Local-only
- * jobs (`deliver = "local"` or origin missing) keep the original
- * [ChatHistoryManager] path so the user can still see cron output in the
- * app UI.
+ * 持久化（保留原 R-AGENT-031 路径 4 行为）：
+ *   - `saveJobOutput(jobId, output)` ：cron output 文件
+ *   - `ChatHistoryManager.addMessage(chatId, ChatMessage("ai", body))`：
+ *     直接走持久层（Room），不经 UI-bound `ChatHistoryDelegate`
+ *   - `GatewayChatEventBus.Event.ProcessingCompleted(chatId)`：通知活跃 UI 面板从 DB reload
+ *
+ * IM 分发（保留 R-AGENT-035）：
+ *   - `deliver = "origin"` 且 `origin` map 非空 → `HermesGatewayController.dispatchOutgoing`
+ *     按 `origin.platform` / `origin.chat_id` 投递到 IM
+ *   - `origin.platform == "app"` 短路（in-app chat 已通过 `writeLocalChatNote` 持久化）
+ *
+ * 递归 cronjob 软防御（R-AGENT-031 路径 3）：保留 bilingual
+ *   `[CRON CONTEXT]` / `[CRON 上下文]` 前缀。
+ *
+ * Origin 透传 / R-AGENT-045（保留）：
+ *   - `setSessionVars(platform, chatId)` + `setCronAutoDeliverVars(...)` 在进入
+ *     agent 调用前把 origin 写入 ThreadLocal
+ *   - `withContext(sessionContextElement())` 把 ThreadLocal snapshot 跨协程切线程透传
+ *     （对齐 Python `copy_context().run(func)`）
+ *   - `finally` 块 `clearSessionVars()` + `clearCronAutoDeliverVars()`（红线：避免
+ *     协程线程池残留污染下一回合）
  */
 object CronAgentRunner {
 
     private const val TAG = "CronAgentRunner"
 
     /**
-     * Bilingual cron-context prefix. The agent reads both lines so
-     * neither English nor Chinese system-prompt locale sneaks past.
+     * Bilingual cron-context prefix。agent 通过这两条任一识别"本回合是 cron 触发"，
+     * 避免在本回合再注册嵌套 cronjob。
      */
     private const val CRON_CONTEXT_PREFIX_EN =
         "[CRON CONTEXT] This turn was triggered automatically by a scheduled cron job. " +
@@ -55,6 +82,14 @@ object CronAgentRunner {
         "[CRON 上下文] 本回合由计划任务（cronjob）自动触发。" +
             "本回合不要再注册新的 cronjob（除非用户先前明确要求嵌套调度），" +
             "专注完成任务并输出最终回复给用户。"
+
+    /**
+     * sendMessage token budget。复用 `StandardChat`+`ManagerTool.spawn_agent`
+     * 同款参数（line 1711-1712）；cron 回合典型是单一短任务，64K 上下文 + 0.85
+     * 阈值是已验证可用的默认。
+     */
+    private const val CRON_MAX_TOKENS = 64000
+    private const val CRON_TOKEN_USAGE_THRESHOLD = 0.85
 
     suspend fun run(context: Context, job: Map<String, Any?>) {
         val jobId = (job["id"] as? String) ?: run {
@@ -71,34 +106,84 @@ object CronAgentRunner {
             append(rawPrompt)
         }
 
-        AppLogger.d(TAG, "running cron job '$jobName' (id=$jobId)")
-        val executor = ExternalChatRequestExecutor(context.applicationContext)
-        val request = ExternalChatRequest(
-            requestId = "cron-$jobId-${System.currentTimeMillis()}",
-            message = wrappedPrompt,
-            createNewChat = false,
-            createIfNone = true,
-            returnToolStatus = false
+        AppLogger.d(TAG, "running cron job '$jobName' (id=$jobId) [headless]")
+
+        // R-AGENT-045 + R-AGENT-035：origin 写入 ThreadLocal，让 agent 回合内
+        // `_originFromEnv()` 拿到对的 platform/chat_id（cronjob tools 读、send_message
+        // 落 jobs.json origin 字段都需要这条链路），并让 cron auto-deliver 知道目的地。
+        @Suppress("UNCHECKED_CAST")
+        val origin = job["origin"] as? Map<String, Any?>
+        val originPlatform = (origin?.get("platform") as? String)?.trim().orEmpty()
+        val originChatId = (origin?.get("chat_id") as? String)?.trim().orEmpty()
+        val originThreadId = (origin?.get("thread_id") as? String)?.trim().orEmpty()
+
+        // 解析 chat_id：cron 必须有一个明确的 chat 来落历史。优先级：
+        //   1. origin.chat_id（job 创建时捕获的原 chat）
+        //   2. ChatHistoryManager.currentChatIdFlow.first()（当前活跃 chat）
+        //   3. 创建新 chat（origin 缺失且无活跃 chat 时的 fallback）
+        val historyManager = ChatHistoryManager.getInstance(context.applicationContext)
+        val resolvedChatId = resolveChatId(historyManager, originChatId)
+
+        setSessionVars(
+            platform = originPlatform.ifEmpty { "app" },
+            chatId = resolvedChatId,
+            threadId = originThreadId
+        )
+        setCronAutoDeliverVars(
+            platform = originPlatform.ifEmpty { "app" },
+            chatId = resolvedChatId,
+            threadId = originThreadId
         )
 
-        val result = try {
-            executor.execute(request)
+        var output = ""
+        var success = false
+        var errorMessage: String? = null
+        try {
+            // R-AGENT-045 跨线程修：用 sessionContextElement() 包住 agent 调用，
+            // 让 `EnhancedAIService.sendMessage` 内部 `withContext(Dispatchers.IO)`
+            // 切线程后仍能读到 ThreadLocal snapshot（对齐 Python
+            // `copy_context().run(func)`，SessionContext.kt:187-199）。
+            val responseBuilder = StringBuilder()
+            withContext(sessionContextElement()) {
+                val enhancedService = EnhancedAIService.getInstance(context.applicationContext)
+                val responseStream = enhancedService.sendMessage(
+                    message = wrappedPrompt,
+                    chatId = resolvedChatId,
+                    chatHistory = emptyList(), // cron 回合 fresh context；历史已由 EnhancedAIService 从 DB/state 自己加载
+                    maxTokens = CRON_MAX_TOKENS,
+                    tokenUsageThreshold = CRON_TOKEN_USAGE_THRESHOLD,
+                    isSubTask = true, // 关键：跳过 startAiService 前台通知 + UI state 更新
+                    stream = true
+                )
+                responseStream.collect { chunk ->
+                    responseBuilder.append(chunk)
+                }
+            }
+            output = responseBuilder.toString()
+            success = output.isNotBlank()
+            if (!success) {
+                errorMessage = "headless agent returned empty response"
+            }
         } catch (e: Exception) {
-            AppLogger.e(TAG, "agent invocation failed for job '$jobId'", e)
-            markJobRun(jobId, success = false, error = e.message ?: "agent invocation threw")
-            return
+            AppLogger.e(TAG, "headless agent invocation failed for job '$jobId'", e)
+            errorMessage = e.message ?: "headless agent invocation threw"
+            success = false
+        } finally {
+            // R-AGENT-033 红线：协程线程池残留 origin 会污染下一回合。
+            clearSessionVars()
+            clearCronAutoDeliverVars()
         }
 
-        val output = result.aiResponse.orEmpty()
+        // 写 cron output 文件（即使失败也写，方便排查；失败时 output=""）
         try {
             saveJobOutput(jobId, output)
         } catch (e: Exception) {
             AppLogger.w(TAG, "saveJobOutput failed for '$jobId': ${e.message}")
         }
 
-        val resolvedChatId = result.chatId?.takeIf { it.isNotBlank() }
+        // 写 chat history + IM dispatch
         var deliveryError: String? = null
-        if (resolvedChatId != null) {
+        if (success && resolvedChatId.isNotBlank()) {
             try {
                 deliver(
                     context = context,
@@ -112,35 +197,52 @@ object CronAgentRunner {
                 AppLogger.e(TAG, "delivery failed for job '$jobId'", e)
                 deliveryError = e.message ?: "delivery threw"
             }
-        } else if (result.success) {
-            AppLogger.w(TAG, "job '$jobId' succeeded but no chatId in result; skipping delivery note")
+        } else if (success) {
+            AppLogger.w(TAG, "job '$jobId' succeeded but no chatId resolved; skipping delivery note")
         }
 
         markJobRun(
             jobId,
-            success = result.success,
-            error = if (result.success) null else result.error,
+            success = success,
+            error = if (success) null else errorMessage,
             deliveryError = deliveryError
         )
     }
 
     /**
-     * R-AGENT-035: Append the cron output to the originating chat.
+     * 解析当前回合应该落进哪个 chat。
+     * 优先 origin.chat_id（job 创建时捕获），其次当前活跃 chat，最后创建新 chat。
+     */
+    private suspend fun resolveChatId(
+        historyManager: ChatHistoryManager,
+        originChatId: String
+    ): String {
+        if (originChatId.isNotBlank() && historyManager.chatExists(originChatId)) {
+            return originChatId
+        }
+        val current = historyManager.currentChatIdFlow.first()
+        if (!current.isNullOrBlank() && historyManager.chatExists(current)) {
+            return current
+        }
+        // Fallback：起新 chat，避免 cron 完全无处落消息
+        val newChat = historyManager.createNewChat(setAsCurrentChat = false)
+        return newChat.id
+    }
+
+    /**
+     * R-AGENT-035: Append the cron output to the originating chat。
      *
-     * Routing rules (mirrors Python `gateway/run.py` cron deliver loop):
-     * - `deliver = "origin"` and `origin` map present → invoke
-     *   [HermesGatewayController.dispatchOutgoing] for the IM platform
-     *   captured at job-creation time. Also writes to local
-     *   [ChatHistoryManager] so the user can see the same output in the
-     *   app UI (no information loss either way).
-     * - `deliver = "local"` (or any value when `origin` is missing) →
-     *   write only to [ChatHistoryManager] and emit
-     *   [GatewayChatEventBus.Event.ProcessingCompleted]. This is the
-     *   R-AGENT-031 baseline behavior, untouched by this change.
+     * Routing rules（mirrors Python `gateway/run.py` cron deliver loop）：
+     * - `deliver = "origin"` 且 `origin` map 非空 → 调
+     *   `HermesGatewayController.dispatchOutgoing` 投递到 IM platform。同时本地
+     *   `ChatHistoryManager` 也写一份（in-app 仍能看到，无信息丢失）。
+     * - `deliver = "local"`（或 `origin` 缺失）→ 只写
+     *   `ChatHistoryManager` + emit `ProcessingCompleted` event。
+     * - `origin.platform == "app"` 短路：in-app chat 没有 IM adapter，
+     *   `writeLocalChatNote` 已经在顶部无条件调过了。
      *
-     * `deliveryError` is bubbled up via the caller's `markJobRun(...)`
-     * so `last_delivery_error` is observable by the user via
-     * `cronjob(action="list")`.
+     * `deliveryError` 通过 caller 的 `markJobRun(...)` 浮到
+     * `last_delivery_error` 字段，cronjob list 可见。
      */
     private suspend fun deliver(
         context: Context,
@@ -154,12 +256,9 @@ object CronAgentRunner {
         @Suppress("UNCHECKED_CAST")
         val origin = job["origin"] as? Map<String, Any?>
 
-        // Always write to local chat history so the user can review cron
-        // output in the app UI. R-AGENT-035 only ADDS the IM dispatch path;
-        // it does not replace R-AGENT-031's local persistence.
+        // 始终写本地 chat history，让用户在 app UI 里也能看到
         writeLocalChatNote(context, chatId, jobName, jobId, body)
 
-        // Decide whether to ALSO push to an IM platform.
         val originMatched = deliverMode == "origin" && origin != null
         if (!originMatched) {
             AppLogger.d(TAG, "deliver: job '$jobId' deliver=$deliverMode origin=${origin != null}; local-only path")
@@ -179,10 +278,8 @@ object CronAgentRunner {
         }
 
         // R-AGENT-045: app-origin 短路 —— in-app chat 没有 IM adapter，
-        // dispatchOutgoing 会返回 false → 抛 IllegalStateException →
-        // markJobRun 误记 last_delivery_error。writeLocalChatNote 已经在
-        // 顶部无条件调过了，cron 输出已经落进 in-app chat 历史，所以这里
-        // 直接 return，不进 gateway 派发路径。
+        // dispatchOutgoing 会返回 false → 抛 IllegalStateException → markJobRun
+        // 误记 last_delivery_error。writeLocalChatNote 已经在顶部无条件调过了。
         if (originPlatform == "app") {
             AppLogger.d(
                 TAG,
@@ -209,7 +306,6 @@ object CronAgentRunner {
             throw e
         }
         if (!ok) {
-            // Surface to caller so markJobRun records last_delivery_error.
             throw IllegalStateException(
                 "dispatchOutgoing returned false for platform=$originPlatform chatId=$originChatId " +
                     "(gateway not running or adapter not registered)"
