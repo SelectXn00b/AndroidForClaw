@@ -1580,6 +1580,25 @@ R-AGENT-031 既有 TC-AGENT-031-c 的 15 分钟最小 interval guard 是针对 *
 
 ---
 
+## 域 GATEWAY — Weixin context_token 持久化 + tokenless retry（2026-06-23 第五次 bugfix）
+
+**背景**：j-bugfix（TC-CRON-EXACT-j）唤醒 `GatewayForegroundService` 后，`HermesGatewayController.runner` 不再为 null，但用户实测"app chat 收到提醒，微信仍收不到"。源码 trace 坐实第五层 bug：`WeixinAdapter._contextTokens` 是 **in-memory `ConcurrentHashMap`**（`Weixin.kt:54`），inbound 时只写内存（`Weixin.kt:333`）不落盘。设备闲置时 OEM ROM 杀 `GatewayForegroundService` → process restart 后 in-memory map 清空 → cron 5 分钟后 alarm 触发，warmup 唤醒 service 拿到新 process → `WeixinAdapter.send` `ctxToken=null` → iLink 拒收或静默 drop。Python 上游 `reference/hermes-agent/gateway/platforms/weixin.py:1127` `WeixinAdapter.__init__` 已经初始化 disk-backed `ContextTokenStore(hermes_home)`，inbound `_handleInbound` 调 `self._token_store.set(account_id, peer, ctx)` 持久化（line 1322），outbound `send` 从 disk store 读（line 1567）。Kotlin 翻译漏了这条路径；并且 `Weixin.kt:1094` 实际**已经写好 `ContextTokenStore`** 但 `WeixinAdapter` 没接入（死代码）。
+
+同时漏的第二件：Python `_send_text_chunk`（`weixin.py:1485-1556`）在 `errcode == SESSION_EXPIRED_ERRCODE`（-14）时**去掉 `context_token` 重发一次**作为降级 fallback，并清掉 store 里的过期 token（line 1526-1528）。Kotlin `WeixinAdapter.send`（`Weixin.kt:91-147`）没有 retry，with-token 失败就 SendResult(success=false)，直接挂掉派发链路。
+
+| ID | 关联 R-ID | 行为描述（输入 / 期望输出） | 测试断言 | 测试类型 | 测试方法 / 状态 |
+|---|---|---|---|---|---|
+| TC-GW-WX-context-token-persist-1 | R-AGENT-035 + Python `weixin.py:1127` | `WeixinAdapter` 必须接入 disk-backed `ContextTokenStore`（不是 in-memory `ConcurrentHashMap`）。inbound 收到带 `context_token` 的消息时必须落盘；process restart 后 `WeixinAdapter` 重建仍能拿到上次 inbound 的 token。 | 源码扫描 `Weixin.kt`：`WeixinAdapter` 体内必须 reference `ContextTokenStore`（按字面值）；`_handleInbound`（或同名 inbound 处理函数）必须调 `_tokenStore.set(` / `_tokenStore.set(_accountId, ` 形式（任一），把 `context_token` 持久化。回归红线：`_handleInbound` 体里不应再含 `_contextTokens[<key>] =` 形式的纯 in-memory 写（用 `ContextTokenStore` 替换）。 | unit-scan | `WeixinContextTokenPersistTest#TC-GW-WX-context-token-persist-1 inbound persists context token via ContextTokenStore` 🔴 |
+| TC-GW-WX-context-token-persist-2 | R-AGENT-035 + Python `weixin.py:1567` | `WeixinAdapter.send` 必须从 disk-backed `ContextTokenStore` 读 `context_token`（而不是 in-memory map），这样 cron 触发时即使 process 重建也能找到上次 inbound 持久化的 token。 | 源码扫描 `Weixin.kt::send` 函数体：必须 reference `_tokenStore.get(` / `tokenStore.get(` 形式（按字面值匹配），且不应只读 `_contextTokens[chatId]`。 | unit-scan | `WeixinContextTokenPersistTest#TC-GW-WX-context-token-persist-2 send reads context token from ContextTokenStore` 🔴 |
+| TC-GW-WX-context-token-persist-3 | R-AGENT-035 + Python `weixin.py:1127` | `WeixinAdapter.__init__` 必须在构造时 call `ContextTokenStore(hermesHome).restore(_accountId)`，把上次 process 写入的 token 加载到内存（性能 + 与 Python 上游一致）。 | 源码扫描 `Weixin.kt`：`WeixinAdapter` 构造逻辑（init block / property initializer）必须含 `ContextTokenStore(` 调用 + `.restore(` 调用。 | unit-scan | `WeixinContextTokenPersistTest#TC-GW-WX-context-token-persist-3 adapter restores tokens from disk on init` 🔴 |
+| TC-GW-WX-tokenless-retry-1 | R-AGENT-035 + Python `weixin.py:1485-1556` | `WeixinAdapter.send` 必须在 errcode 看起来是 session-expired（`SESSION_EXPIRED_ERRCODE` = -14，与 ret/errcode 任一相等）时去掉 `context_token` 重发一次（一次性 retry，不是无限循环）。同时清掉 `ContextTokenStore` 里的过期 token，避免下次 send 又拿同一个废 token。 | 源码扫描 `Weixin.kt::send`：函数体必须含 `SESSION_EXPIRED_ERRCODE` 字面值；必须含 `retryWithoutToken` / `retriedWithoutToken` / `tokenlessRetry` 类似命名的 boolean / state 字面值；必须含再次调 `_apiClient.newCall(` 或 `EP_SEND_MESSAGE` 的代码段（同函数体里至少出现两次发起请求的形式）。 | unit-scan | `WeixinContextTokenPersistTest#TC-GW-WX-tokenless-retry-1 send retries without token on session-expired` 🔴 |
+| TC-GW-WX-tokenless-retry-2 | R-AGENT-035 | 派发链路 errcode 必须可观测：`WeixinAdapter.send` 在 with-token 收到非零 errcode 时必须 `Log.w` 出明确日志含 `errcode` 字面值；tokenless retry 触发时必须有"retrying without context_token"类日志。`SendResult.error` 字段已经把 `errcode=<X>` 字符串带回去，`HermesGatewayController.dispatchOutgoing` 现在已经把这条 error 写进 `gateway.log`，所以不需要 hermes-android 反向依赖 app 的 `GatewayFileLogger`。 | 源码扫描 `Weixin.kt::send` 函数体：必须含 `errcode` 字面值用于 `Log.w` 调用；retry 决策必须有日志记录（`without context_token` 类字面值）。 | unit-scan | `WeixinContextTokenPersistTest#TC-GW-WX-tokenless-retry-2 send logs errcode + retry decisions` 🔴 |
+| TC-GW-WX-manual | R-AGENT-035 + R-AGENT-031 + R-AGENT-033 | 端到端手测：在微信里跟 agent 说"5 分钟后提醒我喝水"，强 kill `GatewayForegroundService`，等 5–6 分钟，微信收到提醒。 | 微信原会话收到 ai 提醒消息；`/sdcard/Download/Hermes/gateway_logs/gateway.log` 含 `dispatchOutgoing: delivered platform=weixin chatId=...`（不是 `errcode=...` failure）。 | manual / E2E | `(no unit test; manual verification required)` 🔴 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — Cron→IM Delivery Loop (R-AGENT-033)
 
 R-AGENT-033 补 R-AGENT-031 设计层就没做的 cron→IM 投递回路。R-AGENT-031 验收 D 只要求"写 Room DB + 通知活动 chat UI"——结果飞书/Telegram bot 触发的 cron 任务到点后，回复永远到不了 IM。本 R 修 3 个独立 bug：(A) Run.kt::_handleMessage 没调 `setSessionVars`，(B) CronjobTools._originFromEnv 用 `System.getenv` 在 Android 永远返 null，(C) Scheduler.deliverResult 没人接 cron→IM 直投通道。

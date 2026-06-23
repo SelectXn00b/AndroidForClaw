@@ -50,8 +50,17 @@ class WeixinAdapter(
         .writeTimeout(10, TimeUnit.SECONDS)
         .build()
 
-    /** `context_token` cache keyed by peer user id — harvested from inbound messages. */
-    private val _contextTokens: MutableMap<String, String> = java.util.concurrent.ConcurrentHashMap()
+    /**
+     * Disk-backed `context_token` store keyed by `(accountId, peerUserId)`.
+     * Harvested from inbound messages, restored at startup so the process can
+     * keep talking to peers across cold-starts (OEM ROMs love to nuke the
+     * gateway foreground service).
+     * 对齐 weixin.py:1127 (init) / 1322 (inbound write) / 1567 (outbound read).
+     */
+    private val _tokenStore: ContextTokenStore =
+        ContextTokenStore(com.xiaomo.hermes.hermes.getHermesHome().absolutePath).also {
+            if (_accountId.isNotEmpty()) it.restore(_accountId)
+        }
 
     /** Short-lived typing-ticket cache keyed by peer user id. */
     private val _typingCache: TypingTicketCache = TypingTicketCache()
@@ -104,43 +113,76 @@ class WeixinAdapter(
                 }
             }
 
-            val ctxToken = _contextTokens[chatId]
-            val msg = JSONObject().apply {
-                put("to_user_id", chatId)
-                put("client_id", clientId)
-                if (ctxToken != null) put("context_token", ctxToken)
-                put("message_type", MSG_TYPE_BOT)  // iLink envelope sender role
-                put("message_state", 2)             // FINISH
-                put("item_list", org.json.JSONArray().put(
-                    JSONObject().apply {
-                        put("type", ITEM_TEXT)
-                        put("text_item", JSONObject().apply { put("text", content) })
+            // Tokenless retry loop: if iLink rejects with SESSION_EXPIRED_ERRCODE,
+            // drop the stale token and retry exactly once without it.
+            // 对齐 weixin.py:1485-1556 `_send_text_chunk` retried_without_token 分支。
+            var retriedWithoutToken = false
+            while (true) {
+                val ctxToken = if (retriedWithoutToken) null
+                else _tokenStore.get(_accountId, chatId)
+
+                val msg = JSONObject().apply {
+                    put("to_user_id", chatId)
+                    put("client_id", clientId)
+                    if (ctxToken != null) put("context_token", ctxToken)
+                    put("message_type", MSG_TYPE_BOT)  // iLink envelope sender role
+                    put("message_state", 2)             // FINISH
+                    put("item_list", org.json.JSONArray().put(
+                        JSONObject().apply {
+                            put("type", ITEM_TEXT)
+                            put("text_item", JSONObject().apply { put("text", content) })
+                        }
+                    ))
+                }
+                val payload = JSONObject().apply {
+                    put("msg", msg)
+                    put("base_info", JSONObject().apply { put("channel_version", CHANNEL_VERSION) })
+                }
+
+                val body = payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+                val request = _ilinkRequest(EP_SEND_MESSAGE).post(body).build()
+
+                val result = _apiClient.newCall(request).execute().use { resp ->
+                    val text = resp.body?.string() ?: ""
+                    if (!resp.isSuccessful) {
+                        Log.w(_TAG, "send HTTP ${resp.code} for chat=${_safeId(chatId)}: ${text.take(200)}")
+                        return@use SendResult(success = false, error = "HTTP ${resp.code}: ${text.take(200)}")
                     }
-                ))
-            }
-            val payload = JSONObject().apply {
-                put("msg", msg)
-                put("base_info", JSONObject().apply { put("channel_version", CHANNEL_VERSION) })
-            }
-
-            val body = payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-            val request = _ilinkRequest(EP_SEND_MESSAGE).post(body).build()
-
-            _apiClient.newCall(request).execute().use { resp ->
-                val text = resp.body?.string() ?: ""
-                if (!resp.isSuccessful) {
-                    return@withContext SendResult(success = false, error = "HTTP ${resp.code}: ${text.take(200)}")
+                    val data = try { JSONObject(text) } catch (_: Exception) { JSONObject() }
+                    val errcode = data.optInt("errcode", data.optInt("ret", 0))
+                    if (errcode != 0) {
+                        Log.w(
+                            _TAG,
+                            "send rejected errcode=$errcode errmsg=${data.optString("errmsg")} " +
+                                "chat=${_safeId(chatId)} hadToken=${ctxToken != null}"
+                        )
+                        return@use SendResult(
+                            success = false,
+                            error = "errcode=$errcode ${data.optString("errmsg")}"
+                        )
+                    }
+                    SendResult(success = true, messageId = clientId)
                 }
-                val data = try { JSONObject(text) } catch (_: Exception) { JSONObject() }
-                val errcode = data.optInt("errcode", data.optInt("ret", 0))
-                if (errcode != 0) {
-                    return@withContext SendResult(
-                        success = false,
-                        error = "errcode=$errcode ${data.optString("errmsg")}"
+
+                if (result.success) return@withContext result
+
+                // Check for SESSION_EXPIRED_ERRCODE — retry once tokenless.
+                val errStr = result.error ?: ""
+                val isSessionExpired = errStr.contains("errcode=$SESSION_EXPIRED_ERRCODE")
+                if (isSessionExpired && !retriedWithoutToken) {
+                    Log.w(
+                        _TAG,
+                        "session expired (errcode=$SESSION_EXPIRED_ERRCODE) for chat=${_safeId(chatId)}, " +
+                            "retry tokenless (without context_token)"
                     )
+                    retriedWithoutToken = true
+                    continue
                 }
-                SendResult(success = true, messageId = clientId)
+                return@withContext result
             }
+            // unreachable but compiler-required
+            @Suppress("UNREACHABLE_CODE")
+            SendResult(success = false, error = "unreachable")
         } catch (e: Exception) {
             SendResult(success = false, error = e.message)
         }
@@ -189,7 +231,7 @@ class WeixinAdapter(
         try {
             val payload = JSONObject().apply {
                 put("ilink_user_id", chatId)
-                _contextTokens[chatId]?.let { put("context_token", it) }
+                _tokenStore.get(_accountId, chatId)?.let { put("context_token", it) }
                 put("base_info", JSONObject().apply { put("channel_version", CHANNEL_VERSION) })
             }
             val body = payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
@@ -328,9 +370,12 @@ class WeixinAdapter(
             }
         }
 
-        // Harvest context_token for later send()
+        // Harvest context_token for later send() — persist to disk so it
+        // survives process restart (OEM ROMs kill the gateway service often).
         val ctx = msg.optString("context_token", "")
-        if (ctx.isNotEmpty()) _contextTokens[fromUserId] = ctx
+        if (ctx.isNotEmpty() && _accountId.isNotEmpty()) {
+            _tokenStore.set(_accountId, fromUserId, ctx)
+        }
 
         // Extract text from item_list
         val itemList = msg.optJSONArray("item_list") ?: return
