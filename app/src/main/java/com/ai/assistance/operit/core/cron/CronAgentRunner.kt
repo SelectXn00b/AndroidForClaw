@@ -6,6 +6,7 @@ import com.ai.assistance.operit.data.model.ChatMessage
 import com.ai.assistance.operit.data.repository.ChatHistoryManager
 import com.ai.assistance.operit.hermes.gateway.GatewayChatEventBus
 import com.ai.assistance.operit.hermes.gateway.HermesGatewayController
+import com.ai.assistance.operit.services.gateway.GatewayForegroundService
 import com.ai.assistance.operit.util.AppLogger
 import com.xiaomo.hermes.hermes.cron.markJobRun
 import com.xiaomo.hermes.hermes.cron.saveJobOutput
@@ -16,6 +17,7 @@ import com.xiaomo.hermes.hermes.gateway.setCronAutoDeliverVars
 import com.xiaomo.hermes.hermes.gateway.setSessionVars
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * R-AGENT-031 + TC-CRON-EXACT-i (2026-06-23 第三次 bugfix，0 字节 output 文件根因)：
@@ -289,11 +291,48 @@ object CronAgentRunner {
             return
         }
 
+        // TC-CRON-EXACT-j (2026-06-23 第四次 bugfix)：cron 触发的典型场景下，
+        // GatewayForegroundService 经常已被 OEM ROM 在后台杀掉 ——
+        // `HermesGatewayController.runner == null` → dispatchOutgoing 第一行立刻
+        // return false（HermesGatewayController.kt:198-203） → 抛 IllegalStateException
+        // → 用户看到 "app chat 收到了，但微信收不到"。
+        //
+        // 修法：进入 IM dispatch 之前先唤醒 GatewayForegroundService 并等
+        // status==RUNNING（runner 字段被赋值的同一时刻），再调 dispatchOutgoing。
+        // app-origin 路径在上面已经短路 return，不会触达这条 warmup。
+        val gateway = HermesGatewayController.getInstance(context.applicationContext)
+        if (gateway.status.value != HermesGatewayController.Status.RUNNING) {
+            AppLogger.d(
+                TAG,
+                "deliver: job '$jobId' gateway status=${gateway.status.value}, warming up GatewayForegroundService " +
+                    "before dispatching to platform=$originPlatform"
+            )
+            try {
+                GatewayForegroundService.start(context.applicationContext)
+            } catch (e: Throwable) {
+                // startForegroundService 在 BG-launch 受限的极端情况下可能抛
+                // ForegroundServiceStartNotAllowedException —— 此处不阻断流程，
+                // 让下面的 withTimeoutOrNull 等到超时再 throw warmup timeout。
+                AppLogger.w(TAG, "deliver: GatewayForegroundService.start threw for job '$jobId': ${e.message}")
+            }
+            val reached = withTimeoutOrNull(30_000L) {
+                gateway.status.first { it == HermesGatewayController.Status.RUNNING }
+                true
+            }
+            if (reached != true) {
+                throw IllegalStateException(
+                    "gateway warmup timeout: HermesGatewayController did not reach RUNNING within 30s " +
+                        "for platform=$originPlatform chatId=$originChatId (GatewayForegroundService " +
+                        "failed to start or stuck in STARTING/FAILED)"
+                )
+            }
+            AppLogger.d(TAG, "deliver: job '$jobId' gateway warmup completed, proceeding to dispatchOutgoing")
+        }
+
         AppLogger.d(
             TAG,
             "deliver: job '$jobId' dispatching to platform=$originPlatform chatId=$originChatId thread=$originThreadId len=${body.length}"
         )
-        val gateway = HermesGatewayController.getInstance(context.applicationContext)
         val ok = try {
             gateway.dispatchOutgoing(
                 platform = originPlatform,
