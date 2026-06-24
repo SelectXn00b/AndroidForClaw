@@ -20,9 +20,11 @@ import com.xiaomo.hermes.hermes.gateway.sessionContextElement
 import com.xiaomo.hermes.hermes.gateway.setCronAutoDeliverVars
 import com.xiaomo.hermes.hermes.gateway.setSessionVars
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -183,12 +185,31 @@ object CronAgentRunner {
                     // collector, so dispatches are naturally ordered; we add a `Mutex`
                     // belt-and-suspenders so that the intent is explicit and survives
                     // any future switch to `launchIn` / parallel collectors.
-                    val sidecarJob: Job? = if (streamingEnabled) {
+                    val sidecarJob: Job?
+                    val sidecarReady: CompletableDeferred<Unit>?
+                    if (streamingEnabled) {
                         val dispatchMutex = Mutex()
                         val gatewayForSidecar = HermesGatewayController.getInstance(context.applicationContext)
-                        launch {
+                        // R-CRON-STREAMING-001 fix (2026-06-25): `AgentEventBus.events` is a
+                        // `SharedFlow(replay=0)`, so any AssistantDelta emitted BEFORE the
+                        // collector finishes registering is silently dropped. `launch { collect }`
+                        // only enqueues the coroutine; subscription registration happens
+                        // asynchronously after the launching coroutine suspends. If
+                        // `enhancedService.sendMessage(...)` below triggers the agent loop
+                        // and the loop emits all per-turn AssistantDelta events before our
+                        // collector registers, the sidecar dispatches 0 messages -> the
+                        // user sees one combined message via the deliver(...) fallback path.
+                        //
+                        // Fix: use `onSubscription { ready.complete(Unit) }` (runs AFTER the
+                        // subscription is registered with the SharedFlow) and `ready.await()`
+                        // before calling `sendMessage`. This guarantees the sidecar collector
+                        // is live by the time the agent starts emitting.
+                        val ready = CompletableDeferred<Unit>()
+                        sidecarReady = ready
+                        sidecarJob = launch {
                             try {
                                 AgentEventBus.events
+                                    .onSubscription { ready.complete(Unit) }
                                     .collect { tagged ->
                                         if (tagged.chatId != resolvedChatId) return@collect
                                         val event = tagged.event
@@ -238,6 +259,9 @@ object CronAgentRunner {
                                         "streaming sidecar collect failed jobId=$jobId reason=${e.message}"
                                     )
                                 }
+                            } finally {
+                                // 防御：如果 collect 还没注册就被取消/抛异常，确保 await 不会永远卡住。
+                                if (!ready.isCompleted) ready.complete(Unit)
                             }
                         }
                     } else {
@@ -253,8 +277,14 @@ object CronAgentRunner {
                                     }
                                 }"
                         )
-                        null
+                        sidecarJob = null
+                        sidecarReady = null
                     }
+
+                    // 等订阅注册完成后再触发 agent，避免 SharedFlow(replay=0) 把早期
+                    // AssistantDelta 丢给虚空。如果 sidecar 因为 streamingEnabled=false
+                    // 没启动，sidecarReady 为 null，直接走主路即可。
+                    sidecarReady?.await()
 
                     val enhancedService = EnhancedAIService.getInstance(context.applicationContext)
                     val responseStream = enhancedService.sendMessage(
