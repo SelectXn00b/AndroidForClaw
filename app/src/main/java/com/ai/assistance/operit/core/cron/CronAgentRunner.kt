@@ -6,6 +6,7 @@ import com.ai.assistance.operit.data.model.ChatMessage
 import com.ai.assistance.operit.data.repository.ChatHistoryManager
 import com.ai.assistance.operit.hermes.gateway.GatewayChatEventBus
 import com.ai.assistance.operit.hermes.gateway.HermesGatewayController
+import com.ai.assistance.operit.hermes.gateway.HermesReplyMarkupStripper
 import com.ai.assistance.operit.services.gateway.GatewayForegroundService
 import com.ai.assistance.operit.util.AppLogger
 import com.xiaomo.hermes.hermes.cron.markJobRun
@@ -162,6 +163,25 @@ object CronAgentRunner {
                 }
             }
             output = responseBuilder.toString()
+            // TC-CRON-SANITIZE-d (R-AGENT-031 / R-AGENT-035): strip Hermes internal
+            // XML markup (<think>/<tool>/<tool_result>/<status>) BEFORE persistence
+            // (saveJobOutput), local chat note (writeLocalChatNote), and IM dispatch
+            // (gateway.dispatchOutgoing).  Normal IM path strips via
+            // HermesGatewayController.extractFinalReply -> stripMarkup, but the
+            // headless cron path here was bypassing it -- bug 2026-06-24:
+            // "<think>The cron job triggered a reminder to drink water...</think>"
+            // was leaking into Weixin delivery.
+            output = HermesReplyMarkupStripper.strip(output).trim()
+            // 2026-06-24 regression-guard: mirror normal IM path
+            // (`HermesGatewayController.extractFinalReply().ifEmpty { "(empty response)" }`,
+            //  line 547-549) — if the stream was entirely <think>...</think> or
+            // got cut mid-think (UNCLOSED_THINK_REGEX swallowed everything), still
+            // deliver a visible placeholder instead of silently skipping dispatch.
+            // Without this the cron→Weixin path silently drops empty-after-strip
+            // jobs, breaking R-AGENT-031/035 again from the user's PoV.
+            if (output.isBlank()) {
+                output = "(empty response)"
+            }
             success = output.isNotBlank()
             if (!success) {
                 errorMessage = "headless agent returned empty response"
