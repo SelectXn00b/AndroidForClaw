@@ -390,6 +390,18 @@ class GatewayRunner(
                 threadId = event.source.threadId ?: "",
             )
 
+            // R-AGENT-033 Bug A (continuation, 2026-06-24): `setSessionVars(...)` above only writes
+            // ThreadLocal on THIS thread. The agent loop / OkHttp / Dispatchers.IO downstream
+            // switches threads (HermesAgentLoop._chatCompletion at gateway/run.py-equivalent
+            // line 998/1922/2040 hits `withContext(Dispatchers.IO)`), so getSessionEnv()
+            // returns "" on those threads → CronjobTools._originFromEnv → null origin →
+            // effectiveDeliver = "local" → IM-triggered cron jobs never dispatch back to Weixin.
+            //
+            // `sessionContextElement()` (R-AGENT-045, SessionContext.kt:187-199) snapshots
+            // every session ThreadLocal as a Kotlin `ThreadLocalElement` so they ride with
+            // the coroutine context across dispatcher boundaries. This is the Kotlin
+            // equivalent of Python's `copy_context().run(...)` for `ContextVar`s.
+            withContext(sessionContextElement()) {
             // Get or create session
             val session = sessionStore.getOrCreate(
                 sessionKey = event.sessionKey,
@@ -418,7 +430,7 @@ class GatewayRunner(
                 userId = event.source.userId)
             if (preValidateResult is HookResult.Halt) {
                 Log.i(_TAG, "Message halted by pre-validate hook: ${preValidateResult.reason}")
-                return
+                return@withContext
             }
 
             // Run post-validate hooks
@@ -431,7 +443,7 @@ class GatewayRunner(
                 userId = event.source.userId)
             if (postValidateResult is HookResult.Halt) {
                 Log.i(_TAG, "Message halted by post-validate hook: ${postValidateResult.reason}")
-                return
+                return@withContext
             }
 
             // Run pre-agent hooks
@@ -444,7 +456,7 @@ class GatewayRunner(
                 userId = event.source.userId)
             if (preAgentResult is HookResult.Halt) {
                 Log.i(_TAG, "Message halted by pre-agent hook: ${preAgentResult.reason}")
-                return
+                return@withContext
             }
 
             // Invoke agent loop - 对齐 hermes-agent/gateway/run.py
@@ -507,7 +519,7 @@ class GatewayRunner(
                     is HookResult.Replace -> postAgentResult.newText
                     is HookResult.Halt -> {
                         Log.i(_TAG, "Any? halted by post-agent hook: ${postAgentResult.reason}")
-                        return
+                        return@withContext
                     }
                     else -> responseText
                 }
@@ -524,7 +536,7 @@ class GatewayRunner(
                     is HookResult.Replace -> preSendResult.newText
                     is HookResult.Halt -> {
                         Log.i(_TAG, "Send halted by pre-send hook: ${preSendResult.reason}")
-                        return
+                        return@withContext
                     }
                     else -> finalResponse
                 }
@@ -686,6 +698,7 @@ class GatewayRunner(
                 }
                 session.turnCount.incrementAndGet()
             }
+            } // close withContext(sessionContextElement())
         } catch (e: Exception) {
             Log.e(_TAG, "Error handling message: ${e.message}")
         } finally {
