@@ -610,19 +610,15 @@ class HermesGatewayController private constructor(private val appContext: Contex
         return java.io.File(dir, "undelivered.jsonl")
     }
 
-    /** Strip all internal XML markup from a text segment, leaving only user-visible text. */
-    private fun stripMarkup(text: String): String {
-        return text
-            .replace(ChatMarkupRegex.thinkTag, "")
-            .replace(ChatMarkupRegex.thinkSelfClosingTag, "")
-            .replace(UNCLOSED_THINK_REGEX, "")
-            .replace(ChatMarkupRegex.toolResultTag, "")
-            .replace(ChatMarkupRegex.toolResultSelfClosingTag, "")
-            .replace(ChatMarkupRegex.toolTag, "")
-            .replace(ChatMarkupRegex.toolSelfClosingTag, "")
-            .replace(ChatMarkupRegex.statusTag, "")
-            .replace(ChatMarkupRegex.statusSelfClosingTag, "")
-    }
+    /**
+     * Strip all internal XML markup from a text segment, leaving only
+     * user-visible text.  Delegates to [HermesReplyMarkupStripper] so
+     * cron-headless and gateway-normal paths share one source of truth
+     * (TC-CRON-SANITIZE-a).  Previously this function held its own
+     * regex chain + a private `UNCLOSED_THINK_REGEX`; both moved to the
+     * stripper object.
+     */
+    private fun stripMarkup(text: String): String = HermesReplyMarkupStripper.strip(text)
 
     /**
      * Extract the final reply text from raw AI message content.
