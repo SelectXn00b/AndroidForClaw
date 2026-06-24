@@ -2526,3 +2526,90 @@ C. **兼容老 jobs.json**：origin 为 null 的老 job 走 `result.chatId` (exe
 - 老 jobs.json（origin 为 null）兼容：fallback 到 `executor.createIfNone`，不崩
 
 
+### R-OBS-001: cron / gateway / weixin 派发链路落地诊断日志（agent 可读）
+**来源**:
+- 用户 2026-06-23 一晚连续多版"cron 微信收不到"盲修（j-bugfix gateway warmup → f638e5c8 → wxtokenpersist 14eb9059）—— 5 层根因里至少 3 层猜不准，每次都要"再发一版 APK + 等下次复现"。
+- 用户提供的 4 步诊断结果（详见 `MEMORY-AUTO.md` 2026-06-23 22:30+ 段）：
+  - `/data/data/com.xiaomo.androidforclaw/` 不可读（无 root + app not debuggable + `run-as` / `su` 全失败）
+  - `logcat` 容易被清空（之前 `adb logcat -c`）
+  - 既有 `gateway.log` 只记 AI 对话交互（`AppLogger.GatewayFileLogger` 当前的 7 个调用方都在 `EnhancedAIService` / `PromptTurn` / `OpenAIProvider` / `OperitChatCompletionServer` / `OperitToolDispatcher` / `HermesGatewayController` 内），**派发链路（CronAgentRunner / CronExactAlarmReceiver / dispatchOutgoing 内部 / WeixinAdapter.send / WeixinAdapter._runPollLoop）零落盘**。
+- 结论：调试器 / agent 对 cron 派发链路是"瞎"的，证据链断在采集端。
+
+**背景**:
+- agent 已在设备上、与 app 同 uid，但只能读 `/sdcard/Download/Hermes/` 这种公共目录。
+- 既有 `GatewayFileLogger` 路径 `OperitPaths.operitRootDir() + "/gateway_logs/gateway.log"` = `/sdcard/Download/Hermes/gateway_logs/gateway.log` —— 公共可读，agent 可 `cat`。但它的语义是"AI 对话诊断"，混进派发链路日志会冲掉 AI 上下文。
+- 三条派发链路的卡点排查需要的最小日志集（来自实际 bugfix 复盘）：
+  - **cron 链路**：alarm 到点 → CronTickWorker / CronExactAlarmReceiver → CronAgentRunner.run agent loop → CronAgentRunner.deliver 分支（origin / local）
+  - **gateway 派发**：HermesGatewayController.dispatchOutgoing IN/OUT + result.error
+  - **weixin 透传**：WeixinAdapter.connect / send IN/OUT errcode / `_runPollLoop` 退出（OEM ROM 杀 service 的关键证据）
+
+**架构合规**:
+- 复用已有 `GatewayFileLogger` 路径前缀（`OperitPaths.operitRootDir()`），添加 2 个 sibling singleton（`CronFileLogger` / `WeixinFileLogger`），分别写到子目录：
+  - `/sdcard/Download/Hermes/cron_logs/cron.log`
+  - `/sdcard/Download/Hermes/cron_logs/weixin.log`
+  - （`gateway.log` 现有路径不动）
+- 7 个既有 `GatewayFileLogger.{i,w,e,d}` 调用点**不改**（避免 blast radius）。
+- 新增的 logger object 复用 `GatewayFileLogger` 的内部模板（dateFormat / FileWriter append / trimIfNeeded / MAX_FILE_BYTES=2MB）。**这是新功能，无 Python 上游**——Python hermes 服务器侧用 stdout logger，移动端没有终端可看。
+- 写入点（共 13 个落盘点）：
+  - `CronAgentRunner.run` 入口 / 出口（`CronFileLogger`）
+  - `CronAgentRunner.deliver` 分支判断 + 投递结果（`CronFileLogger`）
+  - `CronExactAlarmReceiver.onReceive` 入口 / dispatch 完成（`CronFileLogger`）
+  - `HermesGatewayController.dispatchOutgoing` IN / OUT（已有写 result.error 到 `GatewayFileLogger`，新增 IN 行 + 改成同时也写到 `CronFileLogger` ——派发链路的关键节点）
+  - `WeixinAdapter.connect` 成功 / 失败（`WeixinFileLogger`）
+  - `WeixinAdapter.send` IN / OUT errcode（`WeixinFileLogger`）
+  - `WeixinAdapter._runPollLoop` 启动 / 退出（`WeixinFileLogger` —— service 被杀的关键证据）
+- **hermes-android 模块的写入点**（`WeixinAdapter` 在 hermes-android）通过接口注入避免反向依赖：
+  - hermes-android 侧定义 `interface PlatformDiagSink { fun i(tag,msg); fun w(tag,msg); fun e(tag,msg) }`
+  - app 侧 `WeixinFileLogger` 实现接口，在 `HermesGatewayController` 启动 adapter 时通过 setter / constructor param 注入
+  - 默认 sink = no-op（不破坏 hermes-android 单测）
+
+**与既有 R 的关系**:
+- 不动 R-AGENT-031（cron 持久化）/ R-AGENT-035（origin → IM 投递）/ R-GW-WX-context-token-persist（context_token 持久化）的任何行为；纯叠加观测层。
+- 既有 `GatewayFileLogger` 不动，向下兼容。
+
+**验收**:
+- 装版本后，在微信侧创建 1min cron，等触发：
+  - `cat /sdcard/Download/Hermes/cron_logs/cron.log` 必含 `alarm fired jobId=...` + `agent done jobId=... outputLen=...` + `deliver mode=...`
+  - `cat /sdcard/Download/Hermes/gateway_logs/gateway.log` 必含 `dispatchOutgoing IN platform=weixin chat=...` + `dispatchOutgoing OUT success=...`（若失败有 error=...）
+  - `cat /sdcard/Download/Hermes/cron_logs/weixin.log` 必含 `send IN chat=... hadToken=...` + `send OUT errcode=... errmsg=...`
+- 任一日志文件单独存在均可用 `tail -100` / `grep errcode=` 排查。
+- `WeixinAdapter` 单测仍可在 hermes-android 模块单独跑（注入 no-op sink）。
+- 日志文件超过 2MB 时自动 trim 后半保留。
+
+---
+
+### R-CRON-STREAMING-001: cron / IM gateway 派发的 agent 回复按"agent loop 轮次"分段连发
+
+**来源**:
+- 用户 2026-06-25 反馈：r3 APK 后微信能正常收到 cron 触发的喝水提醒，但用户要等 agent 整段（reasoning + 多轮 tool_call + 最终回复）跑完才一次性收到一坨文本。期望效果"看 app 对话框时是一段思考 → 回一句话 → 调工具 → 再思考 → 再回一句话 → 最终结果，希望微信只收到那些'回话'，但是一轮一条独立发"。
+- 无 Python 上游——Python hermes 是 server 模式，没有 IM gateway streaming dispatch 这层；本需求纯 Android 端 IM UX。
+
+**背景**:
+- `HermesAgentLoop` 已经按"turn"在 `AgentEventBus` 上 emit `AgentEvent.AssistantDelta(text, turn)`（`hermes-android/.../AgentLoop.kt:582`），每轮 assistant message 一次，含完整 content 文本（剥过 `<think>` 之前）。
+- `EnhancedAIService` 同步 emit 同样事件到 `AgentEventBus`，key 是 `taskIdValue` = `chatId`（`EnhancedAIService.kt:1041,1167`）。
+- 既有 `CronAgentRunner.run` 走的是流式 chunk 累加路径（`responseStream.collect { chunk -> responseBuilder.append(chunk) }`），整段跑完后才 `HermesReplyMarkupStripper.strip(output)` → `deliver(...)`。**这条主路保持不动**，只在旁路加一个 bus 订阅，在每轮 `AssistantDelta` 到来时增量 dispatch 一条到 IM。
+
+**架构合规**:
+- **新增旁路、不动主路**：`CronAgentRunner.run` 在 `responseStream.collect` 之前订阅 `AgentEventBus.events` 过滤 `taskId == this job's chatId`；遇 `AssistantDelta` 即剥 markup 后立即 dispatch 一条到 IM；主路依然累积全文，最终落盘 / writeLocalChatNote 不变。这样：
+  - 插话（`/steer`，R-AGENT-036/037）不受影响——插话本来就是 inbound 路径，不走 AssistantDelta。
+  - 定时器接收（`CronExactAlarmReceiver` → `CronAgentRunner.run`）入口不动。
+  - 既有 `HermesReplyMarkupStripper.strip` 两处调用点（`CronAgentRunner.kt:178` + `HermesGatewayController.kt:654`）不动；新增的"逐轮 strip"复用同一个 `HermesReplyMarkupStripper.strip` object，**不引入第二份正则源**。
+- **群聊回退**：若 `originPlatform == "weixin"` 且 `originChatId.endsWith("@chatroom")`，旁路订阅不启用，回到整段发（避免群里刷屏 + 触发微信短时高频风控）。
+- **顺序保证**：旁路用 `Mutex` + sequential await 串行调 `gateway.dispatchOutgoing`，避免多轮并发乱序。
+- **失败语义**：旁路中某轮 dispatch 失败时不抛、不中断 agent loop（agent 还在跑），只写 `CronFileLogger.w(...)` 一行 `streaming dispatch turn=N failed errcode=...`；主路最终落盘的 `output` 不受影响。**已发的不撤回**（微信无 edit API，也不做撤回模拟）。
+- **去重保护**：旁路逐轮发出后，主路最终 `deliver(...)` 必须能识别"已经逐轮发过了，不要再整段重发一次"——通过在 `deliver(...)` 入口检测一个"streaming-already-delivered"标记跳过 IM dispatch，但 `writeLocalChatNote(...)` + `saveJobOutput(...)` 仍照常执行（保证 app 内对话框 / 历史完整）。
+- **回退开关**：如果订阅 bus 失败 / agent loop 没产生任何 `AssistantDelta`（极端情况，例如 model 直接报错），主路 fallback 回原有"整段 dispatch"流程，行为退化到 r3 APK 等价状态。
+
+**与既有 R 的关系**:
+- 不动 R-AGENT-031（cron 持久化）/ R-AGENT-033（origin → IM 投递）/ R-AGENT-035 / R-AGENT-036/037（`/steer` 插话）/ R-AGENT-045（cross-dispatcher session vars）/ R-OBS-001（诊断日志）。
+- 新增的逐轮 dispatch 复用 R-AGENT-033 的 `gateway.dispatchOutgoing(platform, chatId, text, threadId)` 接口，**不**新加 outbound API。
+- 复用 R-OBS-001 的 `CronFileLogger` 做旁路轨迹诊断（成功 / 失败 / 跳过群聊都写一行）。
+
+**验收**:
+- 装版本后，在微信私聊里让 agent 跑一个会调工具的多轮请求（如"帮我查下明天天气并提醒我带伞"），微信收到 **N 条独立气泡**（N = agent 实际"说话"的轮数），不是一坨；每条间隔基本对齐 agent 真实 turn 时长。
+- 微信群里跑同样请求，仍是**整段一条**（群聊回退路径生效）。
+- `cat /sdcard/Download/Hermes/cron_logs/cron.log` 含 `streaming dispatch turn=1 chat=... ok` / `streaming dispatch turn=2 chat=... ok` / `streaming dispatch finalize chat=... skipped (already delivered)` 类轨迹行。
+- app 内对话框 / `writeLocalChatNote` / `saveJobOutput` 落盘结果与 r3 APK 一致（不重复、不丢失）。
+- 插话功能（`/steer`）和定时器创建 / 触发功能未被破坏（手测 + 单测）。
+
+

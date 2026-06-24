@@ -4,11 +4,14 @@ import android.content.Context
 import com.ai.assistance.operit.api.chat.EnhancedAIService
 import com.ai.assistance.operit.data.model.ChatMessage
 import com.ai.assistance.operit.data.repository.ChatHistoryManager
+import com.ai.assistance.operit.hermes.gateway.AgentEventBus
+import com.ai.assistance.operit.hermes.gateway.CronFileLogger
 import com.ai.assistance.operit.hermes.gateway.GatewayChatEventBus
 import com.ai.assistance.operit.hermes.gateway.HermesGatewayController
 import com.ai.assistance.operit.hermes.gateway.HermesReplyMarkupStripper
 import com.ai.assistance.operit.services.gateway.GatewayForegroundService
 import com.ai.assistance.operit.util.AppLogger
+import com.xiaomo.hermes.hermes.AgentEvent
 import com.xiaomo.hermes.hermes.cron.markJobRun
 import com.xiaomo.hermes.hermes.cron.saveJobOutput
 import com.xiaomo.hermes.hermes.gateway.clearCronAutoDeliverVars
@@ -16,7 +19,13 @@ import com.xiaomo.hermes.hermes.gateway.clearSessionVars
 import com.xiaomo.hermes.hermes.gateway.sessionContextElement
 import com.xiaomo.hermes.hermes.gateway.setCronAutoDeliverVars
 import com.xiaomo.hermes.hermes.gateway.setSessionVars
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -110,6 +119,8 @@ object CronAgentRunner {
         }
 
         AppLogger.d(TAG, "running cron job '$jobName' (id=$jobId) [headless]")
+        val _runStartNs = System.nanoTime()
+        CronFileLogger.i(TAG, "agent run start jobId=$jobId name='$jobName' promptLen=${rawPrompt.length}")
 
         // R-AGENT-045 + R-AGENT-035：origin 写入 ThreadLocal，让 agent 回合内
         // `_originFromEnv()` 拿到对的 platform/chat_id（cronjob tools 读、send_message
@@ -141,6 +152,23 @@ object CronAgentRunner {
         var output = ""
         var success = false
         var errorMessage: String? = null
+        // R-CRON-STREAMING-001 (TC-CRON-STREAMING-a..e): per-turn streaming sidecar that
+        // dispatches each agent loop turn's assistant reply as a separate IM message.
+        //
+        // Subscribed/skipped per (originPlatform, originChatId):
+        //   - skipped for app-origin (no IM adapter)
+        //   - skipped for missing platform / chatId
+        //   - skipped for Weixin group chat (`chatId.endsWith("@chatroom")`) — would
+        //     otherwise N×spam the group; group still gets the main-path final delivery.
+        //
+        // `streamingDelivered` flips to true on the first successful per-turn dispatch
+        // and is read in `deliver(...)` to skip the main-path IM re-dispatch (the
+        // local chat note + `saveJobOutput` are still written, unchanged).
+        val streamingEnabled = originPlatform.isNotEmpty() &&
+            originChatId.isNotEmpty() &&
+            originPlatform != "app" &&
+            !(originPlatform == "weixin" && originChatId.endsWith("@chatroom"))
+        val streamingDelivered = AtomicBoolean(false)
         try {
             // R-AGENT-045 跨线程修：用 sessionContextElement() 包住 agent 调用，
             // 让 `EnhancedAIService.sendMessage` 内部 `withContext(Dispatchers.IO)`
@@ -148,21 +176,106 @@ object CronAgentRunner {
             // `copy_context().run(func)`，SessionContext.kt:187-199）。
             val responseBuilder = StringBuilder()
             withContext(sessionContextElement()) {
-                val enhancedService = EnhancedAIService.getInstance(context.applicationContext)
-                val responseStream = enhancedService.sendMessage(
-                    message = wrappedPrompt,
-                    chatId = resolvedChatId,
-                    chatHistory = emptyList(), // cron 回合 fresh context；历史已由 EnhancedAIService 从 DB/state 自己加载
-                    maxTokens = CRON_MAX_TOKENS,
-                    tokenUsageThreshold = CRON_TOKEN_USAGE_THRESHOLD,
-                    isSubTask = true, // 关键：跳过 startAiService 前台通知 + UI state 更新
-                    stream = true
-                )
-                responseStream.collect { chunk ->
-                    responseBuilder.append(chunk)
+                coroutineScope {
+                    // R-CRON-STREAMING-001 sidecar: subscribe to AgentEventBus, filter by
+                    // (chatId == resolvedChatId) && AssistantDelta, strip markup, dispatch
+                    // sequentially. The `.collect { ... }` lambda is sequential per
+                    // collector, so dispatches are naturally ordered; we add a `Mutex`
+                    // belt-and-suspenders so that the intent is explicit and survives
+                    // any future switch to `launchIn` / parallel collectors.
+                    val sidecarJob: Job? = if (streamingEnabled) {
+                        val dispatchMutex = Mutex()
+                        val gatewayForSidecar = HermesGatewayController.getInstance(context.applicationContext)
+                        launch {
+                            try {
+                                AgentEventBus.events
+                                    .collect { tagged ->
+                                        if (tagged.chatId != resolvedChatId) return@collect
+                                        val event = tagged.event
+                                        if (event !is AgentEvent.AssistantDelta) return@collect
+                                        val stripped = HermesReplyMarkupStripper.strip(event.text).trim()
+                                        if (stripped.isNotBlank()) {
+                                            dispatchMutex.withLock {
+                                                try {
+                                                    CronFileLogger.i(
+                                                        TAG,
+                                                        "streaming dispatch turn=${event.turn} jobId=$jobId " +
+                                                            "platform=$originPlatform chat=$originChatId textLen=${stripped.length}"
+                                                    )
+                                                    val ok = gatewayForSidecar.dispatchOutgoing(
+                                                        platform = originPlatform,
+                                                        chatId = originChatId,
+                                                        text = stripped,
+                                                        threadId = originThreadId.takeIf { it.isNotEmpty() },
+                                                    )
+                                                    if (ok) {
+                                                        streamingDelivered.set(true)
+                                                    } else {
+                                                        CronFileLogger.w(
+                                                            TAG,
+                                                            "streaming dispatch failed turn=${event.turn} jobId=$jobId " +
+                                                                "platform=$originPlatform chat=$originChatId reason=ok=false"
+                                                        )
+                                                    }
+                                                } catch (e: Throwable) {
+                                                    // 失败语义：单轮 dispatch 失败不抛、不中断 agent loop，
+                                                    // 只记 CronFileLogger，留待 deliver(...) 主路兜底。
+                                                    CronFileLogger.w(
+                                                        TAG,
+                                                        "streaming dispatch threw turn=${event.turn} jobId=$jobId " +
+                                                            "platform=$originPlatform chat=$originChatId reason=${e.message}"
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                            } catch (e: Throwable) {
+                                // SharedFlow.collect 在 cancel 时抛 CancellationException 属正常，
+                                // 不噪声；其他异常落日志，不影响主路。
+                                if (e !is kotlinx.coroutines.CancellationException) {
+                                    CronFileLogger.w(
+                                        TAG,
+                                        "streaming sidecar collect failed jobId=$jobId reason=${e.message}"
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        CronFileLogger.i(
+                            TAG,
+                            "streaming dispatch skipped jobId=$jobId platform=$originPlatform " +
+                                "chat=$originChatId reason=${
+                                    when {
+                                        originPlatform.isEmpty() || originChatId.isEmpty() -> "no-origin"
+                                        originPlatform == "app" -> "app-origin"
+                                        originPlatform == "weixin" && originChatId.endsWith("@chatroom") -> "weixin-group"
+                                        else -> "disabled"
+                                    }
+                                }"
+                        )
+                        null
+                    }
+
+                    val enhancedService = EnhancedAIService.getInstance(context.applicationContext)
+                    val responseStream = enhancedService.sendMessage(
+                        message = wrappedPrompt,
+                        chatId = resolvedChatId,
+                        chatHistory = emptyList(), // cron 回合 fresh context；历史已由 EnhancedAIService 从 DB/state 自己加载
+                        maxTokens = CRON_MAX_TOKENS,
+                        tokenUsageThreshold = CRON_TOKEN_USAGE_THRESHOLD,
+                        isSubTask = true, // 关键：跳过 startAiService 前台通知 + UI state 更新
+                        stream = true
+                    )
+                    responseStream.collect { chunk ->
+                        responseBuilder.append(chunk)
+                    }
+                    // 主路 collect 完成后，关掉 sidecar：AssistantDelta 已经全部 emit 过
+                    // （`AgentLoop.kt:582` 在每个 turn 结束时同步 emit），再等下去也不会有新事件。
+                    sidecarJob?.cancel()
                 }
             }
             output = responseBuilder.toString()
+            val preStripLen = output.length
             // TC-CRON-SANITIZE-d (R-AGENT-031 / R-AGENT-035): strip Hermes internal
             // XML markup (<think>/<tool>/<tool_result>/<status>) BEFORE persistence
             // (saveJobOutput), local chat note (writeLocalChatNote), and IM dispatch
@@ -172,6 +285,10 @@ object CronAgentRunner {
             // "<think>The cron job triggered a reminder to drink water...</think>"
             // was leaking into Weixin delivery.
             output = HermesReplyMarkupStripper.strip(output).trim()
+            CronFileLogger.i(
+                TAG,
+                "strip applied jobId=$jobId preStripLen=$preStripLen postStripLen=${output.length}"
+            )
             // 2026-06-24 regression-guard: mirror normal IM path
             // (`HermesGatewayController.extractFinalReply().ifEmpty { "(empty response)" }`,
             //  line 547-549) — if the stream was entirely <think>...</think> or
@@ -180,6 +297,10 @@ object CronAgentRunner {
             // Without this the cron→Weixin path silently drops empty-after-strip
             // jobs, breaking R-AGENT-031/035 again from the user's PoV.
             if (output.isBlank()) {
+                CronFileLogger.w(
+                    TAG,
+                    "strip emptied output jobId=$jobId preStripLen=$preStripLen — substituting placeholder"
+                )
                 output = "(empty response)"
             }
             success = output.isNotBlank()
@@ -214,6 +335,7 @@ object CronAgentRunner {
                     jobId = jobId,
                     body = output,
                     job = job,
+                    streamingDelivered = streamingDelivered.get(),
                 )
             } catch (e: Exception) {
                 AppLogger.e(TAG, "delivery failed for job '$jobId'", e)
@@ -228,6 +350,12 @@ object CronAgentRunner {
             success = success,
             error = if (success) null else errorMessage,
             deliveryError = deliveryError
+        )
+        val durationMs = (System.nanoTime() - _runStartNs) / 1_000_000L
+        CronFileLogger.i(
+            TAG,
+            "agent run done jobId=$jobId success=$success outputLen=${output.length} " +
+                "durationMs=$durationMs deliveryError=${deliveryError ?: "-"}"
         )
     }
 
@@ -273,13 +401,33 @@ object CronAgentRunner {
         jobId: String,
         body: String,
         job: Map<String, Any?>,
+        streamingDelivered: Boolean,
     ) {
         val deliverMode = (job["deliver"] as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: "local"
         @Suppress("UNCHECKED_CAST")
         val origin = job["origin"] as? Map<String, Any?>
+        CronFileLogger.i(
+            TAG,
+            "deliver mode=$deliverMode jobId=$jobId originPlatform=${(origin?.get("platform") as? String).orEmpty()} " +
+                "originChatId=${(origin?.get("chat_id") as? String).orEmpty()} bodyLen=${body.length} " +
+                "streamingDelivered=$streamingDelivered"
+        )
 
         // 始终写本地 chat history，让用户在 app UI 里也能看到
         writeLocalChatNote(context, chatId, jobName, jobId, body)
+
+        // R-CRON-STREAMING-001 (TC-CRON-STREAMING-e): 旁路已经把 per-turn 回复逐条发到 IM 了，
+        // 这里就**不再**整段 dispatchOutgoing，否则用户收到 N 条 turn bubble + 1 条整段重复。
+        // 注意：`writeLocalChatNote` 已经在上面无条件调过了，app UI / Room history 不受影响；
+        // `saveJobOutput` 在 caller 那一层已经写过了。
+        if (streamingDelivered) {
+            CronFileLogger.i(
+                TAG,
+                "deliver IM-skip jobId=$jobId reason=streamingDelivered " +
+                    "(per-turn sidecar already pushed messages to IM)"
+            )
+            return
+        }
 
         val originMatched = deliverMode == "origin" && origin != null
         if (!originMatched) {
@@ -362,14 +510,27 @@ object CronAgentRunner {
             )
         } catch (e: Throwable) {
             AppLogger.e(TAG, "deliver: dispatchOutgoing threw for job '$jobId': ${e.message}", e)
+            CronFileLogger.e(
+                TAG,
+                "deliver FAIL jobId=$jobId platform=$originPlatform chat=$originChatId reason=${e.message}"
+            )
             throw e
         }
         if (!ok) {
+            CronFileLogger.e(
+                TAG,
+                "deliver FAIL jobId=$jobId platform=$originPlatform chat=$originChatId " +
+                    "reason=dispatchOutgoing returned false (gateway not running or adapter missing)"
+            )
             throw IllegalStateException(
                 "dispatchOutgoing returned false for platform=$originPlatform chatId=$originChatId " +
                     "(gateway not running or adapter not registered)"
             )
         }
+        CronFileLogger.i(
+            TAG,
+            "deliver SUCCESS jobId=$jobId platform=$originPlatform chat=$originChatId bodyLen=${body.length}"
+        )
     }
 
     /**
