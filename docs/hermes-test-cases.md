@@ -1599,6 +1599,22 @@ R-AGENT-031 既有 TC-AGENT-031-c 的 15 分钟最小 interval guard 是针对 *
 
 ---
 
+## 域 CRON — cron headless 回复 markup 泄漏（2026-06-24 bugfix；不动 ① 只动 ②③）
+
+**背景**：R-OBS-001 装上后用户在微信收到了 cron 触发的喝水提醒，确认链路打通；但消息前面带了一大段 `<think>...</think>` 模型推理原文。根因：`EnhancedAIService.sendMessage(stream=true)` 故意把 reasoning 包成 `<think>…</think>`、工具调用包成 `<tool>` / `<tool_result>` / `<status>` XML 标记；正常 IM 路径（用户手动 chat）经过 `HermesGatewayController.extractFinalReply` → `stripMarkup`（封闭+不封闭 `<think>` 都剥），但 cron headless 路径 `CronAgentRunner.run` 直接 `responseBuilder.append(chunk)` 拼原始流，**完全绕过 stripMarkup**，污染流入 `saveJobOutput` / `writeLocalChatNote` / `dispatchOutgoing`。修法：把 `stripMarkup` 提取成 top-level `HermesReplyMarkupStripper` object（source of truth），让 `extractFinalReply` 和 `CronAgentRunner.run` 共用同一份。
+
+| ID | 关联 R-ID | 行为描述（输入 / 期望输出） | 测试断言 | 测试类型 | 测试方法 / 状态 |
+|---|---|---|---|---|---|
+| TC-CRON-SANITIZE-a | R-AGENT-031 / R-AGENT-035 | 新增 top-level `HermesReplyMarkupStripper` object（位于 `app/.../hermes/gateway/HermesReplyMarkupStripper.kt`），暴露 `fun strip(text: String): String`，剥除封闭 `<think>` / `<thinking>` / `<tool>` / `<tool_result>` / `<status>` 配对标签 + 不封闭 `<think>`（用 `UNCLOSED_THINK_REGEX`）。`HermesGatewayController.stripMarkup` 必须 delegate 到这个 object（不保留双份正则）。 | 源码扫描 `HermesReplyMarkupStripper.kt`：必须 `object HermesReplyMarkupStripper`、必须含 `fun strip(`、必须 reference `ChatMarkupRegex` + 含 `thinkTag` / `toolTag` / `toolResultTag` / `statusTag` / `UNCLOSED_THINK` 字面值。源码扫描 `HermesGatewayController.kt`：`stripMarkup` 函数体必须 reference `HermesReplyMarkupStripper`（红线：避免双份正则源）。 | unit-scan | `HermesReplyMarkupStripperWiringTest#TC-CRON-SANITIZE-a HermesReplyMarkupStripper exists + Controller delegates` 🟢 |
+| TC-CRON-SANITIZE-b | R-AGENT-031 / R-AGENT-035 | `HermesReplyMarkupStripper.strip` 行为：(1) 封闭 `<think>foo</think>bar` → `bar`；(2) 不封闭 `<think>foo` → `""`；(3) `<thinking>foo</thinking>bar` → `bar`；(4) 文本前段带 `<think>...</think>` 后接正常回复 → 只返回正常回复。 | JVM 单测：直接调用 `HermesReplyMarkupStripper.strip(...)` 验证 4 种输入的返回值符合预期（`.trim()` 前后空白可去）。 | unit-test | `HermesReplyMarkupStripperBehaviorTest#TC-CRON-SANITIZE-b strips closed/unclosed think tags` 🟢 |
+| TC-CRON-SANITIZE-c | R-AGENT-031 / R-AGENT-035 | `HermesReplyMarkupStripper.strip` 行为：(1) `<tool name="x">...</tool>` 整段剥除；(2) `<tool_result>...</tool_result>` 整段剥除；(3) `<status type="complete">...</status>` 整段剥除；(4) 自闭合 `<status type="complete"/>` 也得剥除；(5) 三种标记混合在用户文本里都剥得干净。 | JVM 单测：直接调用 `HermesReplyMarkupStripper.strip(...)` 验证 5 种 tool/tool_result/status 输入的返回值不再含相应 XML 字面值。 | unit-test | `HermesReplyMarkupStripperBehaviorTest#TC-CRON-SANITIZE-c strips tool/tool_result/status tags` 🟢 |
+| TC-CRON-SANITIZE-d | R-AGENT-031 / R-AGENT-035 | `CronAgentRunner.run` 必须在 `responseBuilder.toString()` 之后、`saveJobOutput` / `success` 判断 / `deliver(...)` 调用之前，调用 `HermesReplyMarkupStripper.strip(output)` 把流式 markup 剥掉。 | 源码扫描 `CronAgentRunner.kt`：`run` 函数体必须含 `HermesReplyMarkupStripper.strip(` 字面值，且位置出现在 `saveJobOutput(` 字面值**之前**（按字符 index 比较）。 | unit-scan | `CronAgentRunnerSanitizeWiringTest#TC-CRON-SANITIZE-d run strips markup before persistence/delivery` 🟢 |
+| TC-CRON-SANITIZE-manual | R-AGENT-031 / R-AGENT-035 | 端到端手测：装新 APK，跑一个 cron 喝水提醒（短周期或长周期，触发模型 reasoning 模式），在微信收到的消息**前段不再带 `<think>...</think>` 原文**，只剩用户可见回复。 | 微信会话收到的 cron 提醒消息开头不含 `<think>` / `<thinking>` / `<tool>` / `<tool_result>` / `<status>` 任一字面值。 | manual / E2E | `(no unit test; manual verification required)` 🔴 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 域 AGENT — Cron→IM Delivery Loop (R-AGENT-033)
 
 R-AGENT-033 补 R-AGENT-031 设计层就没做的 cron→IM 投递回路。R-AGENT-031 验收 D 只要求"写 Room DB + 通知活动 chat UI"——结果飞书/Telegram bot 触发的 cron 任务到点后，回复永远到不了 IM。本 R 修 3 个独立 bug：(A) Run.kt::_handleMessage 没调 `setSessionVars`，(B) CronjobTools._originFromEnv 用 `System.getenv` 在 Android 永远返 null，(C) Scheduler.deliverResult 没人接 cron→IM 直投通道。
