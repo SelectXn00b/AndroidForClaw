@@ -1,6 +1,7 @@
 /** 1:1 对齐 hermes/tools/cronjob_tools.py */
 package com.xiaomo.hermes.hermes.tools
 
+import android.util.Log
 import com.google.gson.Gson
 import com.xiaomo.hermes.hermes.cron.createJob
 import com.xiaomo.hermes.hermes.cron.cronHealthProbe
@@ -606,6 +607,12 @@ fun _originFromEnv(): Map<String, String?>? {
     val originChatId = getSessionEnv("HERMES_SESSION_CHAT_ID").takeIf { it.isNotEmpty() }
     if (originPlatform != null && originChatId != null) {
         val threadId = getSessionEnv("HERMES_SESSION_THREAD_ID").takeIf { it.isNotEmpty() }
+        // TC-AGENT-033-j: log success path so we can confirm ThreadLocal propagated
+        // cleanly from Run.kt::_handleMessage's setSessionVars across Dispatchers.IO.
+        Log.i(
+            "CronjobTools",
+            "origin captured platform=$originPlatform chatId=$originChatId threadId=$threadId"
+        )
         return mapOf(
             "platform" to originPlatform,
             "chat_id" to originChatId,
@@ -613,6 +620,13 @@ fun _originFromEnv(): Map<String, String?>? {
             "thread_id" to threadId
         )
     }
+    // TC-AGENT-033-j: log missing path so cron.log shows "ThreadLocal not propagated"
+    // root cause instead of silently returning null and downstream deliver=local.
+    Log.w(
+        "CronjobTools",
+        "origin missing platform=${originPlatform ?: ""} chatId=${originChatId ?: ""} " +
+            "(ThreadLocal not propagated? Check Run.kt _handleMessage withContext wrapping)"
+    )
     return null
 }
 
