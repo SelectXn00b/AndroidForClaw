@@ -15,6 +15,8 @@ import com.ai.assistance.operit.util.ChatMarkupRegex
 import com.xiaomo.hermes.hermes.gateway.GatewayRunner
 import com.xiaomo.hermes.hermes.gateway.UndeliveredReplyNotifier
 import com.xiaomo.hermes.hermes.gateway.UndeliveredReplyStore
+import com.xiaomo.hermes.hermes.gateway.platforms.PlatformDiagSink
+import com.xiaomo.hermes.hermes.gateway.platforms.WeixinAdapter
 import com.xiaomo.hermes.hermes.cron.cronOutboundDispatcher
 import org.json.JSONObject
 import kotlinx.coroutines.CoroutineScope
@@ -72,6 +74,7 @@ class HermesGatewayController private constructor(private val appContext: Contex
                 runHermesAgent(
                     text = text,
                     sessionKey = sessionKey,
+                    platform = platform,
                     chatId = chatId,
                     interruptCheck = { runner?.getInterruptFlag(sessionKey)?.get() == true }
                 )
@@ -195,17 +198,36 @@ class HermesGatewayController private constructor(private val appContext: Contex
         text: String,
         threadId: String?
     ): Boolean {
+        CronFileLogger.i(
+            TAG,
+            "dispatchOutgoing IN platform=$platform chat=$chatId textLen=${text.length} thread=${threadId.orEmpty()}"
+        )
         val instance = runner
         if (instance == null) {
             Log.w(TAG, "dispatchOutgoing: gateway not running, dropping platform=$platform chatId=$chatId")
             GatewayFileLogger.w(TAG, "dispatchOutgoing: gateway not running, dropping platform=$platform chatId=$chatId")
+            CronFileLogger.w(
+                TAG,
+                "dispatchOutgoing OUT success=false error=gateway not running platform=$platform chat=$chatId"
+            )
             return false
         }
         val adapter = instance.deliveryRouter.getAdapter(platform)
         if (adapter == null) {
             Log.w(TAG, "dispatchOutgoing: no adapter for platform=$platform")
             GatewayFileLogger.w(TAG, "dispatchOutgoing: no adapter for platform=$platform")
+            CronFileLogger.w(
+                TAG,
+                "dispatchOutgoing OUT success=false error=no adapter platform=$platform chat=$chatId"
+            )
             return false
+        }
+        // R-OBS-001 wire: if this is the Weixin adapter, lazy-install the
+        // WeixinFileLogger as its PlatformDiagSink so connect/send/poll
+        // events land in weixin.log. Sibling Telegram/Feishu adapters can
+        // follow the same pattern when they get diag instrumentation.
+        if (adapter is WeixinAdapter && adapter._diagSink == null) {
+            adapter._diagSink = WeixinFileLoggerDiagSink
         }
         // Telegram routes thread replies via the `message_thread_id` metadata key.
         val metadata: JSONObject? = if (platform == "telegram" && !threadId.isNullOrEmpty()) {
@@ -227,13 +249,25 @@ class HermesGatewayController private constructor(private val appContext: Contex
             if (!result.success) {
                 Log.w(TAG, "dispatchOutgoing: adapter.send returned failure platform=$platform chatId=$chatId error=${result.error}")
                 GatewayFileLogger.w(TAG, "dispatchOutgoing: adapter.send failure platform=$platform chatId=$chatId error=${result.error}")
+                CronFileLogger.w(
+                    TAG,
+                    "dispatchOutgoing OUT success=false error=${result.error} platform=$platform chat=$chatId"
+                )
             } else {
                 GatewayFileLogger.i(TAG, "dispatchOutgoing: delivered platform=$platform chatId=$chatId len=${text.length}")
+                CronFileLogger.i(
+                    TAG,
+                    "dispatchOutgoing OUT success=true platform=$platform chat=$chatId len=${text.length}"
+                )
             }
             result.success
         } catch (e: Throwable) {
             Log.w(TAG, "dispatchOutgoing: adapter.send threw platform=$platform chatId=$chatId: ${e.message}")
             GatewayFileLogger.w(TAG, "dispatchOutgoing: adapter.send threw platform=$platform chatId=$chatId: ${e.message}")
+            CronFileLogger.e(
+                TAG,
+                "dispatchOutgoing OUT success=false error=threw:${e.message} platform=$platform chat=$chatId"
+            )
             false
         }
     }
@@ -255,6 +289,7 @@ class HermesGatewayController private constructor(private val appContext: Contex
     private suspend fun runHermesAgent(
         text: String,
         sessionKey: String,
+        platform: String,
         chatId: String,
         interruptCheck: () -> Boolean = { false },
     ): String {
@@ -309,6 +344,41 @@ class HermesGatewayController private constructor(private val appContext: Contex
         GatewayFileLogger.i(TAG, "  routing through ChatServiceCore (本体 path)...")
 
         val startMs = System.currentTimeMillis()
+
+        // R-GW-STREAMING-001 (TC-GW-STREAMING-001-h/i/j): per-turn streaming sidecar.
+        // Group chats (`@chatroom`) skip the sidecar because:
+        //   1. paragraph-by-paragraph delivery to a multi-user channel is noisy and
+        //   2. the user explicitly said 群聊不需要 (2026-06-25).
+        // 1-on-1 chats get the sidecar so the user sees the agent "thinking out loud"
+        // turn by turn instead of waiting for the full reply.
+        //
+        // Parameters mirror cron path (R-CRON-STREAMING-001/002):
+        //   - PARAGRAPH_REGEX = blank-line split
+        //   - INTER_PARAGRAPH_DELAY_MS = 200ms gap (WeChat rate-limit safe)
+        val skipSidecar = chatId.endsWith("@chatroom")
+        val sidecar: AgentStreamingSidecar? = if (skipSidecar) {
+            GatewayFileLogger.i(TAG, "  [streaming] skip sidecar (group chat @chatroom): chatId=$chatId")
+            null
+        } else {
+            AgentStreamingSidecar(
+                chatId = historyChatId,
+                platform = platform,
+                dispatchOutgoing = { p, c, t, th -> dispatchOutgoing(p, c, t, th) },
+                paragraphRegex = STREAMING_PARAGRAPH_REGEX,
+                interParagraphDelayMs = STREAMING_INTER_PARAGRAPH_DELAY_MS,
+                threadId = null,
+                tag = "GwStreamingSidecar",
+            ).also { sc ->
+                sc.start(_scope)
+                // Wait for SharedFlow(replay=0) subscription registration before
+                // triggering the agent — see AgentStreamingSidecar KDoc.
+                sc.awaitReady()
+                GatewayFileLogger.i(
+                    TAG,
+                    "  [streaming] sidecar ready chatId=$historyChatId platform=$platform"
+                )
+            }
+        }
 
         // Fire-and-forget: this launches a coroutine inside ChatServiceCore
         // that goes through the full MessageCoordinationDelegate →
@@ -474,10 +544,37 @@ class HermesGatewayController private constructor(private val appContext: Contex
 
         // If interrupted, return the sentinel immediately — caller will process the pending event.
         if (wasInterrupted) {
+            // R-GW-STREAMING-001 (TC-GW-STREAMING-001-h): stop sidecar on interrupt
+            // so its collector job doesn't outlive this turn. In-flight dispatch
+            // calls are protected by `withContext(NonCancellable)` inside the
+            // sidecar so any paragraph already mid-flight still finishes.
+            try { sidecar?.stop() } catch (e: Throwable) {
+                GatewayFileLogger.w(TAG, "  [streaming] sidecar.stop on interrupt threw: ${e.message}")
+            }
             GatewayFileLogger.i(TAG, "═══ runHermesAgent END (interrupted) ═══\n")
             return GatewayRunner.INTERRUPTED_SENTINEL
         }
         val elapsedMs = System.currentTimeMillis() - startMs
+
+        // R-GW-STREAMING-001 (TC-GW-STREAMING-001-h/i/j): now that the main wait
+        // loop has confirmed the agent finished, stop the sidecar and decide
+        // whether to return the STREAMING_DELIVERED sentinel (so GatewayRunner
+        // ._handleMessage skips its fallback deliveryRouter.deliverText) or
+        // fall through to the normal DB-read + return path.
+        val streamingDelivered = sidecar?.let { sc ->
+            val delivered = sc.wasDelivered()
+            try { sc.stop() } catch (e: Throwable) {
+                GatewayFileLogger.w(TAG, "  [streaming] sidecar.stop threw: ${e.message}")
+            }
+            GatewayFileLogger.i(
+                TAG,
+                "  [streaming] sidecar done chatId=$historyChatId delivered=$delivered " +
+                    "events=${sc.totalEvents.get()} matched=${sc.chatIdMatched.get()} " +
+                    "deltas=${sc.assistantDeltas.get()} dispatches=${sc.paragraphDispatches.get()} " +
+                    "success=${sc.dispatchSuccess.get()}"
+            )
+            delivered
+        } ?: false
 
         if (completed == null) {
             Log.w(TAG, "runHermesAgent: TIMED OUT after ${elapsedMs}ms")
@@ -592,6 +689,18 @@ class HermesGatewayController private constructor(private val appContext: Contex
 
         GatewayFileLogger.i(TAG, "═══ runHermesAgent END ═══\n")
 
+        // R-GW-STREAMING-001 (TC-GW-STREAMING-001-h/j): if the sidecar successfully
+        // dispatched at least one paragraph, the user has already received the reply
+        // turn-by-turn. Return the STREAMING_DELIVERED sentinel so GatewayRunner
+        // ._handleMessage SKIPS its fallback `deliveryRouter.deliverText(...)` —
+        // re-sending `strippedReply` here would duplicate the full reply on top of
+        // the already-streamed paragraphs. Memory save / chat history persistence
+        // above is unaffected (those happen via core.sendUserMessage pipeline +
+        // MemoryLibrary.saveMemoryAsync regardless of sentinel).
+        if (streamingDelivered) {
+            return GatewayRunner.STREAMING_DELIVERED_SENTINEL
+        }
+
         return strippedReply
     }
 
@@ -698,6 +807,24 @@ class HermesGatewayController private constructor(private val appContext: Contex
 
         /** Polling interval for interrupt detection in the wait loop. */
         private const val INTERRUPT_POLL_MS = 500L
+
+        /**
+         * R-GW-STREAMING-001 (TC-GW-STREAMING-001-c/h): blank-line paragraph split
+         * regex used by [AgentStreamingSidecar]. Same shape as the cron path's
+         * `CronAgentRunner.PARAGRAPH_REGEX` (R-CRON-STREAMING-001) so per-turn
+         * delivery behavior is identical between the cron-triggered and the normal
+         * IM gateway paths. Caller-supplied per R-GW-STREAMING-001 architecture.
+         */
+        private val STREAMING_PARAGRAPH_REGEX: Regex = Regex("""\R\s*\R+""")
+
+        /**
+         * R-GW-STREAMING-001 (TC-GW-STREAMING-001-c/h): inter-paragraph delay (ms)
+         * used by [AgentStreamingSidecar] between sequential paragraph dispatches.
+         * 200 ms matches the cron path (`CronAgentRunner.INTER_PARAGRAPH_DELAY_MS`)
+         * and is empirically safe against WeChat's short-window rate-limit /
+         * paragraph merge.
+         */
+        private const val STREAMING_INTER_PARAGRAPH_DELAY_MS: Long = 200L
 
         /** Matches the last `<status ...>...</status>` or self-closing `<status .../>`. */
         private val LAST_STATUS_TAG_REGEX = Regex(

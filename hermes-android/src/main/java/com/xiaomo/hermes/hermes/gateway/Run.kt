@@ -37,6 +37,15 @@ class GatewayRunner(
         private const val _TAG = "GatewayRunner"
         /** Sentinel returned by agentRunner when the run was interrupted by a new user message. */
         const val INTERRUPTED_SENTINEL = "\u0000__INTERRUPTED__"
+        /**
+         * R-GW-STREAMING-001 (TC-GW-STREAMING-001-f/g): sentinel returned by agentRunner
+         * when the per-turn streaming sidecar has already delivered the reply paragraph-
+         * by-paragraph to the IM platform. `_handleMessage` MUST skip its fallback
+         * `deliveryRouter.deliverText(...)` call when this sentinel is returned to avoid
+         * sending the full reply again on top of the streamed paragraphs (duplicate
+         * delivery, WeChat rate-limit, double-billed cost).
+         */
+        const val STREAMING_DELIVERED_SENTINEL = "\u0000__STREAMING_DELIVERED__"
         private const val MAX_INTERRUPT_DEPTH = 3
     }
 
@@ -505,8 +514,14 @@ class GatewayRunner(
                 "Agent loop not configured"
             }
 
-            // If agent was interrupted, skip delivery and fall through to pending-event loop
-            if (responseText != INTERRUPTED_SENTINEL) {
+            // If agent was interrupted, skip delivery and fall through to pending-event loop.
+            // R-GW-STREAMING-001 (TC-GW-STREAMING-001-f/g): also skip delivery when the
+            // per-turn streaming sidecar has already dispatched the reply paragraph-by-
+            // paragraph (sentinel = STREAMING_DELIVERED_SENTINEL). Re-running deliverText
+            // here would duplicate the full reply on top of the already-streamed
+            // paragraphs.
+            if (responseText != INTERRUPTED_SENTINEL &&
+                responseText != STREAMING_DELIVERED_SENTINEL) {
                 // Run post-agent hooks
                 val postAgentResult = hookPipeline.run(
                     HookEvent.POST_AGENT,
