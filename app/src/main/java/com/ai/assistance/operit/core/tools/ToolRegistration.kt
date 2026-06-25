@@ -1481,6 +1481,26 @@ fun registerAllTools(handler: AIToolHandler, context: Context) {
             executor = { tool -> runBlocking(Dispatchers.IO) { fileSystemTools.readFileBinary(tool) } }
     )
 
+    // R-CRON-DIAG-001: diagnose_cron_streaming — one-shot diagnostic for the cron
+    // streaming chain (R-CRON-STREAMING-001/002).  Reads `cron.log` tail and renders
+    // a markdown report with hit-rule classification, so the user can ask the agent
+    // "诊断刚才那个 cron" without remembering field names.
+    handler.registerTool(
+            name = "diagnose_cron_streaming",
+            descriptionGenerator = { tool ->
+                val jobId = tool.parameters.find { it.name == "job_id" }?.value?.trim().orEmpty()
+                if (jobId.isNotEmpty()) {
+                    "Diagnose cron streaming chain for jobId=$jobId"
+                } else {
+                    "Diagnose latest cron streaming run from cron.log"
+                }
+            },
+            executor = { tool ->
+                com.ai.assistance.operit.core.tools.defaultTool.standard.CronDiagnosticTools()
+                    .diagnose(tool)
+            }
+    )
+
     // 写入文件
     handler.registerTool(
             name = "write_file",

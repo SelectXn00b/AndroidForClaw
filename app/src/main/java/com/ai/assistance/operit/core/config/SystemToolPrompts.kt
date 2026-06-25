@@ -200,6 +200,15 @@ object SystemToolPrompts {
                     ToolParameterSchema(name = "end_line", type = "integer", description = "ending line number, 1-indexed, inclusive, optional", required = false, default = "start_line + 99")
                 )
             ),
+            // R-CRON-DIAG-001: one-shot diagnostic for the cron streaming chain.
+            ToolPrompt(
+                name = "diagnose_cron_streaming",
+                description = "Diagnose the cron streaming dispatch chain. Reads the tail of `/sdcard/Download/Hermes/cron_logs/cron.log`, parses the structured `streaming sidecar summary` line, classifies the failure (or healthy state) into one of 8 hard-coded rules, and returns a markdown report (sections: 关键计数器 / 概率最大根因 / 建议下一步 / 原始关键行). Use when the user asks to diagnose / debug / explain a recent cron-triggered IM reply (e.g. \"诊断刚才那个 cron\" / \"diagnose cron streaming\").",
+                parametersStructured = listOf(
+                    ToolParameterSchema(name = "job_id", type = "string", description = "optional, the jobId from `agent run start jobId=<...>` to analyze; if omitted, the most recent run in the tail window is used", required = false),
+                    ToolParameterSchema(name = "tail_kb", type = "integer", description = "optional, how many KB from the end of cron.log to scan (default 256, max ~2048 since cron.log rotates at 2MB)", required = false, default = "256")
+                )
+            ),
             ToolPrompt(
                 name = "apply_file",
                 description = "Applies edits to a file by finding and replacing/deleting a matched content block.",
@@ -354,6 +363,15 @@ object SystemToolPrompts {
                     ToolParameterSchema(name = "environment", type = "string", description = "可选，同 read_file 的 environment", required = false),
                     ToolParameterSchema(name = "start_line", type = "integer", description = "起始行号，从1开始", required = false, default = "1"),
                     ToolParameterSchema(name = "end_line", type = "integer", description = "结束行号，从1开始，包括该行，可选", required = false, default = "start_line + 99")
+                )
+            ),
+            // R-CRON-DIAG-001: cron 链路一键诊断工具。
+            ToolPrompt(
+                name = "diagnose_cron_streaming",
+                description = "一键诊断 cron 触发的 IM 回复链路。读取 `/sdcard/Download/Hermes/cron_logs/cron.log` 末尾窗口，解析结构化的 `streaming sidecar summary` 行，按 8 条 hard-coded 规则给出根因 + 建议，返回 markdown（章节：关键计数器 / 概率最大根因 / 建议下一步 / 原始关键行）。当用户问 \"诊断刚才那个 cron\" / \"为什么 cron 触发的消息没发出来\" / \"diagnose cron streaming\" 时优先调本工具，比裸 read_file 快得多。",
+                parametersStructured = listOf(
+                    ToolParameterSchema(name = "job_id", type = "string", description = "可选，cron.log 里 `agent run start jobId=<...>` 的 jobId；不填则分析窗口内最近一次", required = false),
+                    ToolParameterSchema(name = "tail_kb", type = "integer", description = "可选，从 cron.log 末尾读多少 KB（默认 256；cron.log 在 2MB 滚动）", required = false, default = "256")
                 )
             ),
             ToolPrompt(

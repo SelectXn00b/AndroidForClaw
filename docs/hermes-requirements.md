@@ -2651,3 +2651,71 @@ C. **兼容老 jobs.json**：origin 为 null 的老 job 走 `result.chatId` (exe
 - app 内对话框 / `writeLocalChatNote` / `saveJobOutput` 落盘结果不变（不重复、不丢失，与 R-CRON-STREAMING-001 等价）。
 
 
+### R-CRON-DIAG-001: 一键诊断 cron streaming 链路（agent 自助排障工具 `diagnose_cron_streaming`）
+
+**来源**:
+- 用户 2026-06-25 反馈："为什么不能直接给agent,可以直接访问所有日志呢？这样遇到问题，直接一句话就能找到问题了"。
+- 用户后续追加约束："以后需要附带解析，人类是记不住那多的"——单纯让 agent `read_file` cron.log 不够，原始日志字段名 / 域意义不可期望普通用户记住，必须把诊断知识沉淀进工具。
+- 无 Python 上游——本需求是 Android 侧 cron streaming 链路（R-CRON-STREAMING-001/002）的运维补丁，Python `hermes-agent/` 没有 cron 概念。
+
+**背景**:
+- R-CRON-STREAMING-001/002 已经把"sidecar 每 turn 一条 IM bubble + 段落兜底切片"做到 `CronAgentRunner.kt`，并在 `cron.log` 落 `streaming sidecar summary jobId=... totalEvents=N1 chatIdMatched=N2 assistantDeltas=N3 dispatchCalls=N4 paragraphDispatches=N5 dispatchSuccess=N6 streamingDelivered=true/false` 等结构化字段。
+- 现状是这些字段必须用户拿 PC + adb / 文件管理器 cat 出 `/sdcard/Download/Hermes/cron_logs/cron.log` 然后人肉对照才能定位问题。"agent 单 turn → 1 段 → 用户看到 1 条"和"adapter 派发失败 → 用户看到 0 条"在 log 里长得完全不一样，但用户没有 cheatsheet 记不住。
+- agent 本身有 `read_file` / `read_file_part`（`ToolRegistration.kt:1428+`），具备访问 cron.log 路径（`/sdcard/Download/Hermes/cron_logs/cron.log`，`OperitPaths.operitRootDir()` 已开放 `MANAGE_EXTERNAL_STORAGE`）的能力。但 agent 也"不知道"该读哪条路径，更不知道字段间的因果规则。
+- 不破坏：R-CRON-STREAMING-001/002 / R-OBS-001 / `CronFileLogger` 全部不动；不重写 cron.log 格式；不引入任何新的日志埋点。
+
+**架构合规**:
+- **新增一个 default tool**：`diagnose_cron_streaming`，落 `app/src/main/java/com/ai/assistance/operit/core/tools/defaultTool/standard/CronDiagnosticTools.kt`（与 `Standard*Tools.kt` 同 package）；executor 走 `AIToolHandler.registerTool(...)`（`ToolRegistration.kt`），与 `read_file` / `list_files` 等同一注册路径。**不**新建 dispatcher、不新建桥接类、不新建 tool category。
+- **入参**: 一律可选，全部带默认：
+  - `job_id`: 可选，匹配 `agent run start jobId=<v>` 中的 `<v>`。不填 → 分析 cron.log 末尾**最近一次** `agent run start ... jobId=...` 起到下一段 `agent run start` 或文件结尾的窗口。
+  - `tail_kb`: 可选，默认 256（KB）。只读 cron.log 尾部这么多 KB，避免 2MB 滚动日志全读拖网络/内存。
+- **解析规则**（hard-coded 在工具内，文档化在工具描述）：基于 `streaming sidecar summary` 行 + 该 job 块内其它已知字面字段（`agent run start`, `strip applied`, `streaming dispatch failed`, `streaming dispatch threw`, `headless agent invocation failed`, `(empty response)`），按下面**优先级从高到低**给出 ≤ 3 条候选根因；命中即停：
+  1. 找不到 `agent run start jobId=...` → "cron.log 里没有该 job 的运行痕迹（可能 alarm 没触发 / 进程被杀 / 写入权限失败）"。
+  2. 有 `agent run start` 但无 `streaming sidecar summary` → "sidecar 协程没启动或在 collect 前被 cancel —— 看 `headless agent invocation failed` / `NonRetriableException`"。
+  3. `dispatchCalls=0` 或 `chatIdMatched=0` → "sidecar 启动了但 0 派发：检查 `originPlatform` / `originChatId` 是否注入（cronjob 的 `dispatch_target` 配置或群聊 `@chatroom` 回退路径）"。
+  4. `paragraphCount=1` （或 `paragraphDispatches==assistantDeltas`）+ `dispatchSuccess>0` → "agent 单 turn 输出整段（没听 multi-message hint 留空行），sidecar 只能发 1 条—— **不是** sidecar bug，是 prompt 引导失败。建议（a）prompt 里更明显的"先空行后正文"示范；（b）让 agent 用工具循环把任务拆多 turn"。
+  5. `dispatchCalls > dispatchSuccess` → "gateway adapter 派发失败：grep `streaming dispatch failed jobId=... reason=` 或 `streaming dispatch threw jobId=... reason=` 给出具体 reason"。
+  6. `streamingDelivered=false` 但 `dispatchSuccess > 0` → "sidecar 派发成功但状态机没翻转 streamingDelivered：怀疑 sidecar 派发线程跟主路 collect 之间的内存 visibility 或 cancel 时序问题"。
+  7. `(empty response)` 命中 → "agent 输出被 `HermesReplyMarkupStripper.strip` 剥成空（典型：纯 `<think>` 或 unclosed `<think>...`），主路兜底发了 placeholder。问题在 LLM 行为，不在 sidecar"。
+  8. 都不命中 + `dispatchSuccess >= 1` + `streamingDelivered=true` → "cron streaming 链路本次 PASS，无异常"。
+- **输出**：人类可读 markdown，**禁止**裸返回原日志。结构（顺序固定）：
+  ```
+  ## 诊断 jobId=<v> @ <run-start-time>
+
+  ### 关键计数器
+  - assistantDeltas=N3
+  - dispatchCalls=N4 paragraphDispatches=N5
+  - dispatchSuccess=N6
+  - streamingDelivered=true/false
+  - chatIdMatched=N2
+
+  ### 概率最大根因
+  <从上面规则 1-8 命中的那条>
+
+  ### 建议下一步
+  <对应规则给的具体动作>
+
+  ### 原始关键行（最多 8 行）
+  ```
+  <截取 agent run start / strip applied / streaming sidecar summary / streaming dispatch failed/threw 等关键行>
+  ```
+  ```
+- **失败安全**: 文件不存在 / 读权限失败 / 末尾 tail_kb 全 binary garbage → 返回 `success=false` + 简洁 error message（"cron.log not found at /sdcard/Download/Hermes/cron_logs/cron.log"），**不**抛异常、**不**重启 cron 链路。
+- **可观测性**: 工具自身**不**写 cron.log（避免污染被诊断的对象）。命中规则后只把规则编号（如 "[rule#4]"）写进工具返回的 markdown，方便回归测试断言。
+- **Schema 注册**: `SystemToolPrompts.kt:getAIAllCategoriesEn()` / `getAIAllCategoriesCn()` 紧贴 `read_file_full` 之后挂一条 `ToolPrompt(name="diagnose_cron_streaming", description=..., parametersStructured=[job_id?, tail_kb?])`，让 LLM 知道有这工具可用。`SystemPromptConfig.kt` 里现有"如何排查 cron 问题"提示如有则改为优先推 `diagnose_cron_streaming`；没有则不强加。
+
+**与既有 R 的关系**:
+- 复用 R-CRON-STREAMING-001/002 已有日志格式，**不**改 `CronFileLogger` 行格式、**不**改 `streaming sidecar summary` 字段名或顺序。
+- 复用 `OperitPaths.operitRootDir()` / `CronFileLogger.DIR_NAME` / `FILE_NAME` 解析 cron.log 路径，避免硬编码 `/sdcard/Download/Hermes/cron_logs/cron.log` 散落。
+- **不**触动 R-AGENT-031 / R-AGENT-033 / R-AGENT-035 / R-CRON-STREAMING-001/002 既有验收点；本需求纯只读 + 解析。
+
+**验收**:
+- 装新 APK 后，cron 触发完一个 job（不管成败），在 app 内对 agent 说"诊断刚才那个 cron"或"diagnose cron streaming"，agent 调一次 `diagnose_cron_streaming`（无入参）即返回上述 markdown，含命中规则编号 + 关键计数器原值。
+- 强制场景：删掉 cron.log → `diagnose_cron_streaming` 返回 `success=false`，error message 含 "cron.log" 字样、不崩溃。
+- 强制场景：cron.log 存在但末尾没有 `agent run start` → 命中 rule#1，输出含 "cron.log 里没有该 job 的运行痕迹"。
+- 强制场景：mock 一段"`agent run start jobId=x` + `streaming sidecar summary jobId=x ... paragraphDispatches=1 dispatchSuccess=1 streamingDelivered=true`" → 命中 rule#4（`paragraphCount=1`），输出含 "agent 单 turn 输出整段"。
+- 工具对 cron.log 大小 robust：cron.log 接近 2MB（`CronFileLogger.MAX_FILE_BYTES`）时，工具仅读尾部 `tail_kb` 字节（默认 256KB），不 OOM、不超时。
+- 单测覆盖：`CronDiagnosticToolsTest.kt` 对 8 条规则各至少 1 个用例 + 文件缺失 + 末尾尾部读取边界。
+- 不破坏：cron 触发链路（R-CRON-STREAMING-001/002 既有 E2E）字节级不变；`cron.log` 行格式 / 行数（除 cron 自身埋点外）不被本工具写入。
+
+
