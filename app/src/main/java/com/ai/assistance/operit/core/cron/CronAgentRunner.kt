@@ -22,6 +22,7 @@ import com.xiaomo.hermes.hermes.gateway.setSessionVars
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onSubscription
@@ -209,8 +210,11 @@ object CronAgentRunner {
                     val sidecarAssistantDeltas = java.util.concurrent.atomic.AtomicInteger(0)
                     val sidecarDispatchCalls = java.util.concurrent.atomic.AtomicInteger(0)
                     val sidecarDispatchSuccess = java.util.concurrent.atomic.AtomicInteger(0)
+                    // TC-CRON-STREAMING-g (2026-06-25): dispatchMutex 提到外层作用域，
+                    // 让主路 collect 完成后能 tryLock 用作 in-flight drain 信号
+                    // （sidecar 内 dispatch 在 withLock 下执行，外层拿到锁 = 已无 in-flight）。
+                    val dispatchMutex = Mutex()
                     if (streamingEnabled) {
-                        val dispatchMutex = Mutex()
                         val gatewayForSidecar = HermesGatewayController.getInstance(context.applicationContext)
                         // R-CRON-STREAMING-001 fix (2026-06-25): `AgentEventBus.events` is a
                         // `SharedFlow(replay=0)`, so any AssistantDelta emitted BEFORE the
@@ -281,12 +285,20 @@ object CronAgentRunner {
                                                         "streaming dispatch turn=${event.turn} jobId=$jobId " +
                                                             "platform=$originPlatform chat=$originChatId textLen=${stripped.length}"
                                                     )
-                                                    val ok = gatewayForSidecar.dispatchOutgoing(
-                                                        platform = originPlatform,
-                                                        chatId = originChatId,
-                                                        text = stripped,
-                                                        threadId = originThreadId.takeIf { it.isNotEmpty() },
-                                                    )
+                                                    // R-CRON-STREAMING-001 / TC-CRON-STREAMING-g 修法 (2026-06-25 第三次):
+                                                    // dispatchOutgoing 是 OkHttp 网络请求，主路 collect 跑完后
+                                                    // sidecarJob.cancel() 会把 in-flight 的它一并 cancel，抛
+                                                    // CancellationException 导致 ok=false（用户日志实测）。
+                                                    // 解法：用 NonCancellable 包裹，确保即使外层 cancel，
+                                                    // in-flight 的网络调用也能跑完拿到真实结果。
+                                                    val ok = withContext(NonCancellable) {
+                                                        gatewayForSidecar.dispatchOutgoing(
+                                                            platform = originPlatform,
+                                                            chatId = originChatId,
+                                                            text = stripped,
+                                                            threadId = originThreadId.takeIf { it.isNotEmpty() },
+                                                        )
+                                                    }
                                                     if (ok) {
                                                         sidecarDispatchSuccess.incrementAndGet()
                                                         streamingDelivered.set(true)
@@ -370,6 +382,23 @@ object CronAgentRunner {
                             "dispatchSuccess=${sidecarDispatchSuccess.get()} " +
                             "streamingDelivered=${streamingDelivered.get()}"
                     )
+                    // R-CRON-STREAMING-001 / TC-CRON-STREAMING-g 修法 (2026-06-25 第三次)：
+                    // 主路 collect 完成后，sidecar 那条 `.collect { ... }` lambda 里可能还有
+                    // **in-flight** 的 `dispatchOutgoing(...)`（OkHttp 网络请求，emit 是同步、
+                    // dispatch 是异步）。NonCancellable 已经在 dispatch 内层保 in-flight 网络
+                    // 调用不被 cancel 砍掉；这里再给一个有限的 drain 窗口让 sidecar collect
+                    // lambda 跑完一轮（把 ok 写回 sidecarDispatchSuccess 计数器、翻转
+                    // streamingDelivered 标记），再 cancel 等下一个 event 那部分。
+                    //
+                    // drain 超时 5s：cron 任务无超紧 SLA，给网络收尾充裕时间。
+                    // withTimeoutOrNull 在超时后返回 null，不抛异常。我们用一个 dispatchMutex
+                    // 借位锁：sidecar 内 dispatch 在 withLock 内执行，主路 try-lock 拿到锁就说明
+                    // 所有 in-flight dispatch 都跑完了，可以安全 cancel。
+                    withTimeoutOrNull(5_000L) {
+                        // 拿到 dispatchMutex 锁等价于"目前没有 in-flight dispatch 在飞"。
+                        // sidecar 内每次 dispatch 都先 withLock，所以拿到锁后才 cancel 是安全的。
+                        dispatchMutex.withLock { /* drain complete */ }
+                    }
                     // 主路 collect 完成后，关掉 sidecar：AssistantDelta 已经全部 emit 过
                     // （`AgentLoop.kt:582` 在每个 turn 结束时同步 emit），再等下去也不会有新事件。
                     sidecarJob?.cancel()
