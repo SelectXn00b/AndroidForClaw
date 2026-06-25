@@ -171,6 +171,21 @@ object CronAgentRunner {
             originPlatform != "app" &&
             !(originPlatform == "weixin" && originChatId.endsWith("@chatroom"))
         val streamingDelivered = AtomicBoolean(false)
+        // R-CRON-STREAMING-001 diag (2026-06-25 第二次失败后加诊断):
+        // 用户两次报告"全部一起出来"。第一层 race fix 装上仍不灵 —— 必须落更细粒度的
+        // 链路诊断，下次跑完直接看 cron.log 一眼定位断在哪一层：
+        //  - streamingEnabled=false  →  入口就被群聊 / app-origin / 空 platform 排除
+        //  - subscribed=true 但 totalEvents=0  →  bus 端没人 emit（agent 没走 HermesAgentLoop？）
+        //  - totalEvents>0 但 chatIdMatches=0  →  resolvedChatId vs taskIdValue 不匹配
+        //  - chatIdMatches>0 但 assistantDeltas=0  →  agent 全程只 emit Thinking/ToolCall 没 AssistantDelta
+        //  - assistantDeltas>0 但 dispatchCalls=0  →  剥完 markup 后全是 blank
+        //  - dispatchCalls>0 但 dispatchSuccess=0 →  gateway.dispatchOutgoing 全失败
+        CronFileLogger.i(
+            TAG,
+            "streaming gate jobId=$jobId streamingEnabled=$streamingEnabled " +
+                "originPlatform=$originPlatform originChatId=$originChatId " +
+                "resolvedChatId=$resolvedChatId originThreadId=$originThreadId"
+        )
         try {
             // R-AGENT-045 跨线程修：用 sessionContextElement() 包住 agent 调用，
             // 让 `EnhancedAIService.sendMessage` 内部 `withContext(Dispatchers.IO)`
@@ -187,6 +202,13 @@ object CronAgentRunner {
                     // any future switch to `launchIn` / parallel collectors.
                     val sidecarJob: Job?
                     val sidecarReady: CompletableDeferred<Unit>?
+                    // R-CRON-STREAMING-001 诊断计数器：sidecar 跑完后把这几个值落 cron.log，
+                    // 配合 "streaming gate" 那行可以精确定位是哪一层把链路截断的。
+                    val sidecarStats = java.util.concurrent.atomic.AtomicInteger(0)  // totalEvents
+                    val sidecarMatched = java.util.concurrent.atomic.AtomicInteger(0)
+                    val sidecarAssistantDeltas = java.util.concurrent.atomic.AtomicInteger(0)
+                    val sidecarDispatchCalls = java.util.concurrent.atomic.AtomicInteger(0)
+                    val sidecarDispatchSuccess = java.util.concurrent.atomic.AtomicInteger(0)
                     if (streamingEnabled) {
                         val dispatchMutex = Mutex()
                         val gatewayForSidecar = HermesGatewayController.getInstance(context.applicationContext)
@@ -209,13 +231,49 @@ object CronAgentRunner {
                         sidecarJob = launch {
                             try {
                                 AgentEventBus.events
-                                    .onSubscription { ready.complete(Unit) }
+                                    .onSubscription {
+                                        ready.complete(Unit)
+                                        CronFileLogger.i(
+                                            TAG,
+                                            "streaming sidecar subscribed jobId=$jobId chatId=$resolvedChatId"
+                                        )
+                                    }
                                     .collect { tagged ->
-                                        if (tagged.chatId != resolvedChatId) return@collect
+                                        sidecarStats.incrementAndGet()
+                                        if (tagged.chatId != resolvedChatId) {
+                                            // 调试：第一条不匹配的事件落日志，方便看 bus 上真实在飞的 key 是什么
+                                            if (sidecarStats.get() <= 3) {
+                                                CronFileLogger.d(
+                                                    TAG,
+                                                    "streaming chatId mismatch jobId=$jobId " +
+                                                        "expected=$resolvedChatId actual=${tagged.chatId} " +
+                                                        "eventClass=${tagged.event.javaClass.simpleName}"
+                                                )
+                                            }
+                                            return@collect
+                                        }
+                                        sidecarMatched.incrementAndGet()
                                         val event = tagged.event
-                                        if (event !is AgentEvent.AssistantDelta) return@collect
+                                        if (event !is AgentEvent.AssistantDelta) {
+                                            if (sidecarMatched.get() <= 5) {
+                                                CronFileLogger.d(
+                                                    TAG,
+                                                    "streaming non-delta event jobId=$jobId " +
+                                                        "eventClass=${event.javaClass.simpleName}"
+                                                )
+                                            }
+                                            return@collect
+                                        }
+                                        sidecarAssistantDeltas.incrementAndGet()
                                         val stripped = HermesReplyMarkupStripper.strip(event.text).trim()
+                                        CronFileLogger.i(
+                                            TAG,
+                                            "streaming AssistantDelta jobId=$jobId turn=${event.turn} " +
+                                                "rawLen=${event.text.length} strippedLen=${stripped.length} " +
+                                                "isBlank=${stripped.isBlank()}"
+                                        )
                                         if (stripped.isNotBlank()) {
+                                            sidecarDispatchCalls.incrementAndGet()
                                             dispatchMutex.withLock {
                                                 try {
                                                     CronFileLogger.i(
@@ -230,6 +288,7 @@ object CronAgentRunner {
                                                         threadId = originThreadId.takeIf { it.isNotEmpty() },
                                                     )
                                                     if (ok) {
+                                                        sidecarDispatchSuccess.incrementAndGet()
                                                         streamingDelivered.set(true)
                                                     } else {
                                                         CronFileLogger.w(
@@ -299,6 +358,18 @@ object CronAgentRunner {
                     responseStream.collect { chunk ->
                         responseBuilder.append(chunk)
                     }
+                    // R-CRON-STREAMING-001 诊断总结：把 sidecar 跑完时的 5 个计数器落 cron.log。
+                    // 下次用户报"还是一起出来"就一眼看出断在哪一层 —— 这是定位下一层 bug 的关键证据。
+                    CronFileLogger.i(
+                        TAG,
+                        "streaming sidecar summary jobId=$jobId " +
+                            "totalEvents=${sidecarStats.get()} " +
+                            "chatIdMatched=${sidecarMatched.get()} " +
+                            "assistantDeltas=${sidecarAssistantDeltas.get()} " +
+                            "dispatchCalls=${sidecarDispatchCalls.get()} " +
+                            "dispatchSuccess=${sidecarDispatchSuccess.get()} " +
+                            "streamingDelivered=${streamingDelivered.get()}"
+                    )
                     // 主路 collect 完成后，关掉 sidecar：AssistantDelta 已经全部 emit 过
                     // （`AgentLoop.kt:582` 在每个 turn 结束时同步 emit），再等下去也不会有新事件。
                     sidecarJob?.cancel()
