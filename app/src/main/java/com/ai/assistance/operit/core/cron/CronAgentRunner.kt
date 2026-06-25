@@ -24,6 +24,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
@@ -99,6 +100,43 @@ object CronAgentRunner {
             "专注完成任务并输出最终回复给用户。"
 
     /**
+     * R-CRON-STREAMING-002 / TC-CRON-STREAMING-h: bilingual multi-message delivery hint。
+     *
+     * 软引导 agent："如果回复内容自然分多段，请在段落之间留空行（\n\n），
+     * IM 端会按段落拆成多条独立消息发出"。这是 prompt 层的引导，不强制 agent
+     * 走多 turn —— `HermesAgentLoop` 每 turn 至多 emit 一个 `AssistantDelta`，
+     * 想真正多条 IM 必须靠 sidecar 段落兜底切片（见 wrappedPrompt 下方的
+     * `PARAGRAPH_REGEX` 切片逻辑）。
+     *
+     * 双语关键字 `blank line` / `空行` 必须同时出现，确保英文/中文 mode 的 agent
+     * 都能理解。该常量是 `CronStreamingParagraphSplitWiringTest#TC-CRON-STREAMING-h`
+     * 的字面值锚点。
+     */
+    private const val MULTI_MESSAGE_HINT =
+        "[MULTI-MESSAGE HINT] If your reply naturally splits into multiple paragraphs, separate them with a blank line (\\n\\n). " +
+            "The IM client will deliver each paragraph as a separate message, matching the user's expectation of receiving multiple bubbles.\n" +
+            "[多消息提示] 如果回复内容自然分多段，请在段落之间留一个空行（\\n\\n）。" +
+            "IM 端会把每段拆成一条独立消息发给用户，匹配用户对分多条说的期待。"
+
+    /**
+     * R-CRON-STREAMING-002 / TC-CRON-STREAMING-j: 段间睡眠常量（毫秒）。
+     *
+     * 微信短时高频限流：连续 dispatch 同一 chat 中间不留 gap，adapter 端可能合并
+     * 或丢消息。150ms 是手测下限——150~300ms 范围内 N 条消息可稳定独立到达；
+     * 100ms 偶发合并。落入常量是为了让单元测试可读 & 后续调整集中。
+     */
+    private const val INTER_PARAGRAPH_DELAY_MS = 200L
+
+    /**
+     * R-CRON-STREAMING-002 / TC-CRON-STREAMING-i: 段落切片 regex。
+     *
+     * 匹配"一个或多个空行"（含纯空白行）。`\R` 是 Kotlin Regex 的 line-break
+     * 抽象（覆盖 \r\n / \n / \r 三种），比 `\n` 鲁棒。单段路径（无空行）下
+     * `split` 返回单元素 list，与 R-CRON-STREAMING-001 既有行为字节级等价。
+     */
+    private val PARAGRAPH_REGEX = Regex("""\R\s*\R+""")
+
+    /**
      * sendMessage token budget。复用 `StandardChat`+`ManagerTool.spawn_agent`
      * 同款参数（line 1711-1712）；cron 回合典型是单一短任务，64K 上下文 + 0.85
      * 阈值是已验证可用的默认。
@@ -117,6 +155,10 @@ object CronAgentRunner {
         val wrappedPrompt = buildString {
             appendLine(CRON_CONTEXT_PREFIX_EN)
             appendLine(CRON_CONTEXT_PREFIX_CN)
+            appendLine()
+            // R-CRON-STREAMING-002 / TC-CRON-STREAMING-h: 多消息双语提示，落入
+            // system context 区域（在 CRON 上下文之后、user prompt 之前）。
+            appendLine(MULTI_MESSAGE_HINT)
             appendLine()
             append(rawPrompt)
         }
@@ -210,6 +252,11 @@ object CronAgentRunner {
                     val sidecarAssistantDeltas = java.util.concurrent.atomic.AtomicInteger(0)
                     val sidecarDispatchCalls = java.util.concurrent.atomic.AtomicInteger(0)
                     val sidecarDispatchSuccess = java.util.concurrent.atomic.AtomicInteger(0)
+                    // R-CRON-STREAMING-002 / TC-CRON-STREAMING-k: 段落级 dispatch 计数器。
+                    // 每段 paragraph 跑一次 dispatchOutgoing 就 +1，区别于 dispatchCalls
+                    // （后者是 AssistantDelta-级，1 turn 内最多 +1）。便于 cron.log 排查
+                    // "几 turn × 几段" 真实分布。
+                    val sidecarParagraphDispatches = java.util.concurrent.atomic.AtomicInteger(0)
                     // TC-CRON-STREAMING-g (2026-06-25): dispatchMutex 提到外层作用域，
                     // 让主路 collect 完成后能 tryLock 用作 in-flight drain 信号
                     // （sidecar 内 dispatch 在 withLock 下执行，外层拿到锁 = 已无 in-flight）。
@@ -278,45 +325,70 @@ object CronAgentRunner {
                                         )
                                         if (stripped.isNotBlank()) {
                                             sidecarDispatchCalls.incrementAndGet()
-                                            dispatchMutex.withLock {
-                                                try {
-                                                    CronFileLogger.i(
-                                                        TAG,
-                                                        "streaming dispatch turn=${event.turn} jobId=$jobId " +
-                                                            "platform=$originPlatform chat=$originChatId textLen=${stripped.length}"
-                                                    )
-                                                    // R-CRON-STREAMING-001 / TC-CRON-STREAMING-g 修法 (2026-06-25 第三次):
-                                                    // dispatchOutgoing 是 OkHttp 网络请求，主路 collect 跑完后
-                                                    // sidecarJob.cancel() 会把 in-flight 的它一并 cancel，抛
-                                                    // CancellationException 导致 ok=false（用户日志实测）。
-                                                    // 解法：用 NonCancellable 包裹，确保即使外层 cancel，
-                                                    // in-flight 的网络调用也能跑完拿到真实结果。
-                                                    val ok = withContext(NonCancellable) {
-                                                        gatewayForSidecar.dispatchOutgoing(
-                                                            platform = originPlatform,
-                                                            chatId = originChatId,
-                                                            text = stripped,
-                                                            threadId = originThreadId.takeIf { it.isNotEmpty() },
+                                            // R-CRON-STREAMING-002 (TC-CRON-STREAMING-i): 按连续空行
+                                            // 切片成 paragraphs。`HermesAgentLoop` 每 turn 最多 emit
+                                            // 一个 AssistantDelta，所以单 turn 的整段回复在这里被进一步
+                                            // 切成 N 条独立 IM 消息（用户对"分多条说"的应用层期待）。
+                                            // 单段路径（无空行）下 split 返回单元素 list，与
+                                            // R-CRON-STREAMING-001 既有行为字节级等价。
+                                            val paragraphs = stripped.split(PARAGRAPH_REGEX)
+                                                .map { it.trim() }
+                                                .filter { it.isNotBlank() }
+                                            CronFileLogger.i(
+                                                TAG,
+                                                "streaming AssistantDelta jobId=$jobId turn=${event.turn} " +
+                                                    "paragraphCount=${paragraphs.size}"
+                                            )
+                                            paragraphs.forEachIndexed { idx, paragraph ->
+                                                dispatchMutex.withLock {
+                                                    try {
+                                                        CronFileLogger.i(
+                                                            TAG,
+                                                            "streaming dispatch turn=${event.turn} jobId=$jobId " +
+                                                                "platform=$originPlatform chat=$originChatId " +
+                                                                "paragraphIdx=$idx/${paragraphs.size} textLen=${paragraph.length}"
                                                         )
-                                                    }
-                                                    if (ok) {
-                                                        sidecarDispatchSuccess.incrementAndGet()
-                                                        streamingDelivered.set(true)
-                                                    } else {
+                                                        // R-CRON-STREAMING-001 / TC-CRON-STREAMING-g 修法 (2026-06-25 第三次):
+                                                        // dispatchOutgoing 是 OkHttp 网络请求，主路 collect 跑完后
+                                                        // sidecarJob.cancel() 会把 in-flight 的它一并 cancel，抛
+                                                        // CancellationException 导致 ok=false（用户日志实测）。
+                                                        // 解法：用 NonCancellable 包裹，确保即使外层 cancel，
+                                                        // in-flight 的网络调用也能跑完拿到真实结果。
+                                                        val ok = withContext(NonCancellable) {
+                                                            gatewayForSidecar.dispatchOutgoing(
+                                                                platform = originPlatform,
+                                                                chatId = originChatId,
+                                                                text = paragraph,
+                                                                threadId = originThreadId.takeIf { it.isNotEmpty() },
+                                                            )
+                                                        }
+                                                        sidecarParagraphDispatches.incrementAndGet()
+                                                        if (ok) {
+                                                            sidecarDispatchSuccess.incrementAndGet()
+                                                            streamingDelivered.set(true)
+                                                        } else {
+                                                            CronFileLogger.w(
+                                                                TAG,
+                                                                "streaming dispatch failed turn=${event.turn} jobId=$jobId " +
+                                                                    "platform=$originPlatform chat=$originChatId " +
+                                                                    "paragraphIdx=$idx/${paragraphs.size} reason=ok=false"
+                                                            )
+                                                        }
+                                                    } catch (e: Throwable) {
+                                                        // 失败语义：单段 dispatch 失败不抛、不中断 agent loop / 不中断后续段落，
+                                                        // 只记 CronFileLogger，留待 deliver(...) 主路兜底（如果整 turn 全失败的话）。
                                                         CronFileLogger.w(
                                                             TAG,
-                                                            "streaming dispatch failed turn=${event.turn} jobId=$jobId " +
-                                                                "platform=$originPlatform chat=$originChatId reason=ok=false"
+                                                            "streaming dispatch threw turn=${event.turn} jobId=$jobId " +
+                                                                "platform=$originPlatform chat=$originChatId " +
+                                                                "paragraphIdx=$idx/${paragraphs.size} reason=${e.message}"
                                                         )
                                                     }
-                                                } catch (e: Throwable) {
-                                                    // 失败语义：单轮 dispatch 失败不抛、不中断 agent loop，
-                                                    // 只记 CronFileLogger，留待 deliver(...) 主路兜底。
-                                                    CronFileLogger.w(
-                                                        TAG,
-                                                        "streaming dispatch threw turn=${event.turn} jobId=$jobId " +
-                                                            "platform=$originPlatform chat=$originChatId reason=${e.message}"
-                                                    )
+                                                }
+                                                // R-CRON-STREAMING-002 / TC-CRON-STREAMING-j: 段间睡眠避免
+                                                // 微信短时高频限流。最后一段后不需要再 sleep。
+                                                if (idx < paragraphs.size - 1) {
+                                                    delay(INTER_PARAGRAPH_DELAY_MS)
                                                 }
                                             }
                                         }
@@ -370,8 +442,10 @@ object CronAgentRunner {
                     responseStream.collect { chunk ->
                         responseBuilder.append(chunk)
                     }
-                    // R-CRON-STREAMING-001 诊断总结：把 sidecar 跑完时的 5 个计数器落 cron.log。
+                    // R-CRON-STREAMING-001 诊断总结：把 sidecar 跑完时的计数器落 cron.log。
                     // 下次用户报"还是一起出来"就一眼看出断在哪一层 —— 这是定位下一层 bug 的关键证据。
+                    // R-CRON-STREAMING-002 / TC-CRON-STREAMING-k: paragraphDispatches 让"几 turn × 几段"
+                    // 一目了然，比 dispatchCalls 维度更细。
                     CronFileLogger.i(
                         TAG,
                         "streaming sidecar summary jobId=$jobId " +
@@ -379,6 +453,7 @@ object CronAgentRunner {
                             "chatIdMatched=${sidecarMatched.get()} " +
                             "assistantDeltas=${sidecarAssistantDeltas.get()} " +
                             "dispatchCalls=${sidecarDispatchCalls.get()} " +
+                            "paragraphDispatches=${sidecarParagraphDispatches.get()} " +
                             "dispatchSuccess=${sidecarDispatchSuccess.get()} " +
                             "streamingDelivered=${streamingDelivered.get()}"
                     )

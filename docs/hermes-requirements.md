@@ -2613,3 +2613,41 @@ C. **兼容老 jobs.json**：origin 为 null 的老 job 走 `result.chatId` (exe
 - 插话功能（`/steer`）和定时器创建 / 触发功能未被破坏（手测 + 单测）。
 
 
+### R-CRON-STREAMING-002: cron 触发的单 turn 长回复按段落兜底切片发送（弥补 R-CRON-STREAMING-001 单 turn 退化）
+
+**来源**:
+- 用户 2026-06-25 反馈（接续 R-CRON-STREAMING-001 之后）：r3 APK 修好 sidecar in-flight cancel 之后，cron 触发的"喝水提醒"在微信里依然是 1 条 158 字符整段（jobId=d2802c152906 实测日志：`turnsUsed=1`, `assistantDeltas=1`, `dispatchSuccess=1`, `streamingDelivered=true`）。用户 prompt 已经明确要求"分多条消息说"，但触发时 LLM 用 1 个 turn 写完整段 158 字符回复，没有调任何工具，所以 R-CRON-STREAMING-001 sidecar 只看到 1 个 `AssistantDelta` 可发。
+- 无 Python 上游——upstream 的 `scheduler.py::_deliver_result` 是一次性 `_send_to_platform(final_response)`，本来就不分多条；本需求纯 Android 端 IM UX。
+
+**背景**:
+- `HermesAgentLoop.kt:582` 在每个 turn 结束时同步 emit **最多 1 个** `AgentEvent.AssistantDelta(text, turn+1)`。一个 turn ≠ 一条消息，最多 1 对 1。
+- R-CRON-STREAMING-001 已把"每个 turn 一条 IM bubble"做到 sidecar 层。但当 agent 仅 1 个 turn 完成任务（典型：纯文本提醒任务，无工具可调），sidecar 拿到的就是 1 个 `AssistantDelta`，自然只发 1 条。
+- 用户对"分多条"的期望是 **应用层语义**——希望微信里看到几条独立 bubble，而不是 agent 内部多 turn。这一层只能在 cron path 内额外加保证。
+- 已知不破坏点：R-CRON-STREAMING-001 的 sidecar 主体不动；`HermesReplyMarkupStripper.strip` 不动；`HermesAgentLoop` 不动；gateway / adapter 不动。
+
+**架构合规**:
+- **两层保障**（prompt 引导 + sidecar 段落兜底切片）：
+  1. **Prompt 层引导**：`CronAgentRunner.run` 的 `wrappedPrompt` 在既有 `CRON_CONTEXT_PREFIX_EN/CN` 之后追加一段 **bilingual multi-message hint**，告诉 agent "如果回复内容自然分多段，请在段落之间留空行 (`\n\n`)，IM 端会按段落分多条发"。这是软引导，不强制 agent 多 turn（强制多 turn 需要工具循环，跟现有架构不兼容）。
+  2. **Sidecar 段落兜底切片**：sidecar 收到 `AssistantDelta` 后，剥完 markup → trim → **按连续空行 (`\n\s*\n+`) 分割**得到 `paragraphs`；对每段 `paragraph` 单独 `gateway.dispatchOutgoing(...)`（沿用既有 `dispatchMutex.withLock` 保证顺序），段间 sleep 一小段（≥150ms，避免微信短时高频限流；该值落入常量 `INTER_PARAGRAPH_DELAY_MS`）。空段过滤。
+- **不破坏单段路径**：如果 `paragraphs.size == 1`，与 R-CRON-STREAMING-001 既有行为字节级等价（1 条 dispatch，1 条 IM）。
+- **不破坏多 turn 路径**：如果 agent 真的多 turn，sidecar 仍然每个 turn 跑一次"段落切片"，每个 turn 自己内部按段落切分。turn 之间的语义是 agent loop 决定的，turn 内段落切分是本需求新增的。等价于"先按 turn，再按段落"。
+- **群聊回退**：与 R-CRON-STREAMING-001 一致——`originPlatform == "weixin" && originChatId.endsWith("@chatroom")` 时 sidecar 整个跳过，主路兜底走一条整段。本需求不为群聊单独开切片路径。
+- **去重不变**：第一条段落 dispatch 成功就翻转 `streamingDelivered=true`；`deliver(...)` 仍按既有逻辑跳过 IM 重发。
+- **失败语义**：单段 dispatch 失败仅 `CronFileLogger.w(...)`，不抛、不中断 sidecar 后续段落（沿用 R-CRON-STREAMING-001 已有的 try/catch 语义）。
+- **顺序保证**：复用 R-CRON-STREAMING-001 的 `dispatchMutex.withLock`，paragraph 顺序串行 dispatch（外层 `.collect` 串行 + 内层 mutex 双保险，跟 turn 间已有的串行模型一致）。
+- **可观测性**：sidecar 计数器扩 1 个 `sidecarParagraphDispatches`（每段一次 dispatch 计数），落 `streaming sidecar summary` 行，便于下次问题排查区分"几 turn × 几段"。
+
+**与既有 R 的关系**:
+- 不动 R-AGENT-031 / R-AGENT-033 / R-AGENT-035 / R-AGENT-036/037 / R-AGENT-045 / R-OBS-001 / R-CRON-STREAMING-001 既有验收点。
+- 复用 R-CRON-STREAMING-001 的 `dispatchOutgoing` / `dispatchMutex` / `streamingDelivered` / `CronFileLogger`，**不**新增任何 outbound API 或新桥接类。
+- 复用既有 `HermesReplyMarkupStripper.strip`，**不**引入第二份 markup 规则。
+
+**验收**:
+- 装版本后，在微信**私聊**里跑 cron job，agent 单 turn 输出含 2 个以上空行段落（如"该喝水啦！💧\n\n补水的好处：...\n\n温馨提示：..."）→ 微信收到 **N 条独立 bubble**（N = 段落数）；段间不超 1s 间隔。
+- 单段路径：agent 单 turn 输出只有 1 段（无空行） → 微信收到 **1 条**（与 R-CRON-STREAMING-001 既有行为完全一致，无回归）。
+- 多 turn 路径：agent 跑出多 turn（真有工具调用） → 微信收到 ≥ N×M 条（N=turn 数，M=每 turn 段落数），顺序与 agent loop 顺序一致。
+- 群聊路径：`@chatroom` 私聊在群里跑 → 仍是 1 条整段（群聊回退路径不变）。
+- `cat /sdcard/Download/Hermes/cron_logs/cron.log` 含 `paragraphCount=<n>` 字面值在 `streaming AssistantDelta` 或 `streaming sidecar summary` 类日志里（便于问题排查"几 turn × 几段"）。
+- app 内对话框 / `writeLocalChatNote` / `saveJobOutput` 落盘结果不变（不重复、不丢失，与 R-CRON-STREAMING-001 等价）。
+
+
