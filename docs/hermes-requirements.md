@@ -2719,3 +2719,49 @@ C. **兼容老 jobs.json**：origin 为 null 的老 job 走 `result.chatId` (exe
 - 不破坏：cron 触发链路（R-CRON-STREAMING-001/002 既有 E2E）字节级不变；`cron.log` 行格式 / 行数（除 cron 自身埋点外）不被本工具写入。
 
 
+### R-GW-STREAMING-001: 正常 IM gateway 对话按"agent loop 轮次 + 段落"流式分段连发（中间过程可见性）
+
+**来源**:
+- 用户 2026-06-26 反馈：cron 路径（R-CRON-STREAMING-001/002）已修；但**正常 IM 对话**（用户在微信里直接 @bot 或私聊触发的 agent 调用）依旧是"一路等到 agent 跑完才一次性收到最终结果"。用户原话："我要的不是它在定时器触发的时候分段回复，是在正常任务中，我能知道它还在正常工作。而不是一路等" + "是微信收到的回复，不是单单收到最终结果"。期望 agent 多 turn 推进（思考 → 调工具 → 再思考 → 再回话）的中间"说话"轮次，每一轮都立刻投递到微信，让用户看到 agent "正在帮你查天气..." → "查到了，正在分析..." → "最终结果"这种流式可见性，而不是 60s 静默后一坨长文。
+- 无 Python 上游——Python `hermes-agent/` 是 server 模式，没有 IM gateway streaming dispatch 这层；本需求纯 Android 端 IM UX，是 R-CRON-STREAMING-001/002 思路从 cron 路径外延到正常 IM gateway 路径。
+
+**背景**:
+- 现状两条链路：
+  - **Cron 路径**：`CronExactAlarmReceiver` → `CronAgentRunner.run` → `EnhancedAIService.sendMessage(isSubTask=true)`。R-CRON-STREAMING-001/002 已在 `CronAgentRunner` 里挂了 sidecar 协程订阅 `AgentEventBus`，每个 `AssistantDelta` 即时 strip → 按段落切片 → `dispatchOutgoing` 到 IM。
+  - **正常 IM 路径**：`GatewayRunner._handleMessage`（`hermes-android/.../gateway/Run.kt:317`） → `HermesGatewayController.runHermesAgent` → `ChatServiceCore.sendUserMessage` → `EnhancedAIService.sendMessage`。整段跑完后由 `GatewayRunner` 在 `Run.kt:509` 检查 `responseText != INTERRUPTED_SENTINEL`，然后在 `Run.kt:545` 调 `deliveryRouter.deliverText(...)` 一次性把最终回复 dispatch 给微信。**没有 sidecar**。
+- `HermesAgentLoop.kt:582` 在每个 turn 结束时同步 emit 一次 `AgentEvent.AssistantDelta(text, turn+1)`；`EnhancedAIService.kt:1167` 把该事件同步 forward 到 `AgentEventBus.events`（`SharedFlow(replay=0, extraBufferCapacity=128)`），key 是 `taskIdValue`（`EnhancedAIService.kt:1041`）。
+- 正常 IM 路径里，`HermesGatewayController.runHermesAgent` 通过 `chatId = "gw:$sessionKey:$historyChatId"` 调 `ChatServiceCore.sendUserMessage`；该 chatId 即 `AgentEventBus` 上 `AssistantDelta.taskId`，可被 sidecar 用作过滤 key。
+- 重复派发风险：`runHermesAgent` 返回最终回复后，`GatewayRunner` 仍会调 `deliveryRouter.deliverText(...)`。如果 sidecar 已逐轮发过，主路再发一次 = 用户收到中间轮 + 最终整段重复。必须有"已经流式发完了，请跳过 deliver"的硬信号。
+
+**架构合规**:
+- **抽出公共 sidecar 组件 `AgentStreamingSidecar`**（落 `app/src/main/java/com/ai/assistance/operit/hermes/gateway/AgentStreamingSidecar.kt`），把 R-CRON-STREAMING-001/002 在 `CronAgentRunner` 里手写的 sidecar 主体（订阅 `AgentEventBus.events` → 过滤 `TaggedEvent.chatId == myChatId` → `AssistantDelta` strip → 按 `PARAGRAPH_REGEX` 切段 → `dispatchMutex.withLock` 串行 `dispatchOutgoing` → `delay(INTER_PARAGRAPH_DELAY_MS)`）抽成一个可复用类。`CronAgentRunner` 重构为调用该公共组件（行为字节级等价），`HermesGatewayController.runHermesAgent` 复用同一个组件。**不**让两条路径各写一遍 sidecar 逻辑漂移。
+- **`HermesGatewayController.runHermesAgent` 接入 sidecar**：在调 `ChatServiceCore.sendUserMessage` 之前 `coroutineScope { launch { sidecar.collect() } }` 启 sidecar；sidecar 内用 `onSubscription { ready.complete() }` 保证订阅落地后再开始 agent 调用，避免 `SharedFlow(replay=0)` 竞态丢首轮事件。agent 返回后 sidecar 协程要么自然结束（用 `.takeWhile` 或外层 cancel），要么被 `coroutineScope` 外层 cancel。
+- **群聊回退**：与 R-CRON-STREAMING-001/002 一致——若 `originPlatform == "weixin" && originChatId.endsWith("@chatroom")`，**不启用** sidecar，直接走原有"整段 deliver"路径（避免群里刷屏 + 微信短时高频风控）。Telegram / Feishu 等非微信平台默认启用 sidecar（无 `@chatroom` 后缀的群聊概念）。
+- **重复派发 sentinel**：新增 file-scope 常量 `STREAMING_DELIVERED_SENTINEL`（`Run.kt` 同文件、与既有 `INTERRUPTED_SENTINEL` 同位置），值定为不会出现在自然语言里的 marker（如 `"__HERMES_STREAMING_DELIVERED__"`）。
+  - `HermesGatewayController.runHermesAgent` 在 sidecar 派发过**至少一段**时返回 `STREAMING_DELIVERED_SENTINEL` 字符串（不返回最终累积文本）；sidecar 未派发任何段（典型：agent loop 直接抛错 / 空回复）时回退原有行为返回完整文本。
+  - `GatewayRunner._handleMessage` 在 `deliveryRouter.deliverText(...)` 前检查 `response == STREAMING_DELIVERED_SENTINEL`，命中则 **跳过 deliver**（已经在 sidecar 流式发完）；其他持久化（`writeHistory` / `saveJobOutput` / `MessageRouter.recordOutbound` 之类如有）照常用 sidecar 拼回的全文（在 sidecar 内部累加 `paragraphsBuffer`，最终通过返回值的扩展形态或 sidecar 暴露的 `getDeliveredText()` 取到）以保证 app 内对话历史完整。
+- **订阅范围**：sidecar 仅订阅 `AgentEvent.AssistantDelta`，**不**订阅 `Thinking` / `ToolCallStart` / `ToolCallEnd` —— 思考过程和 raw 工具调用不应发到 IM（会泄漏中间状态、刷屏；后续若用户提需求再加）。
+- **顺序保证 & 失败语义**：复用 R-CRON-STREAMING-001/002 的 `dispatchMutex.withLock` 串行模型；单段 dispatch 失败仅 `GatewayFileLogger.w(...)`（区别于 cron 走 `CronFileLogger`，正常 IM gateway 沿用 `GatewayFileLogger`），不抛、不打断 sidecar 后续段落。
+- **常量复用策略**：`INTER_PARAGRAPH_DELAY_MS=200L` / `PARAGRAPH_REGEX=Regex("""\R\s*\R+""")` / `MULTI_MESSAGE_HINT` 仍**留在 `CronAgentRunner.kt` 内**作为 file-scope 常量（保护 R-CRON-STREAMING-002 既有 wiring 测试断言：`CronStreamingParagraphSplitWiringTest.kt` 通过 grep `CronAgentRunner.kt` 源码字面值来断言常量存在 / 取值 ≥ 150L 等）。`HermesGatewayController.kt` 同 package 声明自己的同名 file-scope 常量副本（值等价；3 个小常量重复声明是为了保持两条路径的测试自洽）。`AgentStreamingSidecar` 类构造函数接受 `paragraphRegex: Regex`、`interParagraphDelayMs: Long`、`logTag: String`、`logger: (level: String, msg: String) -> Unit` 等参数 —— 让 cron 走 `CronFileLogger`、gateway 走 `GatewayFileLogger`，由调用方注入。`MULTI_MESSAGE_HINT` 是否注入正常 IM 路径由本需求决定——**注入**，目的与 cron 一致（鼓励 agent 在段落间留空行，让 sidecar 能切多段）；注入点是 `HermesGatewayController.runHermesAgent` 在构造发给 `ChatServiceCore` 的 system context 时追加（不污染 user prompt）。
+- **回退安全**：sidecar collect 协程包 `try { ... } catch (ce: CancellationException) { throw ce } catch (t: Throwable) { GatewayFileLogger.w(...) }`，任何异常不冒泡到 `runHermesAgent`，确保 sidecar 异常不影响主路 agent loop。
+
+**与既有 R 的关系**:
+- **复用** R-CRON-STREAMING-001/002 的 sidecar 算法（订阅 bus / strip / paragraph split / mutex 串行 / inter-paragraph delay / 群聊回退 / streamingDelivered 去重 / failure swallow），重构成公共组件。**不**改变 cron 路径的字节级行为（cron sidecar 仍发同样的段、同样的间隔、同样的日志埋点）。
+- **不动** R-AGENT-031（cron 持久化）/ R-AGENT-033（origin → IM 投递）/ R-AGENT-035 / R-AGENT-036/037（`/steer` 插话）/ R-AGENT-045（cross-dispatcher session vars）/ R-OBS-001（诊断日志）/ R-CRON-STREAMING-001/002 / R-CRON-DIAG-001 / R-GW-001..R-GW-013 既有验收点。
+- 复用 R-AGENT-033 的 `gateway.dispatchOutgoing(platform, chatId, text, threadId)` outbound 接口，**不**新加 outbound API。
+- 复用 R-OBS-001 / `GatewayFileLogger` 做 sidecar 轨迹诊断（每段 dispatch 一行 `streaming dispatch turn=N paragraph=M ok=true/false`、最终落 `streaming sidecar summary` 类聚合行；字段格式与 cron sidecar 对齐方便复用 R-CRON-DIAG-001 风格的诊断工具）。
+- **不**新建 dispatcher、不新建桥接类、不新建 tool category；本需求纯在 `HermesGatewayController` 内部 + `GatewayRunner` 跳 deliver 两处接通。
+
+**验收**:
+- 装新 APK 后，在微信**私聊**里发"帮我查下天气并提醒我带伞"这种会调工具的多轮请求，微信收到 **N 条独立气泡**（N = agent 真实 turn 数 × 每 turn 段落数），按 agent loop 顺序到达；不是等 60s 后一次性收到最终整段。
+- 微信**群聊**里同样请求，仍是**整段一条**（`@chatroom` 回退路径生效）。
+- agent 单 turn 直接完成任务（无工具）：sidecar 按 `PARAGRAPH_REGEX` 切段，含 ≥ 2 空行段落时收到 ≥ 2 条；单段时收到 1 条（与不接 sidecar 行为字节级等价）。
+- agent loop 直接报错 / 0 个 `AssistantDelta`：sidecar 不派发任何段，`runHermesAgent` 返回原始累积文本（不是 sentinel），`GatewayRunner` 走原有 `deliverText` 兜底（与本需求接入前行为等价，无回归）。
+- 微信用户**没有**收到任何思考 / 工具调用 raw payload（只订阅 `AssistantDelta`，`Thinking` / `ToolCall*` 不投递）。
+- app 内对话框（`writeHistory` / `recordOutbound`）落盘结果与不接 sidecar 时**等价**（不重复、不丢失）；用户在 app 里翻历史能看到完整 agent 回复。
+- cron 路径（R-CRON-STREAMING-001/002）行为字节级不变：重构 `CronAgentRunner` 复用 `AgentStreamingSidecar` 后，cron 触发的喝水提醒仍按段落分多条发，`cron.log` 字段名 / 顺序 / 行格式与重构前 diff 为空。
+- `cat /sdcard/Download/Hermes/gateway_logs/gateway.log` 含 `streaming dispatch turn=N paragraph=M ok=true/false` 类轨迹行（gateway 端 sidecar 自己写，与 cron 的 `cron.log` 平行，不混入）。
+- 单测覆盖：`AgentStreamingSidecarTest.kt`（公共组件 unit test，覆盖订阅竞态 / 段落切片 / mutex 串行 / 群聊回退 / sentinel 返回 / failure swallow）+ `HermesGatewayControllerStreamingWiringTest.kt`（source-scan 风格 wiring test，断言 `runHermesAgent` 真的引用了 `AgentStreamingSidecar` + 真的能返回 sentinel）+ `GatewayRunnerStreamingSentinelTest.kt`（source-scan 风格，断言 `_handleMessage` 真的检查了 `STREAMING_DELIVERED_SENTINEL` 并跳过 deliver）+ `CronAgentRunnerSidecarRefactorTest.kt`（refactor 后 cron 仍引用同一个 `AgentStreamingSidecar`，且字面常量 `MULTI_MESSAGE_HINT` / `INTER_PARAGRAPH_DELAY_MS` / `PARAGRAPH_REGEX` 仍可解析出预期值）。
+- 不破坏：现有 §3 三个 E2E 脚本（`test_api_config_e2e.sh` / `test_tool_call_e2e.sh` / `test_builtin_key_e2e.sh`）仍全绿——agent-level TOKEN 回显仍命中（TOKEN 出现在最后一段，sidecar 仍会派发；`ExternalChatReceiver.sendResultBroadcast` 拿到的 `aiResponsePreview` 仍含全文累积形态）。
+
+
