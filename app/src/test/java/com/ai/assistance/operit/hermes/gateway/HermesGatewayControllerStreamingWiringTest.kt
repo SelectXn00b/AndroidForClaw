@@ -296,6 +296,74 @@ class HermesGatewayControllerStreamingWiringTest {
         )
     }
 
+    // ---------------------------------------------------------------------
+    // TC-GW-STREAMING-002-e (2026-06-26 new feature): MULTI_MESSAGE_HINT
+    // pushes agent toward `send_message` tool usage.
+    //
+    // The R-GW-STREAMING-001 v2.1 hint was bilingual but only mentioned
+    // `blank line` / `空行` — it relied on the model splitting paragraphs in
+    // its single AssistantDelta. That left the "回复还是一坨" symptom in
+    // real-device tests because 1 turn = 1 AssistantDelta and Chinese LLMs
+    // don't emit blank lines.
+    //
+    // R-GW-STREAMING-002 augments the hint to push the model toward
+    // calling the `send_message` tool mid-loop, which delivers each chunk
+    // as a separate IM bubble immediately. The two-layer design is
+    // preserved: (a) tool calls are the primary path (each call = 1
+    // bubble), (b) sidecar blank-line splitting is the fallback for
+    // models that didn't take the tool hint.
+    //
+    // The bilingual `blank line` / `空行` assertions from
+    // TC-GW-STREAMING-001-j stay intact (covered above) — this test only
+    // adds NEW assertions for the tool-pushing keywords.
+    // ---------------------------------------------------------------------
+    @Test
+    fun `TC-GW-STREAMING-002-e MULTI_MESSAGE_HINT pushes send_message tool usage`() {
+        // (1) Hint must mention the literal tool name `send_message` so the
+        //     model knows exactly which tool to call.
+        assertTrue(
+            "TC-GW-STREAMING-002-e: `MULTI_MESSAGE_HINT` (or synonymous constant) " +
+                "must contain the literal `send_message` so the model can " +
+                "unambiguously identify which tool to call.",
+            source.contains("send_message")
+        )
+
+        // (2) English half of the hint must mention `tool` so the model
+        //     understands this is a tool-call instruction (not a textual
+        //     instruction to literally write "send_message" in the reply).
+        assertTrue(
+            "TC-GW-STREAMING-002-e: hint must mention English `tool` keyword " +
+                "to make clear this is a tool-call instruction, not a literal " +
+                "string-output instruction.",
+            source.contains("tool")
+        )
+
+        // (3) Chinese half must mention `工具` for CN-leaning models.
+        assertTrue(
+            "TC-GW-STREAMING-002-e: hint must mention Chinese `工具` keyword " +
+                "— bilingual support so CN-leaning models reliably interpret " +
+                "the instruction.",
+            source.contains("工具")
+        )
+
+        // (4) Regression guard for TC-GW-STREAMING-001-j: bilingual
+        //     `blank line` / `空行` keywords MUST still be present (the
+        //     sidecar fallback layer still expects the model to optionally
+        //     emit blank lines when not using the tool).
+        assertTrue(
+            "TC-GW-STREAMING-002-e (regression guard): `blank line` keyword " +
+                "from R-GW-STREAMING-001-j hint MUST still be present — the " +
+                "sidecar blank-line splitting layer is still active as fallback.",
+            source.contains("blank line")
+        )
+        assertTrue(
+            "TC-GW-STREAMING-002-e (regression guard): `空行` keyword from " +
+                "R-GW-STREAMING-001-j hint MUST still be present — the sidecar " +
+                "fallback layer is still active.",
+            source.contains("空行")
+        )
+    }
+
 
     /**
      * Strip Kotlin `/* ... */` block comments and `// ...` line comments while

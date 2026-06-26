@@ -11,7 +11,18 @@ import com.xiaomo.hermes.hermes.ToolDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class OperitToolDispatcher(context: Context) : ToolDispatcher {
+/**
+ * @param extraExecutors Optional per-call tool executors keyed by tool name.
+ *   Used by the gateway path (R-GW-STREAMING-002) to inject `send_message`
+ *   without polluting the global OperitTool registry — see
+ *   `EnhancedAIService.runAgentLoopViaHermes` for the gateway-only gate.
+ *   When a tool name is present in this map, the executor wins and the
+ *   built-in OperitTool registry is bypassed for that name.
+ */
+class OperitToolDispatcher(
+    context: Context,
+    private val extraExecutors: Map<String, suspend (Map<String, Any?>) -> String>? = null
+) : ToolDispatcher {
     private val toolHandler = AIToolHandler.getInstance(context)
     private val gson = Gson()
 
@@ -23,6 +34,32 @@ class OperitToolDispatcher(context: Context) : ToolDispatcher {
     ): String = withContext(Dispatchers.IO) {
         Log.d(TAG, "dispatch IN: tool=$toolName argKeys=${args.keys} " +
             "taskId=$taskId userTaskLen=${userTask?.length ?: 0}")
+
+        // R-GW-STREAMING-002: per-call extra executors win over the global
+        // OperitTool registry. Only gateway path passes a non-empty map.
+        val extra = extraExecutors?.get(toolName)
+        if (extra != null) {
+            val startNs = System.nanoTime()
+            val argsSummary = args.entries.joinToString(", ") { (k, v) ->
+                val vs = v?.toString() ?: "null"
+                "$k=${if (vs.length > 300) vs.take(300) + "…[${vs.length}]" else vs}"
+            }
+            GatewayFileLogger.d(TAG, "  EXTRA_TOOL_CALL: $toolName($argsSummary)")
+            val result = runCatching { extra(args) }
+                .getOrElse { err ->
+                    Log.w(TAG, "extra executor for $toolName threw", err)
+                    gson.toJson(mapOf(
+                        "success" to false,
+                        "result" to "",
+                        "error" to (err.message ?: err.toString())
+                    ))
+                }
+            val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
+            Log.d(TAG, "dispatch OUT (extra): tool=$toolName ms=$elapsedMs resultLen=${result.length}")
+            GatewayFileLogger.d(TAG, "  EXTRA_TOOL_RESULT: $toolName ${elapsedMs}ms resultLen=${result.length}")
+            return@withContext result
+        }
+
         // Log tool call with arguments (truncate large values)
         val argsSummary = args.entries.joinToString(", ") { (k, v) ->
             val vs = v?.toString() ?: "null"

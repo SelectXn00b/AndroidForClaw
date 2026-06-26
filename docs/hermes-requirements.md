@@ -2766,3 +2766,47 @@ C. **兼容老 jobs.json**：origin 为 null 的老 job 走 `result.chatId` (exe
 - 不破坏：现有 §3 三个 E2E 脚本（`test_api_config_e2e.sh` / `test_tool_call_e2e.sh` / `test_builtin_key_e2e.sh`）仍全绿——agent-level TOKEN 回显仍命中（TOKEN 出现在最后一段，sidecar 仍会派发；`ExternalChatReceiver.sendResultBroadcast` 拿到的 `aiResponsePreview` 仍含全文累积形态）。
 
 
+### R-GW-STREAMING-002: gateway agent 主动调 `send_message` 工具分段实时投递（agent-driven streaming）
+
+**来源**:
+- 用户 2026-06-26 反馈：R-GW-STREAMING-001 v2.1 装机后仍是"一坨"。诊断结论：单 turn agent 最多 emit 一次 `AssistantDelta`（`AgentLoop.kt:580-583`，content 非空时 emit 一次）；中文 LLM 不强约束 prompt 时输出空行率不高，sidecar `Regex("""\R\s*\R+""")` 切出 1 段 = 整个 reply = "一坨"。R-GW-STREAMING-001 的 sidecar 拆段方案在"模型不听话插空行"时退化为"agent 全跑完才发 1 个气泡"，跟 fallback 等价。用户原话："按你建议走" + "不能偷懒，确保功能效果达标"，明确要采 C 方案（真正多 turn 流式 = agent 主动调 send_message 工具分段发）。
+- 部分对齐 Python 上游 `reference/hermes-agent/tools/send_message_tool.py:103-132`（`SEND_MESSAGE_SCHEMA` 常量）+ `:1516-1523`（registry 注册）+ `:1448-1458`（`_check_send_message` 网关运行时门控）+ `gateway/builtin_hooks/boot_md.py:38-39`（"If you need to send a message to a platform, use the send_message tool."）。**Python 上游语义是跨平台投递（`target=platform:chatid:threadid`）**；Android 侧裁剪为"对当前 IM chat 立即发一段话"（只接受 `text` 一个参数，目标固定为当前 gateway chat）—— 这是 Hermes Android 平台差异（Android 没有 Python 那种 streaming 回调路径，必须靠工具调用实现 agent 主动分段；§0.1 三阶段原则允许"对齐上游 + 平台差异函数体"）。
+
+**背景**:
+- 现状（R-GW-STREAMING-001 v2.1 装机后）：sidecar + `MULTI_MESSAGE_HINT` 双语提示装好；但模型不听话不插空行 → sidecar 切出 1 段 → 仍一坨。
+- agent loop 是 turn-by-turn 串行（`AgentLoop.kt:459-872`），每 turn 最多 emit 一次 AssistantDelta。多 turn 是靠"agent 调工具 → 再 LLM 调用 → 再 emit AssistantDelta"驱动。单纯聊天（无工具调用）就是 1 个 turn 1 个 AssistantDelta。
+- `EnhancedAIService.runAgentLoopViaHermes` 当前 `openAiToolSchemas` 仅来自 `getAvailableToolsForFunction(functionType)`（`EnhancedAIService.kt:1883-2051`），不区分 gateway / APP UI 路径。`OperitToolDispatcher.dispatch(...)`（`OperitToolDispatcher.kt:18-80`）也是全量转发到 `AIToolHandler.executeTool`，没有 per-call 拦截口子。
+- gateway 路径已有 `isSubTask=true && chatId.startsWith("gw:")` 这套 **de-facto 信号**（`EnhancedAIService.kt` 现有 6 处 `if (isSubTask) GatewayFileLogger...` 已沿用），可作为 gateway-only 注入的 gate。
+
+**架构合规**:
+- **`send_message` 工具裁剪版**（Android-only 简化）：参数只接受 `text: string`，不接 `target` / `action`。目标固定为"当前 gateway chat"，由 process-global `HermesGatewayController.gatewayOutboundDispatcher: ((chatId: String, text: String) -> Boolean)?` 持有（仿 `cronOutboundDispatcher` 的项目既有 pattern，`HermesGatewayController.kt` 既有写法）。`runHermesAgent` 进入时绑定到当前 chat 的 `dispatchOutgoing`，`finally` 清空。
+- **Per-call 注入（Option A 路线）**：`OperitToolDispatcher` 加 `extraExecutors: Map<String, suspend (Map<String, Any?>) -> String>?` 构造参数；`EnhancedAIService.runAgentLoopViaHermes` 在 `isGatewayCall = isSubTask && chatId?.startsWith("gw:") == true` 时把 `send_message` schema 拼到 `openAiToolSchemas`，并把 `send_message` executor 拼到 `extraExecutors`。**APP UI 路径完全看不见此工具**——schema 和 executor 都不暴露。
+- **工具语义**：`send_message(text: String) → JSON {"ok": true}` 或 `{"ok": false, "error": "..."}`。Executor 内部直接调 `HermesGatewayController.gatewayOutboundDispatcher.invoke(chatId, text)`，把那段话立刻投递到当前 IM chat（不等 agent 跑完）。
+- **跟 sidecar 协作（双层兜底）**：
+  - **首选**：agent 调 `send_message(text="...")` → 工具内 dispatchOutgoing 立即发 → 用户立刻看见。turn 结束后 agent 的 `AssistantDelta.text` 应为空或仅短结束语（由 prompt 约束："用了 send_message 就不要在最终回复里重复"）。
+  - **兜底**：若 agent 没用工具，sidecar（R-GW-STREAMING-001）按段落切 AssistantDelta 兜底。若模型既没用工具又输出无空行长文，最差体验 = R-GW-STREAMING-001 v2.1 现状（一坨），不更糟。
+  - **去重**：`AgentStreamingSidecar.wasDelivered()` 由 sidecar 自己 dispatch 成功 OR `send_message` 工具调用驱动（共享同一标志，新增 `markDelivered()` 接口）；`send_message` 调用过后 sidecar 拿到的 AssistantDelta 大概率为空（被 prompt 约束），即使非空、sidecar 仍按既有逻辑切段发 —— 用户看到的就是"agent 把同一信息说了两次"（小概率，因为 prompt 约束 + 单 turn 内 AssistantDelta 多半因 send_message 已说而留空）。
+- **Prompt 改写**：`MULTI_MESSAGE_HINT` 改为双语 + 主推 `send_message` 工具调用 + 备用空行分段。约束模型："每讲完一段就调 send_message 把这段话发出去；如果你已经用 send_message 发了所有内容，最终的 assistant 回复留空或只说一句简短结束语，不要重复已发内容。"
+- **观测**：`send_message` 每次调用记一行 `GatewayFileLogger.i(TAG, "send_message tool dispatched: chatId=$chatId textLen=$len ok=$ok")`；R-OBS-001 风格。
+- **gateway-only 隔离**：`gatewayOutboundDispatcher` 全局 `var` 是 process-global 隐患——并发 gateway run（多 chat 同时进来）会互相覆盖。**用 `ConcurrentHashMap<String, (String) -> Boolean>` 按 chatId 注册**，`send_message` executor 从 args / context 拿 chatId 查 map。executor 拿不到 chatId 时 fail。**待办**：Option B（在 `runAgentLoopViaHermes` 加 `extraDispatcher` lambda 参数，沿 `ChatServiceCore` / `MessageProcessingDelegate` / `MessageCoordinationDelegate` / `AIMessageManager` 透传）能彻底干掉 global var，但要改 5+ 文件签名，暂缓。
+- **chatId 传递**：executor 从 `taskId` 参数（`OperitToolDispatcher.dispatch(toolName, args, taskId, userTask)` 第 3 参数）拿当前 gateway chatId（已被 `HermesAgentLoop.taskId = taskIdValue = "gw:..."` 设好），用它查 `outboundDispatcherByChatId`。
+
+**与既有 R 的关系**:
+- **不覆盖** R-GW-STREAMING-001：v2.1 的 sidecar 拆段 + `MULTI_MESSAGE_HINT` 注入继续保留作兜底。本 R 在它之上加一条 **agent-driven streaming** 主路，三层叠加（agent 工具调 / sidecar 拆段 / 主路 deliverText 全文）。
+- 复用 R-AGENT-033 的 `dispatchOutgoing` outbound 接口（即 sidecar 用的同一个），**不**新加 outbound API。
+- 复用 R-OBS-001 / `GatewayFileLogger` 做观测。
+- 不动 R-CRON-STREAMING-001/002：cron 路径已用 sidecar 拆段实现自己的多段发送，**不**给 cron 加 `send_message`（cron 是定时器单次触发，没"多 turn 交互"概念；agent 也无法在 cron 里多 turn 调工具拿状态）。
+
+**验收**:
+- 装新 APK 后，微信私聊问"帮我查 X 并告诉我 Y"——若模型听话调 `send_message`，微信收到的气泡数 = agent 调用 send_message 的次数。各气泡之间是 agent 在调工具/思考的延迟，用户能看到"agent 在干活"的节奏感。
+- 若模型不听话（不调工具）：行为退化为 R-GW-STREAMING-001 v2.1（sidecar 按空行切；多半也是一坨）—— 不更糟。
+- 微信群聊（`@chatroom`）：仍走 sidecar 跳过路径 + 主路 deliverText 整段（R-GW-STREAMING-001 验收点不变；本 R 工具在群聊里**也**注入，但 outboundDispatcher 在群聊路径不绑定 → 工具调用返回 `ok=false` → agent 退回正常回复路径）。**简化策略**：群聊路径不注册 outboundDispatcher 即可隔离。
+- APP UI 路径**完全看不见** `send_message` 工具（schema 没暴露、executor 没暴露）。在 APP UI 里 agent 调 `send_message` 的概率应为 0；若意外触发（极端 prompt injection），`extraExecutors` map 不含该 key → `OperitToolDispatcher` fallback 到 `AIToolHandler.executeTool` → 找不到 → 返回 "Unknown tool" 错误。
+- 单测覆盖：
+  - `GatewaySendMessageToolWiringTest.kt`（source-scan：断言 `send_message` schema 常量存在 / `EnhancedAIService.kt` 有 `isSubTask && chatId?.startsWith("gw:")` 判别 + 拼 schema + 拼 executor / `HermesGatewayController.kt` 有 `gatewayOutboundDispatcher` 注册 + finally 清理 / `OperitToolDispatcher.kt` 有 `extraExecutors` 拦截优先）
+  - `OperitToolDispatcherExtraExecutorsTest.kt`（unit：`extraExecutors` 命中时不走 `AIToolHandler`，未命中时回落）
+  - `HermesGatewayControllerStreamingWiringTest.kt` TC-j 系列**不动**（R-GW-STREAMING-001 v2.1 既有断言保留）；新增 TC-l..p（见 test-cases.md）
+- E2E 不动：现有三个脚本仍全绿（agent 仍会走 final content，TOKEN 仍能命中 `aiResponsePreview`；新工具是 opt-in）。
+- 对齐四件套零回归：本 R 不新增 stub、不动 Python parser 模块、不动 deep_align findings、不增加 functional_stubs。
+
+

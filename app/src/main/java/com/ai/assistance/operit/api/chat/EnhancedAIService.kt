@@ -24,6 +24,7 @@ import com.ai.assistance.operit.core.chat.hooks.toRoleContentPairs
 import com.ai.assistance.operit.core.application.ActivityLifecycleManager
 import com.ai.assistance.operit.hermes.gateway.AgentEventBus
 import com.ai.assistance.operit.hermes.gateway.AgentTokenBus
+import com.ai.assistance.operit.hermes.gateway.GatewaySendMessageTool
 import com.ai.assistance.operit.core.tools.AIToolHandler
 import com.ai.assistance.operit.core.tools.StringResultData
 import com.ai.assistance.operit.core.tools.packTool.PackageManager
@@ -1073,7 +1074,19 @@ class EnhancedAIService private constructor(private val context: Context) {
             },
             onNonFatalError = onNonFatalError
         )
-        val dispatcher = OperitToolDispatcher(this@EnhancedAIService.context)
+        // R-GW-STREAMING-002: gateway-only `send_message` tool injection gate.
+        // Inject only when (a) this is a sub-task run (HermesGatewayController
+        // path, not user-facing chat) AND (b) chatId is gateway-tagged
+        // (`gw:<sessionKey>:<chatId>` shape). APP-UI path never sees this tool.
+        val isGatewayRun = isSubTask && chatId?.startsWith("gw:") == true
+        val extraExecutors: Map<String, suspend (Map<String, Any?>) -> String>? =
+            if (isGatewayRun && chatId != null) {
+                mapOf(
+                    GatewaySendMessageTool.GATEWAY_SEND_MESSAGE_TOOL_NAME to
+                        GatewaySendMessageTool.buildExecutor(chatId)
+                )
+            } else null
+        val dispatcher = OperitToolDispatcher(this@EnhancedAIService.context, extraExecutors)
 
         val openAiMessages = requestHistory.toOpenAiMessages().toMutableList()
 
@@ -1267,7 +1280,13 @@ class EnhancedAIService private constructor(private val context: Context) {
             }
         }
 
-        val openAiToolSchemas = availableTools?.let(::toolPromptsToOpenAiSchemas) ?: emptyList()
+        val baseToolSchemas = availableTools?.let(::toolPromptsToOpenAiSchemas) ?: emptyList()
+        // R-GW-STREAMING-002: append `send_message` schema only on gateway-only path.
+        val openAiToolSchemas = if (isGatewayRun) {
+            baseToolSchemas + GatewaySendMessageTool.buildSchema()
+        } else {
+            baseToolSchemas
+        }
         val configuredMaxTurns = HermesGatewayPreferences.getInstance(context.applicationContext)
             .agentMaxTurnsFlow.first()
 

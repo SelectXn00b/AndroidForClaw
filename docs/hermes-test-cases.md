@@ -2311,6 +2311,50 @@ SAFETY 大多通过引用其它域的 TC 覆盖；此处列集成层 smoke。
 
 ---
 
+## 域 GW — agent 主动调 `send_message` 工具多轮即时下发（2026-06-26 新功能；R-GW-STREAMING-002）
+
+**背景**：R-GW-STREAMING-001 v2.1 上线后真机表现仍是"回复还是一坨"。根因经多轮调查锁定：`HermesAgentLoop` 是**逐轮串行**的（`AgentLoop.kt:580`），**一轮最多 emit 一个 `AssistantDelta`**；中文 LLM 默认不输出空行，sidecar 的 `Regex("""\R\s*\R+""")` 把整段切成 1 段——表观就是单条气泡。R-GW-STREAMING-001 的 paragraph split 仅能解决"一个 turn 内本来就有空行"的子集场景，对 agent **多 turn 推进过程**（"查天气..."→"分析..."→"提醒"）无能为力。
+
+**核心方案**：向 agent 提供一个 gateway-only 的 `send_message` 工具——agent 在 loop 内**任何 turn 主动调用即可把一句话立刻发到微信**。这与 Python 上游 `hermes-agent/tools/send_message_tool.py` 在 agent 工具表里暴露 `send_message` 的思路一致；但**Android 端语义为简化版的"reply to current chat"**（不跨 channel），仅接 `text` 一个参数，target 由 gateway 当前 chatId 隐式提供。
+
+**三层兜底架构**（任一层兜得住"一坨"问题就 OK）：
+1. **主层（agent 主动）**：`send_message(text)` 工具被 agent 调，直接命中 outbound dispatcher → 立刻在微信里出现一条独立气泡，每个 turn 可以发多条。
+2. **副层（sidecar 被动）**：R-GW-STREAMING-001 的 `AgentStreamingSidecar` 仍在跑，对**模型确实输出了空行**的回复继续切段下发。
+3. **末端（兜底）**：上述两层都没派发过任何东西（`wasDelivered == false` 且工具未被调过）时，`GatewayRunner._handleMessage` 走原 `deliveryRouter.deliverText` 整段下发，保证 user 一定收到点东西。
+
+**架构合规**：
+- **gateway-only 注入**：工具只在 `EnhancedAIService.runAgentLoopViaHermes` 入口的 gateway 路径下注入到 `OperitToolDispatcher` 的可见工具表；APP 内 UI 路径**绝不**注入（否则用户在 app 里聊天 agent 会"自己给自己发微信"）。判定信号：`isSubTask && chatId?.startsWith("gw:") == true`（gateway 路径 chatId 形如 `"gw:<sessionKey>:<chatId>"`）。
+- **per-chatId outbound dispatcher**：用 `ConcurrentHashMap<String, suspend (String) -> Boolean>`（按 `historyChatId` 索引）替代单全局变量，避免并发 gateway run 之间 dispatcher 互相覆盖。`HermesGatewayController.runHermesAgent` 在 `try { register(chatId, sidecarDispatchFn) } finally { unregister(chatId) }` 窗口内挂入，agent 退出立即拔除。
+- **复用 sidecar 的 `dispatchOutgoing`**：`send_message` 工具实际派发函数和 sidecar 共用同一个 lambda（先 `MessageRouter.recordOutbound` 写历史 → 调 `IncomingMessageDispatcher` 发——`AgentStreamingSidecar.kt` 既有的 `dispatchMutex.withLock { withContext(NonCancellable) { ... } }` 模式直接抽到一个公共封装供 sidecar + 工具共用）。这样工具调用也享受 `NonCancellable`、串行互斥、历史落 Room 的三项保护。
+- **不污染 Python 上游签名**：Android tool schema 在工具 description / param `text` 描述上加"reply will land in the current IM chat as a separate bubble"等中英双语说明；Python 上游 `send_message_tool.py` 的 cross-channel 语义在 Kotlin 侧暂不实现（注释里写明"Android v1 simplification: target/action 由 gateway 隐式决定，不暴露为参数"）。
+- **prompt 配合**：`MULTI_MESSAGE_HINT` 重写为推 `send_message` 工具：
+  > "如果你的回复较长 / 需要分步骤展示进度，请**主动调用 `send_message` 工具**逐条发送；用户的 IM 应用会把每次调用当作一条独立消息。在最终 turn 仍可正常返回最终总结性回复。 / If your reply is long or has multiple stages, **call the `send_message` tool** to send each chunk; the user's IM app shows each call as a separate bubble. You may still return a final summary in the last turn."
+  - 注入通道仍是 v2.1 的 `SystemPromptComposeHook`，仅替换字符串内容。R-GW-STREAMING-001-j 既有断言对"`blank line` / `空行`"的字面值要求**保留**（hint 还是 bilingual），但新增"`send_message` / `tool`"字面值要求。
+
+**与既有 R 的关系**：
+- **R-GW-STREAMING-001**：完全保留，sidecar / sentinel / `@chatroom` 跳过 / hook scoping 全部不动；本需求是**叠加**而非替换。
+- **R-CRON-STREAMING-001/002**：完全不碰（`CronAgentRunner` 路径 `isSubTask=false`，gate 不命中，工具不注入）。
+- **R-GW-001..R-GW-013**：不动；outbound 仍走 `IncomingMessageDispatcher` + `MessageRouter`，没有新增 wire 协议。
+
+**验收**：
+- (1) 微信私聊一个"帮我查下天气然后提醒我带伞"类多轮请求 → 收到 ≥ 3 条独立气泡（"我查一下天气"→"查到了，今天有雨"→"建议带伞 ☔"），过程感强；
+- (2) 微信群聊 `@chatroom` 同请求仍是整段一条（gate 仍是 R-GW-STREAMING-001 那把 @chatroom 闸门，从头不启动 sidecar 且不进 gateway-only 工具注入）；
+- (3) APP 内对话（非 gateway 触发）**不**出现 `send_message` 工具——agent 可见工具表里没它；
+- (4) 三个 §3 E2E 脚本仍全绿（TOKEN 回显未被工具注入打断）。
+
+| ID | 关联 R-ID | 行为描述（输入 / 期望输出） | 测试断言 | 测试类型 | 测试方法 / 状态 |
+|---|---|---|---|---|---|
+| TC-GW-STREAMING-002-a | R-GW-STREAMING-002 | **工具类存在 + schema 形状**：`app/.../hermes/gateway/GatewaySendMessageTool.kt` 必须存在；声明 `const val GATEWAY_SEND_MESSAGE_TOOL_NAME = "send_message"`；暴露一个工厂方法（如 `fun buildSendMessageTool(dispatcher: suspend (String) -> Boolean): Pair<ToolSchema, suspend (Map<String, Any?>) -> String>` 或等价类）；schema description 含 `send_message` + `bubble` / `气泡` 双语关键字；params 仅含一个 `text` string 参数（不含 `action` / `target`，与 Python 上游 simplify 分流）。 | 源码扫描 `GatewaySendMessageTool.kt`：(1) 文件存在；(2) 含 `GATEWAY_SEND_MESSAGE_TOOL_NAME` 字面值且赋值 `"send_message"`；(3) 含 `"text"` 字面值（参数名）；(4) **不**含 `"action"` / `"target"` 字面值（Android v1 simplification）；(5) 含 `bubble` 或 `气泡` 字面值（双语 description）。 | unit-scan | `GatewaySendMessageToolShapeWiringTest#TC-GW-STREAMING-002-a tool exposes send_message schema with text-only params` 🔴 |
+| TC-GW-STREAMING-002-b | R-GW-STREAMING-002 | **gateway-only 注入 gate**：`EnhancedAIService.runAgentLoopViaHermes` 必须含一处 `chatId?.startsWith("gw:")` 字面值守卫，仅当该守卫与 `isSubTask` 同时为 true 时把 `send_message` 工具加入 `OperitToolDispatcher` 可见工具表 + `openAiToolSchemas`。守卫表达式至少在两个位置出现一次：`dispatcher` 构造点（line ~1076 附近）与 `openAiToolSchemas` 构造点（line ~1270 附近），或者在两者共用的局部变量定义点之前出现一次。 | 源码扫描 `EnhancedAIService.kt`：(1) 含 `startsWith("gw:")` 字面值（chatId 前缀判定）；(2) 含 `isSubTask` 字面值与 `startsWith("gw:")` 出现在同一逻辑表达式（按 `&&` 或就近 if 块判定，断言两者在源码中字符距离 ≤ 200）；(3) 含 `GATEWAY_SEND_MESSAGE_TOOL_NAME` 引用或 `"send_message"` 字面值在该 gate 控制流的 true 分支内；(4) APP UI 路径（gate=false）不引入工具——通过断言 `OperitToolDispatcher(` 构造点字符 index **晚于** gate 判定字面值 index 来近似验证。 | unit-scan | `EnhancedAIServiceGatewayToolInjectionWiringTest#TC-GW-STREAMING-002-b gateway-only injection gate guards send_message tool` 🔴 |
+| TC-GW-STREAMING-002-c | R-GW-STREAMING-002 | **outbound dispatcher 注册/清理**：`HermesGatewayController.runHermesAgent` 必须在 sidecar 启动之后、`core.sendUserMessage` 之前调用 `GatewayOutboundRegistry.register(historyChatId, dispatchFn)`，并在 `finally` 块内 `GatewayOutboundRegistry.unregister(historyChatId)`。`GatewayOutboundRegistry` 是新建对象，内部用 `ConcurrentHashMap<String, suspend (String) -> Boolean>`，提供 `register` / `unregister` / `dispatch(chatId, text)` 三个公共方法。 | 源码扫描 `HermesGatewayController.kt`：(1) 含 `GatewayOutboundRegistry` 字面值；(2) 含 `.register(` 字面值在 `runHermesAgent` 函数体内；(3) 含 `.unregister(` 字面值在 `finally` 块内；(4) `.register(` 字面值字符 index < `core.sendUserMessage` 字面值字符 index < `.unregister(` 字面值字符 index（register-在-发-在-unregister 的三段序）。源码扫描 `GatewayOutboundRegistry.kt`：(5) 文件存在；(6) 含 `ConcurrentHashMap` 字面值；(7) 含 `register(` + `unregister(` + `dispatch(` 三个方法声明字面值。 | unit-scan | `GatewayOutboundRegistryWiringTest#TC-GW-STREAMING-002-c controller registers and unregisters per-chatId dispatcher` 🔴 |
+| TC-GW-STREAMING-002-d | R-GW-STREAMING-002 | **`OperitToolDispatcher` 接受 extraExecutors**：`OperitToolDispatcher` 构造函数或 builder 必须支持注入一个 `extraExecutors: Map<String, suspend (Map<String, Any?>) -> String>?` 参数；调用方（gateway 路径）把 `{ "send_message" -> sendMessageExecutor }` 传入；在 `executeTool` / `dispatch` 入口若工具名命中 extraExecutors 优先走该 executor，**不**走原 OperitTool 注册表（隔离工具表，避免污染既有工具）。 | 源码扫描 `OperitToolDispatcher.kt`（或同 package 工具派发类）：(1) 含 `extraExecutors` 字面值；(2) 含 `Map<String, ` 字面值与 `extraExecutors` 在同一参数列表内（按字符距离 ≤ 200 判定）；(3) 含工具名命中即拦截的字面值（如 `extraExecutors?.get(toolName)` 或 `extraExecutors.containsKey(`）。 | unit-scan | `OperitToolDispatcherExtraExecutorsWiringTest#TC-GW-STREAMING-002-d dispatcher routes extraExecutors before built-in tools` 🔴 |
+| TC-GW-STREAMING-002-e | R-GW-STREAMING-002 | **`MULTI_MESSAGE_HINT` 推 `send_message`**：`HermesGatewayController.kt` 内 `MULTI_MESSAGE_HINT`（或同义常量）字面值必须含 `send_message` 字面值 + `tool` 字面值（英文部分） + `工具` 字面值（中文部分）。R-GW-STREAMING-001-j 既有的 `blank line` / `空行` 字面值要求**保留**（hint 仍是双语 + 兼容 sidecar 兜底层），但新增"调用 `send_message` 工具"这层指导。 | 源码扫描 `HermesGatewayController.kt`：(1) `MULTI_MESSAGE_HINT`（或同义常量）所在赋值表达式的源字符串内含 `send_message` 字面值；(2) 同一字符串内含 `tool` 字面值；(3) 同一字符串内含 `工具` 字面值；(4) 同一字符串内仍含 `blank line` 字面值（R-GW-STREAMING-001-j 兼容）；(5) 同一字符串内仍含 `空行` 字面值（R-GW-STREAMING-001-j 兼容）。 | unit-scan | `HermesGatewayControllerStreamingWiringTest#TC-GW-STREAMING-002-e MULTI_MESSAGE_HINT pushes send_message tool usage` 🔴 |
+| TC-GW-STREAMING-002-f | R-GW-STREAMING-002 | **端到端手测**：装新 APK，微信私聊"帮我查下今天天气然后提醒我带伞"→ 至少收到 3 条独立气泡（agent 至少调 2 次 `send_message` + 最终 turn 总结）；微信群聊 `@chatroom` 同请求仍是 1 条整段（gate 落 @chatroom 短路，工具不注入、sidecar 不启动）；APP 内聊天页面发同样请求 → agent 工具菜单 / available_tools 列表里**不**出现 `send_message`（gate 不命中，工具不注入）；`gateway.log` 含 `send_message tool dispatch chatId=` 字面值（每次工具调用一行）；三个 §3 E2E 脚本（`test_api_config_e2e.sh` / `test_tool_call_e2e.sh` / `test_builtin_key_e2e.sh`）全绿。 | (1) 微信私聊：≥ 3 条独立气泡且至少 2 条由 `send_message` 工具触发（gateway.log 验证）；(2) 微信群聊：1 条整段；(3) APP 内 agent 工具列表无 `send_message`；(4) gateway.log 含工具调用日志；(5) 三个 E2E 脚本全绿。 | manual / E2E | `(no unit test; manual verification required)` 🔴 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
 ## 统计
 
 | 域 | R 数 | TC 数 | 已落地 ✅ | 待写 🟡 |

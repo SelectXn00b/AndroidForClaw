@@ -422,6 +422,15 @@ class HermesGatewayController private constructor(private val appContext: Contex
         PromptHookRegistry.registerSystemPromptComposeHook(multiMessageHintHook)
         GatewayFileLogger.i(TAG, "  [streaming] registered SystemPromptComposeHook id=$hookId")
 
+        // R-GW-STREAMING-002: register per-chatId outbound dispatcher so the
+        // gateway-only `send_message` tool (injected by EnhancedAIService on
+        // `isSubTask && chatId.startsWith("gw:")` path) can push chunks to
+        // the IM during the agent loop. Cleanup in `finally`.
+        GatewayOutboundRegistry.register(historyChatId) { text ->
+            dispatchOutgoing(platform, chatId, text, null)
+        }
+        GatewayFileLogger.i(TAG, "  [send_message] registered outbound dispatcher chatId=$historyChatId")
+
         try {
 
         // Fire-and-forget: this launches a coroutine inside ChatServiceCore
@@ -760,6 +769,15 @@ class HermesGatewayController private constructor(private val appContext: Contex
             } catch (e: Throwable) {
                 GatewayFileLogger.w(TAG, "  [streaming] unregisterSystemPromptComposeHook threw: ${e.message}")
             }
+            // R-GW-STREAMING-002: remove per-chatId outbound dispatcher so it
+            // doesn't leak into future invocations. ConcurrentHashMap.remove
+            // is idempotent — safe even if the agent threw before register.
+            try {
+                GatewayOutboundRegistry.unregister(historyChatId)
+                GatewayFileLogger.i(TAG, "  [send_message] unregistered outbound dispatcher chatId=$historyChatId")
+            } catch (e: Throwable) {
+                GatewayFileLogger.w(TAG, "  [send_message] unregister threw: ${e.message}")
+            }
         }
     }
 
@@ -899,10 +917,18 @@ class HermesGatewayController private constructor(private val appContext: Contex
          * even when the agent produces a single block.
          */
         private const val MULTI_MESSAGE_HINT =
-            "[MULTI-MESSAGE HINT] If your reply naturally splits into multiple paragraphs, separate them with a blank line (\\n\\n). " +
-                "The IM client will deliver each paragraph as a separate message, matching the user's expectation of receiving multiple bubbles.\n" +
-                "[多消息提示] 如果回复内容自然分多段，请在段落之间留一个空行（\\n\\n）。" +
-                "IM 端会把每段拆成一条独立消息发给用户，匹配用户对分多条说的期待。"
+            "[MULTI-MESSAGE HINT] You are replying to an IM chat (e.g. WeChat). To make the conversation feel responsive, " +
+                "you SHOULD call the `send_message` tool to push each step of your progress as a separate bubble " +
+                "(e.g. \"I'm checking the weather...\", \"Found it: rain today\", \"Suggest bringing an umbrella\"). " +
+                "Each `send_message` call appears as one IM bubble immediately — the user sees you working step by step " +
+                "instead of waiting for one long blob at the end. You may still return a final summary reply at the end " +
+                "of the agent loop; tool calls do not replace it. Fallback: if you are NOT calling the tool, separate " +
+                "your paragraphs with a blank line (\\n\\n) so the IM client can still split them.\n" +
+                "[多消息提示] 你正在回复一段 IM 聊天（如微信）。为了让对话有推进感，请**主动调用 `send_message` 工具**，" +
+                "把每一步的进度作为独立气泡发出去（例如「我去查一下天气...」「查到了：今天有雨」「建议带伞」）。" +
+                "每次调用本工具会立即在 IM 里显示一条独立气泡，用户能看到你在一步一步工作，而不是等一大坨结果。" +
+                "最终 turn 仍可正常返回一条总结性回复，工具调用不会替代它。退路：如果你**没有**调用该工具，" +
+                "请在段落之间留一个空行（\\n\\n），IM 端会自动拆分。"
 
         /** Matches the last `<status ...>...</status>` or self-closing `<status .../>`. */
         private val LAST_STATUS_TAG_REGEX = Regex(
