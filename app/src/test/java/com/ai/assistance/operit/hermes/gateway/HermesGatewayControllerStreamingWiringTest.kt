@@ -15,9 +15,15 @@ import java.io.File
  *    AND `wasDelivered()` drives `STREAMING_DELIVERED_SENTINEL` return
  *    (TC-h covers both wiring and sentinel return per test-cases doc).
  *  - TC-GW-STREAMING-001-i → group chat (`@chatroom`) skips sidecar
- *  - TC-GW-STREAMING-001-j → bilingual `MULTI_MESSAGE_HINT` injected into the
- *    user message before `core.sendUserMessage` (mirrors cron's
- *    R-CRON-STREAMING-002 `MULTI_MESSAGE_HINT`).
+ *  - TC-GW-STREAMING-001-j → bilingual `MULTI_MESSAGE_HINT` injected via
+ *    `SystemPromptComposeHook` (Python upstream's `ephemeral_system_prompt`
+ *    idiom — hint appended to `role: "system"`, NOT folded into user message
+ *    text. The v1 implementation that wrapped `messageTextOverride =
+ *    buildString { MULTI_MESSAGE_HINT + text }` was an architectural error:
+ *    it persisted the hint to Room as a `ChatMessage(sender="user")` and
+ *    polluted the conversation across turns. v2 uses
+ *    `PromptHookRegistry.registerSystemPromptComposeHook` with a
+ *    chatId-scoped filter + `finally { unregister }` cleanup.)
  *
  * **Source-scan rationale**: `runHermesAgent` integrates with Room DB,
  * ChatRuntimeHolder, `core.sendUserMessage(...)`, `core.activeStreamingChatIds`,
@@ -146,69 +152,112 @@ class HermesGatewayControllerStreamingWiringTest {
     }
 
     // ---------------------------------------------------------------------
-    // TC-GW-STREAMING-001-j: bilingual MULTI_MESSAGE_HINT injected into user text
+    // TC-GW-STREAMING-001-j (v2, 2026-06-26 rewrite): bilingual MULTI_MESSAGE_HINT
+    // injected via SystemPromptComposeHook (NOT via user-text prefix).
+    //
+    // Background: the v1 impl wrapped `messageTextOverride = buildString {
+    //   appendLine(MULTI_MESSAGE_HINT); appendLine(); append(text) }`. That
+    // persisted the hint as a Room `ChatMessage(sender="user")`, polluted the
+    // chat UI, and contaminated context across turns. Python upstream uses
+    // `ephemeral_system_prompt` — appended to `role: "system"` at API-call
+    // time, never persisted. Kotlin idiom: `SystemPromptComposeHook` via
+    // `PromptHookRegistry.registerSystemPromptComposeHook(...)` returning a
+    // `PromptHookMutation(systemPrompt = base + "\n\n" + MULTI_MESSAGE_HINT)`,
+    // chatId-scoped, unregistered in `finally`.
     // ---------------------------------------------------------------------
     @Test
-    fun `TC-GW-STREAMING-001-j runHermesAgent injects bilingual multi-message hint`() {
-        // (1) Constant declaration exists (independent of cron's copy — no cross-file coupling)
+    fun `TC-GW-STREAMING-001-j runHermesAgent injects bilingual multi-message hint via SystemPromptComposeHook`() {
+        // (1) Constant declaration exists (independent of cron's copy)
         assertTrue(
             "TC-GW-STREAMING-001-j: `HermesGatewayController.kt` must declare a `MULTI_MESSAGE_HINT` " +
-                "(or synonymous) file-/companion-scope constant carrying the bilingual multi-message instruction. " +
-                "Independent of `CronAgentRunner.MULTI_MESSAGE_HINT` (no cross-file constant coupling).",
+                "(or synonymous) constant carrying the bilingual instruction.",
             source.contains("MULTI_MESSAGE_HINT") ||
                 source.contains("MULTI_MSG_HINT") ||
                 source.contains("MULTIPLE_MESSAGES_HINT")
         )
 
-        // (2) Hint content must include English `blank line` keyword
+        // (2) English `blank line` keyword
         assertTrue(
-            "TC-GW-STREAMING-001-j: hint constant must mention English `blank line` keyword so the " +
-                "instruction is understandable to English-mode agents.",
+            "TC-GW-STREAMING-001-j: hint must mention English `blank line` keyword.",
             source.contains("blank line")
         )
 
-        // (3) Hint content must include Chinese `空行` keyword
+        // (3) Chinese `空行` keyword
         assertTrue(
-            "TC-GW-STREAMING-001-j: hint constant must mention Chinese `空行` keyword so the " +
-                "instruction reaches Chinese-mode agents too.",
+            "TC-GW-STREAMING-001-j: hint must mention Chinese `空行` keyword.",
             source.contains("空行")
         )
 
-        // (4) Hint must be referenced/injected BEFORE `core.sendUserMessage(` — i.e. the
-        //     hint is wired into the user-message path (since ChatServiceCore.sendUserMessage
-        //     has no separate `systemPrompt` parameter, the only injection vector is
-        //     prefixing the user text via a `buildString { append(MULTI_MESSAGE_HINT) … }` block).
-        val hintIdx = listOf(
-            source.indexOf("MULTI_MESSAGE_HINT"),
-            source.indexOf("MULTI_MSG_HINT"),
-            source.indexOf("MULTIPLE_MESSAGES_HINT")
-        ).filter { it >= 0 }.minOrNull() ?: -1
-        // The first `MULTI_MESSAGE_HINT` reference is the const declaration; we want the
-        // USAGE site to also exist (declaration + at least one usage = 2 occurrences).
-        val hintOccurrences = Regex("""MULTI_MESSAGE_HINT""").findAll(source).count() +
-            Regex("""MULTI_MSG_HINT""").findAll(source).count() +
-            Regex("""MULTIPLE_MESSAGES_HINT""").findAll(source).count()
+        // (4) Must register a SystemPromptComposeHook (the proper injection channel —
+        //     Python upstream `ephemeral_system_prompt` equivalent; runs inside
+        //     `ConversationService.prepareConversationHistory` and mutates the
+        //     `role: "system"` message, never touching the persisted user text).
         assertTrue(
-            "TC-GW-STREAMING-001-j: `MULTI_MESSAGE_HINT` must appear at least twice in source " +
-                "(declaration + at least one usage). Otherwise the hint is a dead constant. " +
-                "Found $hintOccurrences occurrence(s).",
-            hintOccurrences >= 2
+            "TC-GW-STREAMING-001-j: `runHermesAgent` must call " +
+                "`registerSystemPromptComposeHook(` to install a per-call system-prompt " +
+                "addendum hook. This is the only injection channel that (a) does NOT persist " +
+                "to Room as a user message, (b) does NOT contaminate context across turns, " +
+                "(c) lands in `role: \"system\"`, and (d) is gateway-scoped (filtered by chatId).",
+            source.contains("registerSystemPromptComposeHook(")
         )
-        assertTrue("TC-GW-STREAMING-001-j: hint reference must exist.", hintIdx >= 0)
 
-        // (5) `messageTextOverride` must NOT be passed the raw `text` parameter directly —
-        //     it must receive the wrapped/prefixed form (e.g. `wrappedText`). We check for
-        //     the wrapping pattern: a `messageTextOverride = ` assignment that is NOT
-        //     `messageTextOverride = text,` / `messageTextOverride = text)`.
+        // (5) Must use `PromptHookMutation` (the return type that carries `systemPrompt`)
+        //     OR reference `SystemPromptComposeHook` interface — either evidences the
+        //     correct API is being used.
+        assertTrue(
+            "TC-GW-STREAMING-001-j: `runHermesAgent` must construct a `PromptHookMutation` " +
+                "(carrying `systemPrompt`) or reference the `SystemPromptComposeHook` " +
+                "interface. Otherwise the hook returns nothing useful and the hint is lost.",
+            source.contains("PromptHookMutation") || source.contains("SystemPromptComposeHook")
+        )
+
+        // (6) Must unregister the hook in a `finally` block (no leaks across calls
+        //     — `PromptHookRegistry` is process-global and concurrent gateway runs
+        //     for different chats must not bleed into each other).
+        assertTrue(
+            "TC-GW-STREAMING-001-j: `runHermesAgent` must call `unregisterSystemPromptComposeHook(` " +
+                "to clean up the hook after the agent run completes. Without this, the hook " +
+                "leaks into subsequent invocations (including APP UI path).",
+            source.contains("unregisterSystemPromptComposeHook(")
+        )
+        assertTrue(
+            "TC-GW-STREAMING-001-j: `runHermesAgent` must have a `finally` block (for the " +
+                "unregister cleanup). Otherwise an exception mid-run leaks the hook.",
+            source.contains("finally")
+        )
+
+        // (7) The unregister call must appear AFTER the register call (ordering sanity).
+        val registerIdx = source.indexOf("registerSystemPromptComposeHook(")
+        val unregisterIdx = source.indexOf("unregisterSystemPromptComposeHook(")
+        assertTrue(
+            "TC-GW-STREAMING-001-j: `unregisterSystemPromptComposeHook(` (idx=$unregisterIdx) " +
+                "must appear AFTER `registerSystemPromptComposeHook(` (idx=$registerIdx) in source order.",
+            registerIdx in 0 until unregisterIdx
+        )
+
+        // (8) `messageTextOverride` MUST NOT receive the v1 wrappedText form —
+        //     the user text path must be clean (raw `text` passed through).
+        //     This is the regression guard against the v1 architectural error.
+        val v1WrappedText = source.contains("messageTextOverride = wrappedText") ||
+            Regex("""messageTextOverride\s*=\s*buildString""").containsMatchIn(source)
+        assertTrue(
+            "TC-GW-STREAMING-001-j: `messageTextOverride` MUST NOT be assigned `wrappedText` " +
+                "or `buildString { ... MULTI_MESSAGE_HINT ... }`. The v1 impl was an " +
+                "architectural error: it persisted the hint as a user message in Room and " +
+                "polluted context across turns. v2 uses `SystemPromptComposeHook` instead.",
+            !v1WrappedText
+        )
+
+        // (9) `messageTextOverride` must receive the raw `text` parameter
+        //     (the original user text — no prefix, no wrapper).
         val rawTextOverride = source.contains("messageTextOverride = text,") ||
             source.contains("messageTextOverride = text)") ||
             Regex("""messageTextOverride\s*=\s*text\s*[,)]""").containsMatchIn(source)
         assertTrue(
-            "TC-GW-STREAMING-001-j: `messageTextOverride` MUST NOT receive raw `text` directly — " +
-                "it must be passed a wrapped form (e.g. `wrappedText` from " +
-                "`buildString { appendLine(MULTI_MESSAGE_HINT); appendLine(); append(text) }`). " +
-                "Otherwise the hint is never delivered to the agent.",
-            !rawTextOverride
+            "TC-GW-STREAMING-001-j: `messageTextOverride` MUST receive the raw `text` parameter " +
+                "(e.g. `messageTextOverride = text,`). The hint goes through the system-prompt " +
+                "hook, not through user text.",
+            rawTextOverride
         )
     }
 

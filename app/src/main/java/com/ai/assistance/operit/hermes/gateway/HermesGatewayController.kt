@@ -6,6 +6,10 @@ import com.ai.assistance.operit.api.chat.ChatRuntimeHolder
 import com.ai.assistance.operit.api.chat.ChatRuntimeSlot
 import com.ai.assistance.operit.api.chat.EnhancedAIService
 import com.ai.assistance.operit.api.chat.library.MemoryLibrary
+import com.ai.assistance.operit.core.chat.hooks.PromptHookContext
+import com.ai.assistance.operit.core.chat.hooks.PromptHookMutation
+import com.ai.assistance.operit.core.chat.hooks.PromptHookRegistry
+import com.ai.assistance.operit.core.chat.hooks.SystemPromptComposeHook
 import com.ai.assistance.operit.core.tools.AIToolHandler
 import com.ai.assistance.operit.data.model.FunctionType
 import com.ai.assistance.operit.data.model.InputProcessingState
@@ -380,25 +384,46 @@ class HermesGatewayController private constructor(private val appContext: Contex
             }
         }
 
-        // R-GW-STREAMING-001 (TC-GW-STREAMING-001-j): prepend bilingual multi-message
-        // hint to the user text so the agent is nudged to insert blank-line paragraph
-        // breaks. AgentStreamingSidecar splits on blank lines and dispatches each
-        // paragraph as a separate IM message. The hint is a soft nudge — sidecar's
-        // paragraph-regex split still works for single-block replies.
-        // Mirrors cron path (CronAgentRunner.MULTI_MESSAGE_HINT, R-CRON-STREAMING-002).
-        val wrappedText = buildString {
-            appendLine(MULTI_MESSAGE_HINT)
-            appendLine()
-            append(text)
+        // R-GW-STREAMING-001 (TC-GW-STREAMING-001-j, v2 2026-06-26): inject bilingual
+        // multi-message hint via SystemPromptComposeHook — Python upstream's
+        // `ephemeral_system_prompt` idiom. The hint lands in the `role: "system"`
+        // message at API-call time, never persisted to Room as a user message and
+        // never leaks across turns. v1 wrapped the hint into `messageTextOverride`
+        // (a buildString of HINT + "\n\n" + text) — that was an architectural error:
+        // MessageProcessingDelegate persists `messageTextOverride` as
+        // `ChatMessage(sender="user")` in Room and feeds it back into the next
+        // turn's history, polluting both the chat UI and the conversation context.
+        //
+        // The hook is chatId-scoped (filters on `context.chatId == historyChatId`)
+        // and unregistered in a `finally` block to avoid leaks into the APP UI path
+        // (PromptHookRegistry is process-global).
+        val hookId = "gw:multi-message-hint:$historyChatId:${System.nanoTime()}"
+        val multiMessageHintHook = object : SystemPromptComposeHook {
+            override val id: String = hookId
+
+            override fun onEvent(context: PromptHookContext): PromptHookMutation? {
+                if (context.chatId != historyChatId) return null
+                val base = context.systemPrompt ?: ""
+                val composed = if (base.isBlank()) MULTI_MESSAGE_HINT
+                    else base + "\n\n" + MULTI_MESSAGE_HINT
+                return PromptHookMutation(systemPrompt = composed)
+            }
         }
+        PromptHookRegistry.registerSystemPromptComposeHook(multiMessageHintHook)
+        GatewayFileLogger.i(TAG, "  [streaming] registered SystemPromptComposeHook id=$hookId")
+
+        try {
 
         // Fire-and-forget: this launches a coroutine inside ChatServiceCore
         // that goes through the full MessageCoordinationDelegate →
         // MessageProcessingDelegate → AIMessageManager → EnhancedAIService
-        // → HermesAgentLoop pipeline — exactly like the APP UI.
+        // → HermesAgentLoop pipeline — exactly like the APP UI. The raw user
+        // text passes through unmodified; the multi-message hint is added by
+        // the SystemPromptComposeHook above (role: "system" addendum), not by
+        // user-text prefix.
         core.sendUserMessage(
             chatIdOverride = historyChatId,
-            messageTextOverride = wrappedText,
+            messageTextOverride = text,
             isSubTask = true
         )
 
@@ -714,6 +739,18 @@ class HermesGatewayController private constructor(private val appContext: Contex
         }
 
         return strippedReply
+        } finally {
+            // R-GW-STREAMING-001 (TC-GW-STREAMING-001-j v2): unregister the
+            // SystemPromptComposeHook so the MULTI_MESSAGE_HINT doesn't leak
+            // into subsequent gateway invocations or the APP UI path.
+            // PromptHookRegistry is process-global.
+            try {
+                PromptHookRegistry.unregisterSystemPromptComposeHook(hookId)
+                GatewayFileLogger.i(TAG, "  [streaming] unregistered SystemPromptComposeHook id=$hookId")
+            } catch (e: Throwable) {
+                GatewayFileLogger.w(TAG, "  [streaming] unregisterSystemPromptComposeHook threw: ${e.message}")
+            }
+        }
     }
 
     private fun gatewayChatTitle(sessionKey: String, chatId: String): String {
