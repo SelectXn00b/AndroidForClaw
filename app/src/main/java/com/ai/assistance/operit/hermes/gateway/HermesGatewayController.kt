@@ -380,13 +380,25 @@ class HermesGatewayController private constructor(private val appContext: Contex
             }
         }
 
+        // R-GW-STREAMING-001 (TC-GW-STREAMING-001-j): prepend bilingual multi-message
+        // hint to the user text so the agent is nudged to insert blank-line paragraph
+        // breaks. AgentStreamingSidecar splits on blank lines and dispatches each
+        // paragraph as a separate IM message. The hint is a soft nudge — sidecar's
+        // paragraph-regex split still works for single-block replies.
+        // Mirrors cron path (CronAgentRunner.MULTI_MESSAGE_HINT, R-CRON-STREAMING-002).
+        val wrappedText = buildString {
+            appendLine(MULTI_MESSAGE_HINT)
+            appendLine()
+            append(text)
+        }
+
         // Fire-and-forget: this launches a coroutine inside ChatServiceCore
         // that goes through the full MessageCoordinationDelegate →
         // MessageProcessingDelegate → AIMessageManager → EnhancedAIService
         // → HermesAgentLoop pipeline — exactly like the APP UI.
         core.sendUserMessage(
             chatIdOverride = historyChatId,
-            messageTextOverride = text,
+            messageTextOverride = wrappedText,
             isSubTask = true
         )
 
@@ -825,6 +837,25 @@ class HermesGatewayController private constructor(private val appContext: Contex
          * paragraph merge.
          */
         private const val STREAMING_INTER_PARAGRAPH_DELAY_MS: Long = 200L
+
+        /**
+         * R-GW-STREAMING-001 (TC-GW-STREAMING-001-j): bilingual multi-message
+         * delivery hint injected into the user message at the head of every gateway
+         * agent turn. Mirrors `CronAgentRunner.MULTI_MESSAGE_HINT` (R-CRON-STREAMING-
+         * 002 / TC-CRON-STREAMING-h) but is an **independent** declaration to keep
+         * the gateway path free of cross-file constant coupling.
+         *
+         * Both English `blank line` and Chinese `空行` keywords are present so the
+         * hint is understandable by English-mode and Chinese-mode agents alike.
+         * The hint is a *soft* nudge — it does not force the agent to split, and
+         * `AgentStreamingSidecar` still falls back to paragraph-regex splitting
+         * even when the agent produces a single block.
+         */
+        private const val MULTI_MESSAGE_HINT =
+            "[MULTI-MESSAGE HINT] If your reply naturally splits into multiple paragraphs, separate them with a blank line (\\n\\n). " +
+                "The IM client will deliver each paragraph as a separate message, matching the user's expectation of receiving multiple bubbles.\n" +
+                "[多消息提示] 如果回复内容自然分多段，请在段落之间留一个空行（\\n\\n）。" +
+                "IM 端会把每段拆成一条独立消息发给用户，匹配用户对分多条说的期待。"
 
         /** Matches the last `<status ...>...</status>` or self-closing `<status .../>`. */
         private val LAST_STATUS_TAG_REGEX = Regex(

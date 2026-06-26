@@ -15,11 +15,9 @@ import java.io.File
  *    AND `wasDelivered()` drives `STREAMING_DELIVERED_SENTINEL` return
  *    (TC-h covers both wiring and sentinel return per test-cases doc).
  *  - TC-GW-STREAMING-001-i → group chat (`@chatroom`) skips sidecar
- *
- * NOTE: TC-GW-STREAMING-001-j (MULTI_MESSAGE_HINT bilingual injection into the
- * system prompt) is intentionally NOT covered here — it requires modifying
- * upstream `core.sendUserMessage` / system-context plumbing, which is out of
- * scope for this commit. Tracked separately as a follow-up.
+ *  - TC-GW-STREAMING-001-j → bilingual `MULTI_MESSAGE_HINT` injected into the
+ *    user message before `core.sendUserMessage` (mirrors cron's
+ *    R-CRON-STREAMING-002 `MULTI_MESSAGE_HINT`).
  *
  * **Source-scan rationale**: `runHermesAgent` integrates with Room DB,
  * ChatRuntimeHolder, `core.sendUserMessage(...)`, `core.activeStreamingChatIds`,
@@ -147,9 +145,73 @@ class HermesGatewayControllerStreamingWiringTest {
         )
     }
 
-    // =====================================================================
-    // helpers
-    // =====================================================================
+    // ---------------------------------------------------------------------
+    // TC-GW-STREAMING-001-j: bilingual MULTI_MESSAGE_HINT injected into user text
+    // ---------------------------------------------------------------------
+    @Test
+    fun `TC-GW-STREAMING-001-j runHermesAgent injects bilingual multi-message hint`() {
+        // (1) Constant declaration exists (independent of cron's copy — no cross-file coupling)
+        assertTrue(
+            "TC-GW-STREAMING-001-j: `HermesGatewayController.kt` must declare a `MULTI_MESSAGE_HINT` " +
+                "(or synonymous) file-/companion-scope constant carrying the bilingual multi-message instruction. " +
+                "Independent of `CronAgentRunner.MULTI_MESSAGE_HINT` (no cross-file constant coupling).",
+            source.contains("MULTI_MESSAGE_HINT") ||
+                source.contains("MULTI_MSG_HINT") ||
+                source.contains("MULTIPLE_MESSAGES_HINT")
+        )
+
+        // (2) Hint content must include English `blank line` keyword
+        assertTrue(
+            "TC-GW-STREAMING-001-j: hint constant must mention English `blank line` keyword so the " +
+                "instruction is understandable to English-mode agents.",
+            source.contains("blank line")
+        )
+
+        // (3) Hint content must include Chinese `空行` keyword
+        assertTrue(
+            "TC-GW-STREAMING-001-j: hint constant must mention Chinese `空行` keyword so the " +
+                "instruction reaches Chinese-mode agents too.",
+            source.contains("空行")
+        )
+
+        // (4) Hint must be referenced/injected BEFORE `core.sendUserMessage(` — i.e. the
+        //     hint is wired into the user-message path (since ChatServiceCore.sendUserMessage
+        //     has no separate `systemPrompt` parameter, the only injection vector is
+        //     prefixing the user text via a `buildString { append(MULTI_MESSAGE_HINT) … }` block).
+        val hintIdx = listOf(
+            source.indexOf("MULTI_MESSAGE_HINT"),
+            source.indexOf("MULTI_MSG_HINT"),
+            source.indexOf("MULTIPLE_MESSAGES_HINT")
+        ).filter { it >= 0 }.minOrNull() ?: -1
+        // The first `MULTI_MESSAGE_HINT` reference is the const declaration; we want the
+        // USAGE site to also exist (declaration + at least one usage = 2 occurrences).
+        val hintOccurrences = Regex("""MULTI_MESSAGE_HINT""").findAll(source).count() +
+            Regex("""MULTI_MSG_HINT""").findAll(source).count() +
+            Regex("""MULTIPLE_MESSAGES_HINT""").findAll(source).count()
+        assertTrue(
+            "TC-GW-STREAMING-001-j: `MULTI_MESSAGE_HINT` must appear at least twice in source " +
+                "(declaration + at least one usage). Otherwise the hint is a dead constant. " +
+                "Found $hintOccurrences occurrence(s).",
+            hintOccurrences >= 2
+        )
+        assertTrue("TC-GW-STREAMING-001-j: hint reference must exist.", hintIdx >= 0)
+
+        // (5) `messageTextOverride` must NOT be passed the raw `text` parameter directly —
+        //     it must receive the wrapped/prefixed form (e.g. `wrappedText`). We check for
+        //     the wrapping pattern: a `messageTextOverride = ` assignment that is NOT
+        //     `messageTextOverride = text,` / `messageTextOverride = text)`.
+        val rawTextOverride = source.contains("messageTextOverride = text,") ||
+            source.contains("messageTextOverride = text)") ||
+            Regex("""messageTextOverride\s*=\s*text\s*[,)]""").containsMatchIn(source)
+        assertTrue(
+            "TC-GW-STREAMING-001-j: `messageTextOverride` MUST NOT receive raw `text` directly — " +
+                "it must be passed a wrapped form (e.g. `wrappedText` from " +
+                "`buildString { appendLine(MULTI_MESSAGE_HINT); appendLine(); append(text) }`). " +
+                "Otherwise the hint is never delivered to the agent.",
+            !rawTextOverride
+        )
+    }
+
 
     /**
      * Strip Kotlin `/* ... */` block comments and `// ...` line comments while
