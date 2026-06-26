@@ -394,15 +394,25 @@ class HermesGatewayController private constructor(private val appContext: Contex
         // `ChatMessage(sender="user")` in Room and feeds it back into the next
         // turn's history, polluting both the chat UI and the conversation context.
         //
-        // The hook is chatId-scoped (filters on `context.chatId == historyChatId`)
-        // and unregistered in a `finally` block to avoid leaks into the APP UI path
-        // (PromptHookRegistry is process-global).
+        // The hook is unregistered in a `finally` block to avoid leaks into the
+        // APP UI path (PromptHookRegistry is process-global). NOTE (2026-06-26):
+        // we previously gated this hook with `context.chatId == historyChatId`,
+        // but `SystemPromptConfig.getSystemPromptWithCustomPrompts(...)` does NOT
+        // thread chatId into `PromptHookContext`, so `context.chatId` is always
+        // null and the gate always failed → the hint was never injected → the
+        // real-device "回复还是一坨" bug. Fix is Plan A: drop the chatId filter
+        // so the hook fires on every compose pass during the gateway run. The
+        // collateral is that any APP-UI prompt-compose pass that races inside
+        // the gateway's `try { ... }` window will also get the hint — accepted
+        // because (a) the hint is neutral advice, (b) the window is short
+        // (single agent turn), and (c) the hint is ephemeral (system-prompt
+        // addendum, never persisted). Cleaner-architecture fix (Plan B —
+        // thread chatId through SystemPromptConfig) is deferred.
         val hookId = "gw:multi-message-hint:$historyChatId:${System.nanoTime()}"
         val multiMessageHintHook = object : SystemPromptComposeHook {
             override val id: String = hookId
 
             override fun onEvent(context: PromptHookContext): PromptHookMutation? {
-                if (context.chatId != historyChatId) return null
                 val base = context.systemPrompt ?: ""
                 val composed = if (base.isBlank()) MULTI_MESSAGE_HINT
                     else base + "\n\n" + MULTI_MESSAGE_HINT

@@ -23,7 +23,11 @@ import java.io.File
  *    it persisted the hint to Room as a `ChatMessage(sender="user")` and
  *    polluted the conversation across turns. v2 uses
  *    `PromptHookRegistry.registerSystemPromptComposeHook` with a
- *    chatId-scoped filter + `finally { unregister }` cleanup.)
+ *    `finally { unregister }` cleanup. v2.1 (2026-06-26) drops the
+ *    `context.chatId == historyChatId` filter — `SystemPromptConfig`
+ *    doesn't thread chatId into `PromptHookContext`, so the filter always
+ *    rejected and the hint was never injected. The hook now fires on every
+ *    compose pass during the gateway's `try { ... finally }` window.)
  *
  * **Source-scan rationale**: `runHermesAgent` integrates with Room DB,
  * ChatRuntimeHolder, `core.sendUserMessage(...)`, `core.activeStreamingChatIds`,
@@ -152,8 +156,12 @@ class HermesGatewayControllerStreamingWiringTest {
     }
 
     // ---------------------------------------------------------------------
-    // TC-GW-STREAMING-001-j (v2, 2026-06-26 rewrite): bilingual MULTI_MESSAGE_HINT
-    // injected via SystemPromptComposeHook (NOT via user-text prefix).
+    // TC-GW-STREAMING-001-j (v2.1, 2026-06-26 fix): bilingual MULTI_MESSAGE_HINT
+    // injected via SystemPromptComposeHook (NOT via user-text prefix), with
+    // NO chatId filter (the v2 filter was broken: PromptHookContext.chatId
+    // is null because SystemPromptConfig doesn't thread it through, so the
+    // gate always rejected → hint never injected → real-device "回复还是一坨"
+    // bug). v2.1 drops the filter; cleanup is via `finally { unregister }`.
     //
     // Background: the v1 impl wrapped `messageTextOverride = buildString {
     //   appendLine(MULTI_MESSAGE_HINT); appendLine(); append(text) }`. That
@@ -163,7 +171,7 @@ class HermesGatewayControllerStreamingWiringTest {
     // time, never persisted. Kotlin idiom: `SystemPromptComposeHook` via
     // `PromptHookRegistry.registerSystemPromptComposeHook(...)` returning a
     // `PromptHookMutation(systemPrompt = base + "\n\n" + MULTI_MESSAGE_HINT)`,
-    // chatId-scoped, unregistered in `finally`.
+    // unregistered in `finally`.
     // ---------------------------------------------------------------------
     @Test
     fun `TC-GW-STREAMING-001-j runHermesAgent injects bilingual multi-message hint via SystemPromptComposeHook`() {
@@ -197,7 +205,10 @@ class HermesGatewayControllerStreamingWiringTest {
                 "`registerSystemPromptComposeHook(` to install a per-call system-prompt " +
                 "addendum hook. This is the only injection channel that (a) does NOT persist " +
                 "to Room as a user message, (b) does NOT contaminate context across turns, " +
-                "(c) lands in `role: \"system\"`, and (d) is gateway-scoped (filtered by chatId).",
+                "and (c) lands in `role: \"system\"`. Note: gateway-scoping is achieved by " +
+                "the `try { register } finally { unregister }` window, NOT by an in-hook " +
+                "chatId filter — `PromptHookContext.chatId` is null because " +
+                "`SystemPromptConfig` doesn't thread it through.",
             source.contains("registerSystemPromptComposeHook(")
         )
 
@@ -258,6 +269,30 @@ class HermesGatewayControllerStreamingWiringTest {
                 "(e.g. `messageTextOverride = text,`). The hint goes through the system-prompt " +
                 "hook, not through user text.",
             rawTextOverride
+        )
+
+        // (10) v2.1 regression guard (2026-06-26): the hook MUST NOT short-circuit
+        //      on `context.chatId != historyChatId`. The v2 impl did this and
+        //      the gate always rejected (PromptHookContext.chatId is null
+        //      because SystemPromptConfig doesn't thread it through), causing
+        //      the hint to never be injected → real-device "回复还是一坨" bug.
+        //      If a future refactor wants to restore chatId-scoping, it MUST
+        //      first thread chatId through `SystemPromptConfig.getSystemPrompt*`
+        //      and `ConversationService.prepareConversationHistory`, then this
+        //      assertion can be relaxed. Until then: any literal of the
+        //      broken form is a regression.
+        val brokenChatIdFilter =
+            Regex("""context\.chatId\s*!=\s*historyChatId""").containsMatchIn(source) ||
+                Regex("""context\.chatId\s*==\s*historyChatId""").containsMatchIn(source)
+        assertTrue(
+            "TC-GW-STREAMING-001-j (v2.1 regression guard): the SystemPromptComposeHook " +
+                "MUST NOT short-circuit on `context.chatId != historyChatId` (or its " +
+                "inverse). `PromptHookContext.chatId` is null on the gateway path because " +
+                "`SystemPromptConfig` doesn't thread chatId into the hook context — the v2 " +
+                "filter caused the hint to never be injected (real-device '回复还是一坨' bug). " +
+                "Gateway-scoping is achieved by the `try { register } finally { unregister }` " +
+                "window, not by an in-hook chatId comparison.",
+            !brokenChatIdFilter
         )
     }
 
