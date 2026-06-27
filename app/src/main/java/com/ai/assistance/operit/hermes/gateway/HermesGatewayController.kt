@@ -298,6 +298,9 @@ class HermesGatewayController private constructor(private val appContext: Contex
         interruptCheck: () -> Boolean = { false },
     ): String {
         val historyChatId = "gw:$sessionKey:$chatId"
+        // TC-GW-DIAG-002: mark run boundary — trims gateway.log to keep
+        // only "previous run + this run". See GatewayFileLogger.startRun.
+        GatewayFileLogger.startRun(historyChatId)
         GatewayFileLogger.i(TAG, "═══ runHermesAgent START ═══")
         GatewayFileLogger.i(TAG, "  user text (${text.length} chars): ${text.take(1000)}${if (text.length > 1000) "…[truncated]" else ""}")
         GatewayFileLogger.i(TAG, "  chatId: $historyChatId")
@@ -316,6 +319,7 @@ class HermesGatewayController private constructor(private val appContext: Contex
                 GatewayFileLogger.w(TAG, "  /new command — failed to clear history: ${e.message}")
             }
             GatewayFileLogger.i(TAG, "═══ runHermesAgent END ═══\n")
+            GatewayFileLogger.endRun("$historyChatId (early-out /new)")
             return "好的，已切换到新话题。"
         }
 
@@ -349,27 +353,33 @@ class HermesGatewayController private constructor(private val appContext: Contex
 
         val startMs = System.currentTimeMillis()
 
-        // R-GW-STREAMING-001 (TC-GW-STREAMING-001-h/i/j): per-turn streaming sidecar.
-        // Group chats (`@chatroom`) skip the sidecar because:
-        //   1. paragraph-by-paragraph delivery to a multi-user channel is noisy and
-        //   2. the user explicitly said 群聊不需要 (2026-06-25).
-        // 1-on-1 chats get the sidecar so the user sees the agent "thinking out loud"
-        // turn by turn instead of waiting for the full reply.
+        // R-GW-STREAMING-001 v2 (2026-06-27 simplification): per-turn streaming
+        // sidecar. v2 dispatches each AssistantDelta as ONE IM message — no
+        // paragraph splitting, no inter-paragraph delay, no retry, no
+        // pre-warm. The v1 splitting + serializing through dispatchMutex
+        // caused the collector to fall arbitrarily far behind the agent loop
+        // (real-device WeChat showed "silence then burst" — segments from
+        // earlier turns still being delivered while the agent loop had
+        // already finished). v2 keeps the 1:1 mapping between agent turns
+        // and IM messages, matching what the app body sees via emitChunk.
         //
-        // Parameters mirror cron path (R-CRON-STREAMING-001/002):
-        //   - PARAGRAPH_REGEX = blank-line split
-        //   - INTER_PARAGRAPH_DELAY_MS = 200ms gap (WeChat rate-limit safe)
+        // Finer-grained multi-bubble dispatch is now the agent's job via
+        // R-GW-STREAMING-002's `send_message` tool — agents call it inside
+        // the loop to push intermediate progress as separate bubbles.
+        //
+        // Group chats (`@chatroom`) still skip the sidecar entirely
+        // (paragraph-by-paragraph delivery to a multi-user channel is noisy;
+        // user explicitly said 群聊不需要 2026-06-25).
         val skipSidecar = chatId.endsWith("@chatroom")
         val sidecar: AgentStreamingSidecar? = if (skipSidecar) {
             GatewayFileLogger.i(TAG, "  [streaming] skip sidecar (group chat @chatroom): chatId=$chatId")
             null
         } else {
             AgentStreamingSidecar(
-                chatId = historyChatId,
+                busTagChatId = historyChatId,
+                wireChatId = chatId,
                 platform = platform,
                 dispatchOutgoing = { p, c, t, th -> dispatchOutgoing(p, c, t, th) },
-                paragraphRegex = STREAMING_PARAGRAPH_REGEX,
-                interParagraphDelayMs = STREAMING_INTER_PARAGRAPH_DELAY_MS,
                 threadId = null,
                 tag = "GwStreamingSidecar",
             ).also { sc ->
@@ -608,6 +618,7 @@ class HermesGatewayController private constructor(private val appContext: Contex
                 GatewayFileLogger.w(TAG, "  [streaming] sidecar.stop on interrupt threw: ${e.message}")
             }
             GatewayFileLogger.i(TAG, "═══ runHermesAgent END (interrupted) ═══\n")
+            GatewayFileLogger.endRun("$historyChatId (interrupted)")
             return GatewayRunner.INTERRUPTED_SENTINEL
         }
         val elapsedMs = System.currentTimeMillis() - startMs
@@ -626,7 +637,7 @@ class HermesGatewayController private constructor(private val appContext: Contex
                 TAG,
                 "  [streaming] sidecar done chatId=$historyChatId delivered=$delivered " +
                     "events=${sc.totalEvents.get()} matched=${sc.chatIdMatched.get()} " +
-                    "deltas=${sc.assistantDeltas.get()} dispatches=${sc.paragraphDispatches.get()} " +
+                    "deltas=${sc.assistantDeltas.get()} dispatches=${sc.dispatchCalls.get()} " +
                     "success=${sc.dispatchSuccess.get()}"
             )
             delivered
@@ -744,6 +755,7 @@ class HermesGatewayController private constructor(private val appContext: Contex
         }
 
         GatewayFileLogger.i(TAG, "═══ runHermesAgent END ═══\n")
+        GatewayFileLogger.endRun(historyChatId)
 
         // R-GW-STREAMING-001 (TC-GW-STREAMING-001-h/j): if the sidecar successfully
         // dispatched at least one paragraph, the user has already received the reply
@@ -885,23 +897,11 @@ class HermesGatewayController private constructor(private val appContext: Contex
         /** Polling interval for interrupt detection in the wait loop. */
         private const val INTERRUPT_POLL_MS = 500L
 
-        /**
-         * R-GW-STREAMING-001 (TC-GW-STREAMING-001-c/h): blank-line paragraph split
-         * regex used by [AgentStreamingSidecar]. Same shape as the cron path's
-         * `CronAgentRunner.PARAGRAPH_REGEX` (R-CRON-STREAMING-001) so per-turn
-         * delivery behavior is identical between the cron-triggered and the normal
-         * IM gateway paths. Caller-supplied per R-GW-STREAMING-001 architecture.
-         */
-        private val STREAMING_PARAGRAPH_REGEX: Regex = Regex("""\R\s*\R+""")
-
-        /**
-         * R-GW-STREAMING-001 (TC-GW-STREAMING-001-c/h): inter-paragraph delay (ms)
-         * used by [AgentStreamingSidecar] between sequential paragraph dispatches.
-         * 200 ms matches the cron path (`CronAgentRunner.INTER_PARAGRAPH_DELAY_MS`)
-         * and is empirically safe against WeChat's short-window rate-limit /
-         * paragraph merge.
-         */
-        private const val STREAMING_INTER_PARAGRAPH_DELAY_MS: Long = 200L
+        // R-GW-STREAMING-001 v2 (2026-06-27): the v1 `STREAMING_PARAGRAPH_REGEX`
+        // and `STREAMING_INTER_PARAGRAPH_DELAY_MS` constants have been removed.
+        // v2 sidecar dispatches each AssistantDelta as one IM message with no
+        // segmentation or inter-segment delay — see [AgentStreamingSidecar]
+        // class doc for rationale.
 
         /**
          * R-GW-STREAMING-001 (TC-GW-STREAMING-001-j): bilingual multi-message

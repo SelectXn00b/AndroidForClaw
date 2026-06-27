@@ -37,8 +37,12 @@ class AgentStreamingSidecarShapeWiringTest {
         )
         // Required v2 constructor parameter names. Caller-supplied params
         // avoid file-scope constant coupling between cron and gateway paths.
+        // v2.1 (2026-06-27): chatId field was split into busTagChatId
+        // (AgentEventBus filter) + wireChatId (dispatchOutgoing arg) — see
+        // TC-GW-STREAMING-001-p.
         val requiredParams = listOf(
-            "chatId",
+            "busTagChatId",
+            "wireChatId",
             "platform",
             "dispatchOutgoing"
         )
