@@ -26,6 +26,8 @@ class AgentStreamingSidecarShapeWiringTest {
 
     // ---------------------------------------------------------------------
     // TC-GW-STREAMING-001-a: class exposes required constructor surface
+    // (v2 2026-06-27: paragraphRegex/interParagraphDelayMs dropped — sidecar
+    // is now single-shot whole-message dispatch, no segmentation)
     // ---------------------------------------------------------------------
     @Test
     fun `TC-GW-STREAMING-001-a class exposes required constructor surface`() {
@@ -33,19 +35,30 @@ class AgentStreamingSidecarShapeWiringTest {
             "TC-GW-STREAMING-001-a: `AgentStreamingSidecar.kt` must declare `class AgentStreamingSidecar`.",
             source.contains("class AgentStreamingSidecar")
         )
-        // Required constructor parameter names. Caller-supplied params avoid
-        // file-scope constant coupling between cron and gateway paths.
+        // Required v2 constructor parameter names. Caller-supplied params
+        // avoid file-scope constant coupling between cron and gateway paths.
         val requiredParams = listOf(
             "chatId",
             "platform",
-            "dispatchOutgoing",
-            "paragraphRegex",
-            "interParagraphDelayMs"
+            "dispatchOutgoing"
         )
         requiredParams.forEach { p ->
             assertTrue(
                 "TC-GW-STREAMING-001-a: constructor must declare parameter `$p` so the caller " +
                     "injects per-context behavior. Not found in source.",
+                source.contains(p)
+            )
+        }
+        // v2 regression guard: paragraphRegex / interParagraphDelayMs are
+        // gone — sidecar dispatches each AssistantDelta whole, no splitting.
+        val v1Params = listOf("paragraphRegex", "interParagraphDelayMs")
+        v1Params.forEach { p ->
+            assertFalse(
+                "TC-GW-STREAMING-001-a v2 (2026-06-27): constructor must NOT reference `$p` — " +
+                    "v1 paragraph-split + inter-paragraph-delay design was reverted because " +
+                    "the serialized collector fell arbitrarily far behind the agent loop, " +
+                    "causing real-device WeChat 'silence then burst' symptom. v2 dispatches " +
+                    "each AssistantDelta as one whole IM message; no splitting.",
                 source.contains(p)
             )
         }
@@ -85,10 +98,11 @@ class AgentStreamingSidecarShapeWiringTest {
     }
 
     // ---------------------------------------------------------------------
-    // TC-GW-STREAMING-001-c: filter + paragraph split + serial dispatch
+    // TC-GW-STREAMING-001-c: filter + one IM message per AssistantDelta
+    // (v2 2026-06-27: no paragraph splitting, no mutex, no inter-segment delay)
     // ---------------------------------------------------------------------
     @Test
-    fun `TC-GW-STREAMING-001-c sidecar filters AssistantDelta and serializes paragraph dispatch`() {
+    fun `TC-GW-STREAMING-001-c sidecar filters AssistantDelta and dispatches as one IM message per turn`() {
         assertTrue(
             "TC-GW-STREAMING-001-c: must subscribe to `AgentEventBus.events`.",
             source.contains("AgentEventBus.events")
@@ -99,7 +113,7 @@ class AgentStreamingSidecarShapeWiringTest {
             source.contains("AssistantDelta")
         )
         // Other agent event types must NOT be dispatched — they're internal
-        // signals, not user-visible IM bubbles.  Comments are stripped via
+        // signals, not user-visible IM bubbles. Comments are stripped via
         // stripKotlinComments(), so these checks hit real references only.
         val forbidden = listOf("ToolCallStart", "ToolCallEnd")
         forbidden.forEach { token ->
@@ -114,29 +128,32 @@ class AgentStreamingSidecarShapeWiringTest {
                 "`<think>` / `<tool>` / `<status>` XML before sending to user.",
             source.contains("HermesReplyMarkupStripper.strip")
         )
+        // v2: must actually call dispatchOutgoing with the stripped text.
+        // Constructor declares `dispatchOutgoing:` (with colon); the invocation
+        // uses `dispatchOutgoing(platform`.
         assertTrue(
-            "TC-GW-STREAMING-001-c: must serialize dispatch through `dispatchMutex` with `.withLock`.",
-            source.contains("dispatchMutex") && source.contains(".withLock")
+            "TC-GW-STREAMING-001-c: must invoke `dispatchOutgoing(platform, ...)` — the actual " +
+                "IM send call site (not just the constructor param declaration).",
+            source.contains("dispatchOutgoing(platform")
         )
-        // paragraphRegex referenced + .split( present
-        assertTrue(
-            "TC-GW-STREAMING-001-c: must reference `paragraphRegex` (caller-supplied param) and " +
-                "call `.split(` on the stripped text to break it into paragraphs.",
-            source.contains("paragraphRegex") && source.contains(".split(")
+        // v2 regression guards: paragraph splitting / mutex serialization /
+        // inter-paragraph delay are all gone.
+        val v1Forbidden = listOf(
+            "paragraphRegex",
+            "dispatchMutex",
+            ".withLock",
+            "interParagraphDelayMs"
         )
-        // delay(interParagraphDelayMs) between paragraphs
-        assertTrue(
-            "TC-GW-STREAMING-001-c: must `delay(interParagraphDelayMs)` between paragraph " +
-                "dispatches to avoid WeChat short-window rate-limit / merge.",
-            source.contains("delay(interParagraphDelayMs")
-        )
-        // Empty-paragraph guard (post-split there can be blanks)
-        val hasBlankGuard = source.contains("isNotBlank()") || source.contains("isNotEmpty()")
-        assertTrue(
-            "TC-GW-STREAMING-001-c: must filter out blank/empty paragraphs after split " +
-                "(`isNotBlank()` or `isNotEmpty()`) so we don't send empty IM messages.",
-            hasBlankGuard
-        )
+        v1Forbidden.forEach { token ->
+            assertFalse(
+                "TC-GW-STREAMING-001-c v2 (2026-06-27): sidecar must NOT reference `$token` — " +
+                    "v1 paragraph-split + mutex-serialize + inter-segment-delay design was " +
+                    "reverted because the serialized collector fell arbitrarily far behind " +
+                    "the agent loop. v2 dispatches each AssistantDelta as one whole IM " +
+                    "message with no segmentation.",
+                source.contains(token)
+            )
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -231,11 +248,83 @@ class AgentStreamingSidecarShapeWiringTest {
                 "so R-CRON-DIAG-001-style diagnostic queries can locate per-turn dispatch records.",
             source.contains("streaming dispatch turn=")
         )
-        val hasParagraphField = source.contains("paragraphIdx=") || source.contains("paragraphCount=")
+        val hasFieldMarker = source.contains("paragraphIdx=") ||
+            source.contains("paragraphCount=") ||
+            source.contains("textLen=")
         assertTrue(
-            "TC-GW-STREAMING-001-k: log lines must include `paragraphIdx=` or `paragraphCount=` so " +
-                "operators can pin down which paragraph of which turn failed.",
-            hasParagraphField
+            "TC-GW-STREAMING-001-k: log lines must include `textLen=` (v2 — one dispatch per " +
+                "AssistantDelta) or `paragraphIdx=` / `paragraphCount=` (v1 legacy) so operators " +
+                "can pin down which dispatch of which turn failed.",
+            hasFieldMarker
+        )
+    }
+
+    // ---------------------------------------------------------------------
+    // TC-GW-STREAMING-001-p: bus-tag chatId vs wire chatId must be SEPARATE
+    // fields (2026-06-27 bugfix).
+    //
+    // Real-device log: `WeixinAdapter.send(to_user_id=...)` was receiving
+    // `gw:weixin:wxid@im.wechat:wxid@im.wechat:wxid@im.wechat` (the
+    // `historyChatId` = `gw:$sessionKey:$chatId`, which is correct for
+    // Hermes-side identity but is NOT a valid WeChat wire chatId). iLink
+    // rejected with `errcode=-3` → every streaming dispatch failed →
+    // user-visible "silence then burst" symptom.
+    //
+    // Root cause: the v2 sidecar had a single `chatId: String` field that
+    // was used both as the AgentEventBus filter key (must equal
+    // historyChatId) AND as the second arg to `dispatchOutgoing(...)`
+    // (must be the platform-native wire chatId). Fix: split into
+    // `busTagChatId` + `wireChatId`. The bus filter uses busTagChatId;
+    // the dispatch uses wireChatId.
+    //
+    // The `dispatchOutgoing` lambda in HermesGatewayController already
+    // forwards its `chatId` arg straight to `WeixinAdapter.send` without
+    // stripping, so feeding the clean wire chatId at this layer is the
+    // minimal correct fix. Adapter contract is unchanged; non-streaming
+    // fallback (which already uses `currentEvent.source.chatId` —
+    // clean wire chatId) and `send_message` tool path (closure captures
+    // clean outer chatId) are unaffected.
+    // ---------------------------------------------------------------------
+    @Test
+    fun `TC-GW-STREAMING-001-p sidecar splits busTagChatId and wireChatId`() {
+        // (1) Constructor declares BOTH fields.
+        assertTrue(
+            "TC-GW-STREAMING-001-p: constructor must declare `busTagChatId` — used as the " +
+                "AgentEventBus tag filter (matches `tagged.chatId == historyChatId`).",
+            source.contains("busTagChatId")
+        )
+        assertTrue(
+            "TC-GW-STREAMING-001-p: constructor must declare `wireChatId` — the platform-" +
+                "native chatId that goes to `dispatchOutgoing` and then unmodified into " +
+                "`adapter.send(chatId = ...)`. WeChat needs `wxid@im.wechat`, NOT the " +
+                "5-token `gw:sessionKey:chatId` historyChatId.",
+            source.contains("wireChatId")
+        )
+        // (2) The legacy single `chatId` field MUST be gone — leaving it would
+        //     keep the door open for the same conflation to recur.
+        val hasLegacyChatIdField = Regex("""private\s+val\s+chatId\s*:""")
+            .containsMatchIn(source)
+        assertFalse(
+            "TC-GW-STREAMING-001-p: legacy single-field `private val chatId:` MUST be " +
+                "removed — replaced by busTagChatId + wireChatId. Leaving both forms is a " +
+                "regression risk.",
+            hasLegacyChatIdField
+        )
+        // (3) dispatchOutgoing actually called with wireChatId — this is the
+        //     core wire fix.
+        assertTrue(
+            "TC-GW-STREAMING-001-p: must invoke `dispatchOutgoing(platform, wireChatId, ...)` " +
+                "— passing the wire chatId, not the bus-tag chatId. This is the line that " +
+                "previously polluted WeChat's `to_user_id` with the 5-token historyChatId.",
+            source.contains("dispatchOutgoing(platform, wireChatId")
+        )
+        // (4) Old polluted form must NOT appear — regression guard.
+        assertFalse(
+            "TC-GW-STREAMING-001-p: must NOT contain `dispatchOutgoing(platform, chatId,` " +
+                "(the legacy single-field invocation that caused the WeChat `errcode=-3` " +
+                "bug). Replace with `dispatchOutgoing(platform, wireChatId, ...)`.",
+            Regex("""dispatchOutgoing\s*\(\s*platform\s*,\s*chatId\s*,""")
+                .containsMatchIn(source)
         )
     }
 

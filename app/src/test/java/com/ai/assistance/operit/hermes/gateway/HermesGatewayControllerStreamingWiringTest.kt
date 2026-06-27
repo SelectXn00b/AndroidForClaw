@@ -1,5 +1,6 @@
 package com.ai.assistance.operit.hermes.gateway
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -85,14 +86,22 @@ class HermesGatewayControllerStreamingWiringTest {
                 "the subscription is guaranteed registered before the agent runs.",
             awaitIdx in 0 until sendUserMsgIdx
         )
-        // Caller-supplied paragraphRegex + delay constants (architecture decision:
-        // sidecar takes them as constructor args, not file-scope coupling).
-        assertTrue(
-            "TC-GW-STREAMING-001-h: must define `STREAMING_PARAGRAPH_REGEX` and " +
-                "`STREAMING_INTER_PARAGRAPH_DELAY_MS` as caller-supplied constants and " +
-                "pass them through the sidecar constructor.",
-            source.contains("STREAMING_PARAGRAPH_REGEX") &&
-                source.contains("STREAMING_INTER_PARAGRAPH_DELAY_MS")
+        // v2 (2026-06-27, TC-001-m/n/o REVERTED): the v1 caller-supplied
+        // STREAMING_PARAGRAPH_REGEX / STREAMING_INTER_PARAGRAPH_DELAY_MS
+        // constants are gone — sidecar no longer splits or delays. Regression
+        // guard: those constants must NOT remain in the controller source.
+        assertFalse(
+            "TC-GW-STREAMING-001-h v2 (2026-06-27): controller must NOT reference " +
+                "`STREAMING_PARAGRAPH_REGEX` — v1 paragraph-split design was reverted " +
+                "(see TC-GW-STREAMING-001-c v2). Found leftover constant.",
+            source.contains("STREAMING_PARAGRAPH_REGEX")
+        )
+        assertFalse(
+            "TC-GW-STREAMING-001-h v2 (2026-06-27): controller must NOT reference " +
+                "`STREAMING_INTER_PARAGRAPH_DELAY_MS` — v1 inter-segment-delay design " +
+                "was reverted (see TC-GW-STREAMING-001-m REVERTED). Found leftover " +
+                "constant.",
+            source.contains("STREAMING_INTER_PARAGRAPH_DELAY_MS")
         )
     }
 
@@ -361,6 +370,55 @@ class HermesGatewayControllerStreamingWiringTest {
                 "R-GW-STREAMING-001-j hint MUST still be present — the sidecar " +
                 "fallback layer is still active.",
             source.contains("空行")
+        )
+    }
+
+
+    // ---------------------------------------------------------------------
+    // TC-GW-STREAMING-001-p (2026-06-27 bugfix): controller wiring must pass
+    // historyChatId as busTagChatId, and the platform-native chatId as
+    // wireChatId. See AgentStreamingSidecarShapeWiringTest for the sidecar
+    // side of the fix.
+    //
+    // Real-device log evidence: `dispatchOutgoing` was receiving the 5-token
+    // `gw:weixin:wxid@im.wechat:wxid@im.wechat:wxid@im.wechat` as `chatId`,
+    // which then passed unmodified to `WeixinAdapter.send(to_user_id=...)`
+    // and triggered `errcode=-3` from iLink. Bus-filter requires the
+    // 5-token historyChatId; adapter wire requires the 1-token chatId.
+    // Two purposes → two fields.
+    // ---------------------------------------------------------------------
+    @Test
+    fun `TC-GW-STREAMING-001-p controller passes historyChatId as busTag and platform chatId as wire`() {
+        // (1) Construct sidecar with the bus-tag field set to historyChatId.
+        val hasBusTagAssignment = Regex("""busTagChatId\s*=\s*historyChatId""")
+            .containsMatchIn(source)
+        assertTrue(
+            "TC-GW-STREAMING-001-p: `HermesGatewayController.runHermesAgent` must construct " +
+                "`AgentStreamingSidecar(busTagChatId = historyChatId, ...)`. The bus-tag " +
+                "must match the AgentEventBus tag, which is the 5-token historyChatId.",
+            hasBusTagAssignment
+        )
+        // (2) Construct sidecar with the wire field set to the raw `chatId` param.
+        val hasWireAssignment = Regex("""wireChatId\s*=\s*chatId\b""")
+            .containsMatchIn(source)
+        assertTrue(
+            "TC-GW-STREAMING-001-p: `HermesGatewayController.runHermesAgent` must construct " +
+                "`AgentStreamingSidecar(..., wireChatId = chatId, ...)`. The wire chatId is " +
+                "the platform-native single-segment chatId (e.g. WeChat `wxid@im.wechat`) " +
+                "that the IM adapter expects as `to_user_id`.",
+            hasWireAssignment
+        )
+        // (3) Regression guard: the legacy single-field form
+        //     `AgentStreamingSidecar(chatId = historyChatId, ...)` MUST be gone.
+        val hasLegacyChatIdArg = Regex("""AgentStreamingSidecar\s*\([\s\S]*?chatId\s*=\s*historyChatId""")
+            .containsMatchIn(source)
+        assertFalse(
+            "TC-GW-STREAMING-001-p: legacy single-field invocation " +
+                "`AgentStreamingSidecar(chatId = historyChatId, ...)` MUST be gone. That " +
+                "form fed the polluted 5-token historyChatId into `WeixinAdapter.send` and " +
+                "triggered the WeChat `errcode=-3` bug. Use `busTagChatId = historyChatId, " +
+                "wireChatId = chatId` instead.",
+            hasLegacyChatIdArg
         )
     }
 
