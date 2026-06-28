@@ -21,7 +21,7 @@ import java.io.File
  * **测试策略**：跟 PersistentInstructionInjectionTest 一样走源码字符串扫描——这两个文件是
  * 纯 const string，没法走 runtime 断言。
  *
- * 对应 TC-AGENT-245-a/b/c（见 docs/hermes-test-cases.md）。
+ * 对应 TC-AGENT-245-a/b/c、TC-AGENT-285-a/b（见 docs/hermes-test-cases.md）。
  */
 class PersistentInstructionAgentHintTest {
 
@@ -103,6 +103,57 @@ class PersistentInstructionAgentHintTest {
             "GATEWAY_AWARENESS_CN 的记忆库使用指导段必须包含\"例外\"或\"主动\"等限定词，" +
                 "把\"无需手动保存\"与\"持久规则必须主动保存\"指令分开。",
             cnBlock.contains("例外") || cnBlock.contains("主动调用")
+        )
+    }
+
+    // ===== TC-AGENT-285-a/b: R-AGENT-046 agent 心智模型必须 mention trigger_keywords =====
+
+    /**
+     * TC-AGENT-285-a: GATEWAY_AWARENESS_EN 的 MEMORY USAGE GUIDANCE 必须 mention
+     * `trigger_keywords` —— 让 agent 知道创建 `#persistent_instruction` 时优先填这个字段，
+     * 且缺省=每轮注入（向后兼容）。
+     */
+    @Test
+    fun `TC-AGENT-285-a EN guidance mentions trigger_keywords field`() {
+        val source = File(systemPromptConfigPath()).readText()
+        val enBlock = extractBetween(source, "GATEWAY_AWARENESS_EN", "GATEWAY_AWARENESS_CN")
+            ?: error("找不到 GATEWAY_AWARENESS_EN 块")
+
+        assertTrue(
+            "GATEWAY_AWARENESS_EN 必须 mention `trigger_keywords` —— 否则 agent 不会知道 R-AGENT-046 " +
+                "新字段的存在，新创建的 #persistent_instruction 仍会沿用旧行为（每轮全量注入）。",
+            enBlock.contains("trigger_keywords")
+        )
+        // 既要让 agent 知道这个字段，也要让它理解\"缺省=旧行为\"——避免 agent 错以为不填会丢失规则
+        assertTrue(
+            "GATEWAY_AWARENESS_EN 关于 trigger_keywords 的指引必须说明\"缺省 / 省略 / legacy / every turn\" " +
+                "等向后兼容含义；否则 agent 看到新字段后可能误以为不填会被丢弃。",
+            enBlock.contains("Legacy") || enBlock.contains("legacy") ||
+                enBlock.contains("every turn") || enBlock.contains("Omit")
+        )
+    }
+
+    /**
+     * TC-AGENT-285-b: GATEWAY_AWARENESS_CN 的记忆库使用指导同上。
+     */
+    @Test
+    fun `TC-AGENT-285-b CN guidance mentions trigger_keywords field`() {
+        val source = File(systemPromptConfigPath()).readText()
+        val cnBlockStart = source.indexOf("GATEWAY_AWARENESS_CN")
+        assertTrue("找不到 GATEWAY_AWARENESS_CN 定义", cnBlockStart >= 0)
+        val cnBlock = source.substring(cnBlockStart, (cnBlockStart + 3000).coerceAtMost(source.length))
+
+        assertTrue(
+            "GATEWAY_AWARENESS_CN 必须 mention `trigger_keywords` —— 否则 agent 不会知道 R-AGENT-046 " +
+                "新字段的存在。",
+            cnBlock.contains("trigger_keywords")
+        )
+        // 中文 prompt 里同样要说明缺省语义
+        assertTrue(
+            "GATEWAY_AWARENESS_CN 关于 trigger_keywords 的指引必须说明\"老条目 / 缺省 / 不填 / 每轮注入\" " +
+                "等向后兼容含义。",
+            cnBlock.contains("老的") || cnBlock.contains("缺省") || cnBlock.contains("不填") ||
+                cnBlock.contains("每轮注入") || cnBlock.contains("向后兼容")
         )
     }
 

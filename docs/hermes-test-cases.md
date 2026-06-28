@@ -350,13 +350,48 @@ R-AGENT-001 描述 agent turn-loop 内核，验收以 **E2E 为主**（§3 三�
 | TC-AGENT-240-e | R-AGENT-009 | 一条带 tag 的节点 → `removeTag(memory, "#persistent_instruction")` → 再次拼 prompt | system prompt 不再包含该 content | unit/source | 与 240-d 合并到 `TC-AGENT-240-de`（查询基于 `findMemoriesByTag` 实时结果，tag 移除即排除）🟢 |
 | TC-AGENT-241-a | R-AGENT-009 | 带 tag 的节点参与 `MemoryLibrary.saveMemory` 的自动合并 / 更新流程 | 合并源命中 tag → 整组跳过；更新目标命中 tag → 跳过更新 | unit/source | `MemoryLibraryPersistentInstructionGuardTest#TC-AGENT-241-a merge skips persistent_instruction sources` + `#TC-AGENT-241-a' update skips persistent_instruction targets` 🟢 |
 | TC-AGENT-241-b | R-AGENT-009 | 带 tag 的节点参与自动 folder 重分类（`autoCategorizeMemories`） | uncategorizedMemories filter 排除带 tag 节点 | unit/source | `MemoryLibraryPersistentInstructionGuardTest#TC-AGENT-241-b autoCategorize skips persistent_instruction nodes` 🟢 |
-| TC-AGENT-242-a | R-AGENT-009 | gateway 路径调 `prepareConversationHistory(chatId="gw:feishu:xxx")` | 拼出的 system prompt 与 UI 路径同 Profile 时一致（共用全局指令池） | unit/source | `PersistentInstructionInjectionTest#TC-AGENT-242-a buildPersistentInstructionsText reads active profile globally not per-chat` 🟢（验证读 `preferencesManager.activeProfileIdFlow` 而非 chatId） |
+| TC-AGENT-242-a | R-AGENT-009 / R-AGENT-046 | gateway 路径调 `prepareConversationHistory(chatId="gw:feishu:xxx")` | 拼出的 system prompt 与 UI 路径同 Profile 时一致（共用全局指令池）—— `buildPersistentInstructionsText` 签名**不含 `chatId` / `sessionId` 参数**（per-Profile 全局，不与 chat / session 耦合）；2026-06-28 起允许 `userInput: String` 形参以支持触发词预筛（R-AGENT-046），但仍不接 chatId/sessionId | unit/source | `PersistentInstructionInjectionTest#TC-AGENT-242-a buildPersistentInstructionsText reads active profile globally not per-chat` 🟢（regex 同步放宽允许 `userInput` 形参） |
 | TC-AGENT-243-a | R-AGENT-009 | `MemoryRepository.pickNodeColor(memory)` —— memory 带 `#persistent_instruction` tag（含/不含其他 tag、与 `Person`/`Concept` 并存、含 `isDocumentNode=true` 也优先金色） | 返回金色 `Color(0xFFFFB300)`，覆盖文档紫和 Person/Concept 颜色 | unit | `MemoryNodeColorTest#persistentInstructionTakesPrecedence` 🟢 |
 | TC-AGENT-243-b | R-AGENT-009 | `MemoryRepository.pickNodeColor(memory)` —— 不带 tag / 仅 `Person` / 仅 `Concept` / 仅 `isDocumentNode` | 颜色与改动前一致（绿/蓝/紫/灰），保证既有节点视觉不回归 | unit | `MemoryNodeColorTest#existingColorsPreserved` 🟢 |
 | TC-AGENT-244-a | R-AGENT-009 | `MemoryInfoDialog` 渲染一条带 `#persistent_instruction` + `Person` 两个 tag 的记忆 | 详情对话框文本里能找到 `#persistent_instruction` 和 `Person` 字样 | manual/visual | 手测：装包后点带 tag 节点 → 详情对话框 → tags 行可见 🟡 |
 | TC-AGENT-245-a | R-AGENT-009 | `SystemToolPromptsInternal.kt` 的 EN + CN `create_memory` ToolPrompt description | description 显式 mention `#persistent_instruction` tag 与持久规则触发场景 | unit/source | `PersistentInstructionAgentHintTest#TC-AGENT-245-a create_memory descriptions instruct agent to use persistent_instruction tag` 🟢 |
 | TC-AGENT-245-b | R-AGENT-009 | `SystemPromptConfig.kt` 的 `GATEWAY_AWARENESS_EN` 中 `MEMORY USAGE GUIDANCE` 段 | 含 `#persistent_instruction` + `EXCEPTION` 限定词（避免与"无需手动保存"全局指令矛盾）| unit/source | `PersistentInstructionAgentHintTest#TC-AGENT-245-b EN memory usage guidance mentions persistent_instruction with exception clause` 🟢 |
 | TC-AGENT-245-c | R-AGENT-009 | `SystemPromptConfig.kt` 的 `GATEWAY_AWARENESS_CN` 中"记忆库使用指导"段 | 含 `#persistent_instruction` + "例外/主动调用"限定词 | unit/source | `PersistentInstructionAgentHintTest#TC-AGENT-245-c CN memory usage guidance mentions persistent_instruction with exception clause` 🟢 |
+
+状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
+
+---
+
+## 域 AGENT — `#persistent_instruction` 持久指令按触发词预筛注入（R-AGENT-046，Android 扩展）
+
+测试类: `app/src/test/java/com/ai/assistance/operit/hermes/PersistentInstructionInjectionTest.kt`（扩展既有类，新增 TC-AGENT-280 系列方法）
+
+**背景**：R-AGENT-009 把 `#persistent_instruction` 标的节点 100% 注入到每轮 system prompt。条目少时无害；用户累积 30+ 条机械性指令（"打开谷歌前先检查代理"等）后 system prompt 显著膨胀，且与请求无关的指令一并喂给模型，干扰其判断。R-AGENT-046 引入 **`trigger_keywords` 字段**：每条 #persistent_instruction 可选挂一组关键词，仅当当前轮的 `userInput` 子串命中任一关键词时才注入；不带关键词的老条目保持 100% 注入（向后兼容）；短输入（<4 字符）走全量注入兜底。
+
+**设计要点**（详见 `docs/hermes-requirements.md#R-AGENT-046`）：
+- 字段载体：`Memory.properties: ToMany<MemoryProperty>` 复用既有柔性 KV 槽，零 schema 迁移
+- key 常量：`MemoryProperty.KEY_TRIGGER_KEYWORDS = "trigger_keywords"`；value 用 `,` 分隔的字符串
+- 匹配：`userInput.contains(keyword)` 子串匹配（lowercase + NFC 归一化，OR 组合）
+- 阈值：`SHORT_INPUT_FALLBACK_THRESHOLD = 4`（字符，含中文）
+
+**与既有机制的关系**：
+- 与 R-AGENT-009 持久指令通道**叠加**（不替换）—— trigger_keywords 是过滤层，不改变 tag 语义
+- 与 prefetch fence（`EnhancedAIService.kt` `filterNot { #persistent_instruction }`）**正交** —— prefetch fence 把这类节点从向量召回中剔除，本 TC 在另一通道做关键词预筛，两者互不干扰
+- 与 GATEWAY_AWARENESS（R-AGENT-009 TC-245-b/c）**联动** —— agent 内心智模型 prompt 需更新成"创建 #persistent_instruction 时尽量同时填 trigger_keywords"
+
+| TC | 验 R | 输入 / 操作 | 期望 | 类型 | 测试方法 / 状态 |
+|---|---|---|---|---|---|
+| TC-AGENT-280-a | R-AGENT-046 | Memory 库有 1 条带 `#persistent_instruction` tag、**不带** `trigger_keywords` property 的老条目，content="回复用 Markdown 列表"；任意 `userInput`（如 `"你好"`） | `buildPersistentInstructionsText("你好")` 输出含该条目（向后兼容：缺 trigger_keywords = 旧行为 = 每轮注入） | unit/source | `PersistentInstructionInjectionTest#TC-AGENT-280-a legacy entries without trigger_keywords still inject every turn` 🟢 |
+| TC-AGENT-280-b | R-AGENT-046 | Memory 库有 1 条 #persistent_instruction，`trigger_keywords="谷歌,chrome"`；userInput=`"帮我打开谷歌搜索"` | 输出包含该条目 content（子串 `"谷歌"` 命中） | unit/source | `PersistentInstructionInjectionTest#TC-AGENT-280-b trigger keyword hit injects entry` 🟢 |
+| TC-AGENT-280-c | R-AGENT-046 | 同 280-b 的 Memory 状态；userInput=`"今天天气怎么样"`（不含 `"谷歌"` / `"chrome"`） | 输出**不**包含该条目 content（关键词未命中 → 跳过） | unit/source | `PersistentInstructionInjectionTest#TC-AGENT-280-c trigger keyword miss skips entry` 🟢 |
+| TC-AGENT-280-d | R-AGENT-046 | Memory 库有 1 条带 `trigger_keywords="谷歌"` 的条目；userInput=`"嗯"`（长度 < 4） | 短输入 fallback：输出**仍包含**该条目（避免模糊指令命中失败导致全集合静默丢失） | unit/source | `PersistentInstructionInjectionTest#TC-AGENT-280-d short input fallback injects all` 🟢 |
+| TC-AGENT-280-e | R-AGENT-046 | Memory 库有 1 条 `trigger_keywords="Google"`；userInput=`"打开 google"`（大小写不同、含全角空格也归一化） | 输出包含该条目（lowercase + NFC 归一化后子串命中） | unit/source | `PersistentInstructionInjectionTest#TC-AGENT-280-e case insensitive nfc match` 🟢 |
+| TC-AGENT-281-a | R-AGENT-046 | `MemoryRepository.createMemory` 签名 | 新增 `triggerKeywords: List<String>? = null` 可选参数；非空时写一条 `MemoryProperty(key=KEY_TRIGGER_KEYWORDS, value=keywords.joinToString(","))` | unit/source | `MemoryRepositoryTriggerKeywordsWiringTest#TC-AGENT-281-a createMemory writes trigger_keywords property when supplied` 🟢 |
+| TC-AGENT-282-a | R-AGENT-046 | `MemoryQueryToolExecutor` 的 `create_memory` 工具 JSON Schema | properties 含 `"trigger_keywords"` 字段（string，文档说明"逗号分隔的关键词，仅 #persistent_instruction 生效"） | unit/source | `MemoryRepositoryTriggerKeywordsWiringTest#TC-AGENT-282-a create_memory tool executor reads trigger_keywords param` 🟢 |
+| TC-AGENT-283-a | R-AGENT-046 | `MemoryRepository.setTriggerKeywords(memoryId, keywords)` 方法存在并落库 | 调用后 repository.getMemory(memoryId).properties 含一条 `key=KEY_TRIGGER_KEYWORDS, value=keywords.joinToString(",")`；keywords 为空列表则删除该 property（ViewModel/UI 桥接层待 R-AGENT-046 后续 PR 接入） | unit/source | `MemoryRepositoryTriggerKeywordsWiringTest#TC-AGENT-283-a setTriggerKeywords upserts and deletes` 🟢 |
+| TC-AGENT-284-a | R-AGENT-046 | `MemoryInfoDialog` 渲染一条 #persistent_instruction 节点 | UI 含一行 "触发关键词 / Trigger keywords" 输入框，初值=已存的 trigger_keywords value，编辑后回写 ViewModel | manual/visual | 手测：装包后点 #persistent_instruction 节点 → 详情对话框 → 看到输入框 → 编辑保存生效 🔴（待实现） |
+| TC-AGENT-285-a | R-AGENT-046 | `SystemPromptConfig.kt` 的 `GATEWAY_AWARENESS_EN` 中 `MEMORY USAGE GUIDANCE` 段 | 在 #persistent_instruction 已有的"EXCEPTION"段落里追加 mention `trigger_keywords` —— 让 agent 知道创建持久指令时优先填这个字段，且字段缺失=每轮注入（与现有行为一致） | unit/source | `PersistentInstructionAgentHintTest#TC-AGENT-285-a EN guidance mentions trigger_keywords field` 🟢 |
+| TC-AGENT-285-b | R-AGENT-046 | `SystemPromptConfig.kt` 的 `GATEWAY_AWARENESS_CN` 中"记忆库使用指导"段 | 同 285-a，CN 版本 mention `trigger_keywords` 字段、用法、缺省行为 | unit/source | `PersistentInstructionAgentHintTest#TC-AGENT-285-b CN guidance mentions trigger_keywords field` 🟢 |
 
 状态图例: 🔴 = 无测试（待落地） / 🟡 = 有测试未验证 / 🟢 = 已绿
 

@@ -110,4 +110,13 @@ data class MemoryProperty(
     @Id var id: Long = 0,
     var key: String = "",
     var value: String = ""
-) 
+) {
+    companion object {
+        /**
+         * R-AGENT-046: `#persistent_instruction` 触发词预筛 key。
+         * value 为 `,` 分隔的关键词字符串（如 `"谷歌,chrome,搜索"`）；
+         * 仅 #persistent_instruction tag 的 memory 上生效；缺失=老条目=每轮全量注入（向后兼容）。
+         */
+        const val KEY_TRIGGER_KEYWORDS = "trigger_keywords"
+    }
+}

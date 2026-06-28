@@ -13,6 +13,7 @@ import com.ai.assistance.operit.core.tools.AIToolHandler
 import com.ai.assistance.operit.core.tools.packTool.PackageManager
 import com.ai.assistance.operit.data.model.AITool
 import com.ai.assistance.operit.data.model.FunctionType
+import com.ai.assistance.operit.data.model.MemoryProperty
 import com.ai.assistance.operit.data.model.PreferenceProfile
 import com.ai.assistance.operit.data.model.ToolParameter
 import com.ai.assistance.operit.core.tools.UIPageResultData
@@ -35,6 +36,7 @@ import com.ai.assistance.operit.core.tools.ToolProgressBus
 import com.ai.assistance.operit.util.streamnative.NativeXmlSplitter
 import com.github.difflib.DiffUtils
 import com.github.difflib.UnifiedDiffUtils
+import java.text.Normalizer
 import java.util.Calendar
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -65,6 +67,9 @@ class ConversationService(
             """<file-request-content\b[^>]*><!\[CDATA\[(.*?)\]\]></file-request-content>""",
             setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
         )
+
+        /** R-AGENT-046: 短输入 fallback 阈值（字符数，含中文）。低于此值时跳过触发词预筛、全量注入。 */
+        const val SHORT_INPUT_FALLBACK_THRESHOLD = 4
     }
 
     private val apiPreferences = ApiPreferences.getInstance(context)
@@ -417,9 +422,11 @@ class ConversationService(
                         append("\n\nUser preference description: ")
                         append(preferencesText)
                     }
-                    // R-AGENT-009: 持久指令注入（USER.md 等价段）。位于 User preference description 之后，
-                    // 工具描述之前由 SystemPromptConfig 已经吐完。无 #persistent_instruction 节点 → 空串 → 不 append。
-                    val persistentInstructionsText = buildPersistentInstructionsText()
+                    // R-AGENT-009 + R-AGENT-046: 持久指令注入（USER.md 等价段）。
+                    // 位于 User preference description 之后，工具描述之前由 SystemPromptConfig 已经吐完。
+                    // R-AGENT-046: 把当前 processedInput 传入做触发词预筛 —— 不命中 trigger_keywords 的条目跳过，
+                    // 短输入 / 无 trigger_keywords 的老条目仍每轮注入（向后兼容）。
+                    val persistentInstructionsText = buildPersistentInstructionsText(processedInput)
                     if (persistentInstructionsText.isNotEmpty()) {
                         append("\n\n")
                         append(persistentInstructionsText)
@@ -691,9 +698,10 @@ class ConversationService(
 
     /**
      * R-AGENT-009 持久指令注入（USER.md 等价段，对应 Python `MemoryStore.format_for_system_prompt("user")`）。
+     * R-AGENT-046 触发词预筛扩展（Android 仅有，Python 上游无对应）。
      *
      * 拉取当前 active profile 下所有带 `#persistent_instruction` tag 的 memory 节点，
-     * 按 `updatedAt desc` 排序后拼成：
+     * 按 `updatedAt desc` 排序后**按当前轮 [userInput] 做触发词预筛**，命中或老条目则拼成：
      *
      * ```
      * [Persistent user instructions]
@@ -701,24 +709,53 @@ class ConversationService(
      * - <content2>
      * ```
      *
-     * 调用方负责拼接到 `finalSystemPrompt` 末尾（位于 `User preference description` 之后）。
+     * **预筛规则**：
+     *  - 短输入兜底：当 `userInput.length < SHORT_INPUT_FALLBACK_THRESHOLD`（4 字符）时，
+     *    所有条目走全量注入 —— 短输入信息量低、关键词不易命中，宁可多注入避免漏指令。
+     *  - 长输入：对每条 memory 取 `MemoryProperty(key = KEY_TRIGGER_KEYWORDS)` 的 value，
+     *    切分 `,` 后做子串 `contains` 匹配；任一关键词命中则注入。
+     *  - 老条目（无 KEY_TRIGGER_KEYWORDS property 或 value 为空）= 旧行为 = 每轮注入（向后兼容）。
+     *  - 归一化：比对前对 userInput 与每个 keyword 都做 `lowercase()` + `Normalizer.normalize(..., NFC)`，
+     *    使 `Google` 命中 `google`、全角/半角空格不影响匹配。
      *
-     * 无任何持久指令节点时返回空串 —— 调用方据此决定是否 append（不可无脑 append 多余的换行）。
+     * 调用方负责拼接到 `finalSystemPrompt` 末尾（位于 `User preference description` 之后）。
+     * 无任何持久指令节点 / 全部被过滤掉时返回空串。
      *
      * 单条 content 内部的换行用 single space 折叠，避免 bullet 错乱；首尾空白 trim。
      *
-     * 对应 TC-AGENT-240-a..e（见 docs/hermes-test-cases.md）。
+     * 对应 TC-AGENT-240-a..e、TC-AGENT-242-a、TC-AGENT-280-a..e（见 docs/hermes-test-cases.md）。
      */
-    suspend fun buildPersistentInstructionsText(): String {
+    suspend fun buildPersistentInstructionsText(userInput: String): String {
         val profileId = preferencesManager.activeProfileIdFlow.first()
         val repository = MemoryRepository(context, profileId)
         val memories = repository.findMemoriesByTag("#persistent_instruction")
         if (memories.isEmpty()) return ""
 
         val sorted = memories.sortedByDescending { it.updatedAt.time }
+
+        // R-AGENT-046 短输入 fallback：userInput 过短时跳过预筛，全量注入
+        val shortInput = userInput.length < SHORT_INPUT_FALLBACK_THRESHOLD
+        val normalizedInput = if (shortInput) "" else normalizeForKeywordMatch(userInput)
+
+        val filtered = sorted.filter { m ->
+            if (shortInput) return@filter true
+            val triggerProp = m.properties.firstOrNull { it.key == MemoryProperty.KEY_TRIGGER_KEYWORDS }
+            val raw = triggerProp?.value
+            // 老条目（无 property / value 空）→ 旧行为 → 每轮注入
+            if (raw.isNullOrBlank()) return@filter true
+            val keywords = raw.split(",")
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .map { normalizeForKeywordMatch(it) }
+            if (keywords.isEmpty()) return@filter true
+            keywords.any { kw -> normalizedInput.contains(kw) }
+        }
+
+        if (filtered.isEmpty()) return ""
+
         val sb = StringBuilder()
         sb.append("[Persistent user instructions]")
-        sorted.forEach { m ->
+        filtered.forEach { m ->
             val flattened = m.content.replace(Regex("\\s+"), " ").trim()
             if (flattened.isNotEmpty()) {
                 sb.append("\n- ").append(flattened)
@@ -726,6 +763,13 @@ class ConversationService(
         }
         return sb.toString()
     }
+
+    /**
+     * R-AGENT-046: 触发词比对前的归一化 —— `lowercase()` + NFC，
+     * 让大小写不同 / Unicode 异形（如全角半角空格）也能命中。
+     */
+    private fun normalizeForKeywordMatch(s: String): String =
+        Normalizer.normalize(s.lowercase(), Normalizer.Form.NFC)
 
 
 

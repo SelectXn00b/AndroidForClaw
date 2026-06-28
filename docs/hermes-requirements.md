@@ -2810,3 +2810,83 @@ C. **兼容老 jobs.json**：origin 为 null 的老 job 走 `result.chatId` (exe
 - 对齐四件套零回归：本 R 不新增 stub、不动 Python parser 模块、不动 deep_align findings、不增加 functional_stubs。
 
 
+### R-AGENT-046: `#persistent_instruction` 持久指令按触发词预筛注入（Android 扩展）
+
+**状态**: 待实现（仅文档草案，2026-06-28 立项）
+
+**来源**: 用户 2026-06-28 真机反馈——"必须使用『以后记得』等机械性指令才能记住，但这样以来，每次对话需要加载很多记忆节点"。
+
+**Python 上游**: **无直接对应**。Python `reference/hermes-agent/plugins/memory/retaindb/__init__.py:616-617` 的 `persistent_instructions` 是简单字符串列表，agent_model 拉取后整段拼接，无按触发条件过滤的机制。本需求是 Android 端额外能力，**不要求 Python 上游 1:1 对齐**；后续若上游引入类似机制再回头收敛。
+
+**背景 / 用户痛点**:
+- R-AGENT-009 + R-UI-002 提供了 `#persistent_instruction` tag 机制：打了 tag 的 memory 节点每轮 100% 注入到 `[Persistent user instructions]` 段（`ConversationService.kt:712-728 buildPersistentInstructionsText()`）。
+- 该机制是"二选一陷阱"：要么不标 tag → 走普通通道 prefetch（top-5 关键词召回，`EnhancedAIService.kt:1093-1147`），关键词不匹配则等于失忆；要么标 tag → 走 VIP 通道，**所有打 tag 的条目每轮无差别注入**，节点累积到几十条时 prompt 头部 token 浪费严重 + agent 响应变慢。
+- 用户教过的"打开谷歌前检查代理"这类**场景规则**——只在用户提及搜索/Chrome/谷歌时才相关——目前没有中间档位：标 tag 会让它在所有无关对话里也占位；不标 tag 又召不回来。
+- 调研详见会话 2026-06-28 调研报告（见 MEMORY-WECHAT-STREAMING-WIRE-CHATID.md 同期 session）。
+
+**架构定位（与现有机制的边界）**:
+- 不替代 prefetch fence（R-AGENT-015）：prefetch 处理"语义相关的事实/历史"召回；本需求处理"打了 tag 的持久规则"的场景化过滤。两条通道天然正交（prefetch 已 `filterNot { has #persistent_instruction }`，`EnhancedAIService.kt:1116-1118`）。
+- 不替代 R-UI-002 UI toggle：UI toggle 仍是"是不是持久指令"的开关；本需求新增"持久指令在什么场景下出现"的二级元数据。
+- 不引入新字段到 `Memory` entity：复用现有 `properties: ToMany<MemoryProperty>` 槽（`Memory.kt:108`），用 `key="trigger_keywords"` 落地，**零 ObjectBox migration 风险**，老条目（无该 property）自动按"全局"处理保持现行行为。
+
+**行为**:
+
+A. **数据形态**（写入侧）
+- 每条 `#persistent_instruction` 节点可携带 0 或 1 条 `MemoryProperty(key="trigger_keywords", value=...)`
+- `value` 是逗号分隔的关键词字符串（例：`"谷歌,google,chrome,搜索"`）
+- 无该 property 或 value 空串 = "全局规则"，每轮无条件注入（向后兼容现行行为）
+
+B. **写入路径**
+- `MemoryRepository.createMemory(...)` 新增可选入参 `triggerKeywords: List<String>? = null`，传入时落到 `properties`
+- `MemoryQueryToolExecutor.kt` 的 `create_memory` / `update_memory` 工具 schema 新增可选参数 `trigger_keywords: string` （逗号分隔），让 agent 在标 `#persistent_instruction` 时一并填
+- `MemoryViewModel` 新增 `setTriggerKeywords(memoryId, keywords: String)` 方法
+- UI 在 `MemoryInfoDialog`（R-UI-002 toggle 同区域）增加一个文本框，仅当 toggle 开启时可见
+
+C. **读取/注入路径**（核心）
+- `ConversationService.buildPersistentInstructionsText()` 签名改为 `buildPersistentInstructionsText(userInput: String): String`
+- 调用点 `ConversationService.kt:422` 传入当前轮的 `processedInput`（该变量已存在于 `prepareConversationHistory` 入参栈，无需补传链路）
+- 注入逻辑：
+  1. 取出所有 `#persistent_instruction` memory（同现行）
+  2. 对每条 memory：
+     - 若无 `trigger_keywords` property 或 value 空 → **always 注入**（全局规则）
+     - 否则解析逗号分隔关键词列表，**任一**关键词出现在 `userInput`（经归一化）中 → 注入；否则跳过
+  3. 注入排序保持现行 `sortedByDescending { updatedAt }`
+
+D. **匹配语义**
+- 归一化：`userInput` 与每个关键词都做 `lowercase` + NFC + trim 后比较
+- 匹配方式：`userInput.contains(keyword)`（subString 包含，**不**做 token 边界 / 正则 / 模糊）。中文不分词，英文不词形还原——保持简单可预测
+- 多关键词逻辑：OR（任一命中即注入）
+
+E. **短输入 fallback**
+- 当 `userInput.length < 4`（按归一化后的 char 计）→ 视为"接续上文"，**全量注入**（行为退化为现行）。理由：emoji / "嗯"/"好的" 类短回复关键词几乎不可能命中，全量是更安全的默认
+- 该阈值常量 `SHORT_INPUT_FALLBACK_THRESHOLD = 4` 落在 `ConversationService.kt` 文件作用域
+
+F. **agent 心智模型 prompt 同步更新**
+- `SystemPromptConfig.kt:63 (EN)` / `:90 (CN)` GATEWAY_AWARENESS 段中关于 `#persistent_instruction` 的描述同步重写，明示新语义：
+  - 真·全局规则（语言、风格、安全禁忌）→ 不填 `trigger_keywords` → 每轮注入
+  - 场景规则（"做 X 时记得 Y"）→ 填 `trigger_keywords` → 仅在用户提及相关词时浮现
+- 否则 agent 会按旧 prompt 继续"一律不填 trigger_keywords"，新机制等于白做
+
+G. **不动既有路径**
+- 不动 prefetch fence 逻辑
+- 不动 R-UI-002 toggle 语义
+- 不动 R-AGENT-009 注入位置（仍在 `[Persistent user instructions]` 段）
+- 不动 gateway / cron / UI 三路径的入参分发链路（共用同一 `prepareConversationHistory`）
+- 不动 ObjectBox schema（用 `MemoryProperty` 复用槽，无 migration）
+
+**验收**:
+- 老条目（无 `trigger_keywords` property）行为 **100% 等同**于本需求落地前：每轮注入；R-UI-002 toggle 测试 / TC-AGENT-009 / TC-AGENT-240 系列等既有测试全绿
+- 新建一条 `#persistent_instruction` memory 并填 `trigger_keywords = "谷歌,搜索"`：
+  - 用户问 "帮我搜个东西" → `buildPersistentInstructionsText("帮我搜个东西")` 返回的 bullet 列表 **包含**该条
+  - 用户问 "今天天气怎么样" → 返回 bullet 列表 **不包含**该条
+- 短输入 fallback：用户输入 "嗯" / "好的" / "👍" → 不论 trigger_keywords 设没设，所有 `#persistent_instruction` 条目都被注入（行为退化）
+- 多语言归一化：trigger_keywords 存 `"Chrome,Google"` 时，用户输入 `"用 chrome 打开"` / `"google 一下"`（小写）都能命中
+- gateway 路径（chatId 以 `gw:` 开头）共用同一逻辑，验收点与 UI 路径一致
+- `PersistentInstructionInjectionTest.kt:114` 的 TC-AGENT-242-a 测试断言从"必须无参"改为"不含 chatId / sessionId 参数"（原意保留：per-Profile 全局，不耦合 chat / session）
+- §2 四件套：`verify_align / scan_stubs / deep_align` 维持零；`scan_functional_stubs` ≤ 390（不增）
+
+**风险与已知局限**:
+- contains 子串匹配会有误命中（用户输入"谷歌纳斯"包含"谷歌"→ 命中代理规则）。可接受——误注入比漏注入便宜
+- 无 token-level / 词形还原 / 模糊匹配：未来若需更准的语义匹配，可以再在 R-AGENT-046+ 增量演进（甚至切到向量 / R-AGENT-015 prefetch 同款语义召回）
+- agent 会不会乖乖填 `trigger_keywords`：取决于 GATEWAY_AWARENESS prompt 重写质量；本需求**只保证机制可用**，agent 实际填写率由 prompt iteration 持续优化
+

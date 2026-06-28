@@ -6,6 +6,7 @@ import com.ai.assistance.operit.R
 import com.ai.assistance.operit.data.db.ObjectBoxManager
 import com.ai.assistance.operit.data.model.Memory
 import com.ai.assistance.operit.data.model.MemoryLink
+import com.ai.assistance.operit.data.model.MemoryProperty
 import com.ai.assistance.operit.data.model.MemoryTag
 import com.ai.assistance.operit.data.model.MemoryTag_
 import com.ai.assistance.operit.data.model.Memory_
@@ -92,6 +93,7 @@ class MemoryRepository(private val context: Context, profileId: String) {
     private val tagBox = store.boxFor<MemoryTag>()
     private val linkBox = store.boxFor<MemoryLink>()
     private val chunkBox = store.boxFor<DocumentChunk>()
+    private val propertyBox = store.boxFor<MemoryProperty>()
 
     private val searchSettingsPreferences = MemorySearchSettingsPreferences(context, profileId)
     private val cloudEmbeddingService = CloudEmbeddingService(context)
@@ -2381,7 +2383,8 @@ class MemoryRepository(private val context: Context, profileId: String) {
         source: String = "user_input",
         folderPath: String = "",
         tags: List<String>? = null,
-        force: Boolean = false
+        force: Boolean = false,
+        triggerKeywords: List<String>? = null
     ): Memory? = withContext(Dispatchers.IO) {
         val normalizedTags = tags
             ?.map { it.trim() }
@@ -2435,7 +2438,64 @@ class MemoryRepository(private val context: Context, profileId: String) {
             memoryBox.put(memory)
         }
 
+        // R-AGENT-046: trigger_keywords property 写入。
+        // 非空时存一条 MemoryProperty(key=KEY_TRIGGER_KEYWORDS, value="kw1,kw2,..."），
+        // 由 ConversationService.buildPersistentInstructionsText 在注入时做子串预筛。
+        // 仅对带 #persistent_instruction tag 的节点有意义，但这里不做 tag 校验
+        // —— 让调用方决定（写入侧灵活，注入侧才挑剔）。
+        val normalizedTriggerKeywords = triggerKeywords
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.distinct()
+        if (!normalizedTriggerKeywords.isNullOrEmpty()) {
+            val prop = MemoryProperty(
+                key = MemoryProperty.KEY_TRIGGER_KEYWORDS,
+                value = normalizedTriggerKeywords.joinToString(",")
+            )
+            propertyBox.put(prop)
+            memory.properties.add(prop)
+            memoryBox.put(memory)
+        }
+
         memory
+    }
+
+    /**
+     * R-AGENT-046: 更新单条 memory 的 trigger_keywords。
+     * - keywords 非空 → upsert（已有 property 则更新 value，没有则新建）
+     * - keywords 为空 / null → 删除已有的 trigger_keywords property（回退到"老条目=每轮注入"行为）
+     */
+    suspend fun setTriggerKeywords(memoryId: Long, keywords: List<String>?): Boolean = withContext(Dispatchers.IO) {
+        val memory = memoryBox.get(memoryId) ?: return@withContext false
+        val normalized = keywords
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.distinct()
+
+        val existing = memory.properties.firstOrNull { it.key == MemoryProperty.KEY_TRIGGER_KEYWORDS }
+        if (normalized.isNullOrEmpty()) {
+            // 删除：回退到老条目=每轮注入
+            if (existing != null) {
+                memory.properties.remove(existing)
+                propertyBox.remove(existing.id)
+                memoryBox.put(memory)
+            }
+        } else {
+            val joined = normalized.joinToString(",")
+            if (existing != null) {
+                existing.value = joined
+                propertyBox.put(existing)
+            } else {
+                val prop = MemoryProperty(
+                    key = MemoryProperty.KEY_TRIGGER_KEYWORDS,
+                    value = joined
+                )
+                propertyBox.put(prop)
+                memory.properties.add(prop)
+                memoryBox.put(memory)
+            }
+        }
+        true
     }
 
     /**

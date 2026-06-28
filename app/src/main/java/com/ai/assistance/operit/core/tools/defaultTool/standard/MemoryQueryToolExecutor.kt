@@ -581,6 +581,14 @@ class MemoryQueryToolExecutor(private val context: Context) : ToolExecutor {
             // R-AGENT-003: force=true 让 agent 显式跳过去重（看完返回的候选后确认是独立信息时使用）
             val force = (tool.parameters.find { it.name == "force" }?.value ?: "false")
                 .equals("true", ignoreCase = true)
+            // R-AGENT-046: trigger_keywords —— 仅对 #persistent_instruction tag 节点生效。
+            // 逗号分隔；缺省/空 = 老条目语义 = 每轮全量注入（向后兼容）。
+            val triggerKeywordsParam = tool.parameters.find { it.name == "trigger_keywords" }?.value
+            val triggerKeywords = triggerKeywordsParam
+                ?.split(",")
+                ?.map { it.trim() }
+                ?.filter { it.isNotEmpty() }
+                ?.distinct()
 
             val memory = memoryRepository.createMemory(
                 title = title,
@@ -589,7 +597,8 @@ class MemoryQueryToolExecutor(private val context: Context) : ToolExecutor {
                 source = source,
                 folderPath = folderPath,
                 tags = tags,
-                force = force
+                force = force,
+                triggerKeywords = triggerKeywords
             )
 
             if (memory != null) {
