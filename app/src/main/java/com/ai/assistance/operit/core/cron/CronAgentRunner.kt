@@ -183,14 +183,24 @@ object CronAgentRunner {
         val historyManager = ChatHistoryManager.getInstance(context.applicationContext)
         val resolvedChatId = resolveChatId(historyManager, originChatId)
 
+        // TC-CRON-STREAMING-l (2026-07-07 bugfix)：session vars 的 chat_id 必须是
+        // **wire form**（`origin.chat_id` 原样），不是 `resolvedChatId`。
+        // 理由：`HERMES_SESSION_CHAT_ID` / `HERMES_CRON_AUTO_DELIVER_CHAT_ID` 的契约
+        // （SessionContext.kt:100-107 KDoc）是"inbound IM origin chat_id"——本回合内
+        // 任何嵌套 `cronjob(action="create")` 都会通过 `_originFromEnv()` 把这个值
+        // 快照进新 job 的 origin.chat_id，日后要喂给 `WeixinAdapter.send(to_user_id=...)`。
+        // 若在此写入 `resolvedChatId`（Room UUID / `gw:` history form），新 job 从此永远
+        // 拿脏 chat_id 送微信 → iLink 返 `errcode=-3` 永久失败（2026-07-07 真机 11:50 日志）。
+        // `resolvedChatId` 只留给 sidecar AgentEventBus filter 和
+        // `EnhancedAIService.sendMessage(chatId=...)` Room 查询用，禁止流入 ThreadLocal。
         setSessionVars(
             platform = originPlatform.ifEmpty { "app" },
-            chatId = resolvedChatId,
+            chatId = originChatId,
             threadId = originThreadId
         )
         setCronAutoDeliverVars(
             platform = originPlatform.ifEmpty { "app" },
-            chatId = resolvedChatId,
+            chatId = originChatId,
             threadId = originThreadId
         )
 
@@ -342,6 +352,19 @@ object CronAgentRunner {
                                             paragraphs.forEachIndexed { idx, paragraph ->
                                                 dispatchMutex.withLock {
                                                     try {
+                                                        // TC-CRON-STREAMING-m：wire-chatId 卫兵。任何脏 chat_id
+                                                        // 一律不喂给 `dispatchOutgoing` —— 微信 iLink 见非单段
+                                                        // wire 就返 `errcode=-3`，等它返回再看已经晚了。
+                                                        if (isDirtyChatId(originChatId)) {
+                                                            CronFileLogger.e(
+                                                                TAG,
+                                                                "streaming dispatch skipped — dirty chatId " +
+                                                                    "(suspicious chat / invalid wire) turn=${event.turn} " +
+                                                                    "jobId=$jobId platform=$originPlatform chat=$originChatId " +
+                                                                    "paragraphIdx=$idx/${paragraphs.size}"
+                                                            )
+                                                            return@withLock
+                                                        }
                                                         CronFileLogger.i(
                                                             TAG,
                                                             "streaming dispatch turn=${event.turn} jobId=$jobId " +
@@ -585,6 +608,29 @@ object CronAgentRunner {
     }
 
     /**
+     * TC-CRON-STREAMING-m (2026-07-07)：wire-chatId 卫兵。
+     *
+     * 检测所有已知的"脏 chat_id"形态，防止把 gateway-internal 值直接喂给
+     * `WeixinAdapter.send(to_user_id=...)` 触发 iLink `errcode=-3`。
+     *
+     * 拦截目标：
+     *  - `gw:` 前缀：`HistoryStore` 的 history-chatId 形态
+     *    （`gw:$sessionKey:$rawChatId` / `gw:$sessionKey:$fromUserId:$toGroupId:$msgId`），
+     *    commit 99df3979 已在 gateway sidecar 修过一次；cron 侧同类污染由本函数兜住。
+     *  - 多段 `@im.wechat`：真机 2026-06-27 日志出现过三连拼接
+     *    `wxid_a@im.wechat:wxid_b@im.wechat:msg` ——微信只接受单段 wire。
+     *
+     * 命中即返回 true → 调用方跳过 `dispatchOutgoing` 并落一条
+     * `CronFileLogger` 日志（关键词 "dirty chatId"），便于 `cron.log` 全文搜索。
+     */
+    private fun isDirtyChatId(chatId: String): Boolean {
+        if (chatId.isBlank()) return true
+        if (chatId.startsWith("gw:")) return true
+        if (chatId.split("@im.wechat").size > 2) return true
+        return false
+    }
+
+    /**
      * R-AGENT-035: Append the cron output to the originating chat。
      *
      * Routing rules（mirrors Python `gateway/run.py` cron deliver loop）：
@@ -706,6 +752,20 @@ object CronAgentRunner {
             TAG,
             "deliver: job '$jobId' dispatching to platform=$originPlatform chatId=$originChatId thread=$originThreadId len=${body.length}"
         )
+        // TC-CRON-STREAMING-m：wire-chatId 卫兵。fallback 路径也不能成为绕过点——
+        // streaming 未落地时兜底走这里，若 chat_id 是 `gw:` 前缀 / 多段 `@im.wechat`
+        // 拼接（invalid wire / suspicious chat / dirty chatId），微信必返 `errcode=-3`，
+        // 直接跳过 dispatch 并抛，让 caller 记 `last_delivery_error`。
+        if (isDirtyChatId(originChatId)) {
+            CronFileLogger.e(
+                TAG,
+                "deliver FAIL jobId=$jobId platform=$originPlatform chat=$originChatId " +
+                    "reason=dirty chatId (invalid wire / suspicious chat) — skipped dispatchOutgoing"
+            )
+            throw IllegalStateException(
+                "deliver skipped: dirty chatId (invalid wire form) for platform=$originPlatform chatId=$originChatId"
+            )
+        }
         val ok = try {
             gateway.dispatchOutgoing(
                 platform = originPlatform,
