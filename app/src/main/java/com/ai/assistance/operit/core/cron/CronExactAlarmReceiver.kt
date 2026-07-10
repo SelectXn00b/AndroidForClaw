@@ -3,6 +3,7 @@ package com.ai.assistance.operit.core.cron
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import com.ai.assistance.operit.hermes.gateway.CronFileLogger
 import com.ai.assistance.operit.util.AppLogger
 import com.xiaomo.hermes.hermes.cron.advanceNextRun
 import com.xiaomo.hermes.hermes.cron.getJob
@@ -51,6 +52,11 @@ class CronExactAlarmReceiver : BroadcastReceiver() {
     private val dispatchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onReceive(context: Context, intent: Intent) {
+        CronFileLogger.i(
+            TAG,
+            "alarm fired jobId=${intent.getStringExtra(CronExactAlarmScheduler.EXTRA_JOB_ID).orEmpty()} " +
+                "action=${intent.action.orEmpty()}"
+        )
         if (intent.action != CronExactAlarmScheduler.ACTION_FIRE) {
             // Defensive: ignore any spurious intent we didn't construct.
             // (Should never happen given exported=false + explicit-intent
@@ -90,6 +96,7 @@ class CronExactAlarmReceiver : BroadcastReceiver() {
                 advanceNextRun(jobId)
 
                 AppLogger.d(TAG, "dispatching jobId=$jobId via CronAgentRunner")
+                CronFileLogger.i(TAG, "alarm dispatched jobId=$jobId — entering CronAgentRunner.run")
                 CronAgentRunner.run(appContext, job)
             } catch (e: Throwable) {
                 AppLogger.e(TAG, "dispatch failed for jobId=$jobId", e)
