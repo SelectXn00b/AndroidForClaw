@@ -27,6 +27,15 @@ class WeixinAdapter(
     companion object { private const val _TAG = "Weixin" }
 
     /**
+     * R-OBS-001: optional diagnostic sink injected by
+     * `HermesGatewayController` (app/ side) wrapping `WeixinFileLogger`.
+     * Null in unit-test / standalone use — adapter operates normally
+     * with no extra logging.  See `platforms/PlatformDiagSink.kt`.
+     */
+    @Volatile
+    var _diagSink: PlatformDiagSink? = null
+
+    /**
      * iLink Bot API credentials (from QR login):
      *  - account_id: normalized `ilink_bot_id`
      *  - login_token: the `bot_token` returned by QR confirm
@@ -82,12 +91,14 @@ class WeixinAdapter(
     override suspend fun connect(): Boolean {
         if (_accountId.isEmpty() || _loginToken.isEmpty()) {
             Log.e(_TAG, "account_id or login_token not set — did you complete QR login?")
+            _diagSink?.e(_TAG, "connect FAIL reason=missing account_id or login_token")
             return false
         }
         _pollJob?.cancel()
         _pollJob = scope.launch(Dispatchers.IO) { _runPollLoop() }
         markConnected()
         Log.i(_TAG, "Weixin connected: account=${_safeId(_accountId)}")
+        _diagSink?.i(_TAG, "connect ok account=${_safeId(_accountId)}")
         return true
     }
 
@@ -121,6 +132,12 @@ class WeixinAdapter(
                 val ctxToken = if (retriedWithoutToken) null
                 else _tokenStore.get(_accountId, chatId)
 
+                _diagSink?.i(
+                    _TAG,
+                    "send IN chat=${_safeId(chatId)} hadToken=${ctxToken != null} " +
+                        "retried=$retriedWithoutToken len=${content.length}"
+                )
+
                 val msg = JSONObject().apply {
                     put("to_user_id", chatId)
                     put("client_id", clientId)
@@ -146,6 +163,10 @@ class WeixinAdapter(
                     val text = resp.body?.string() ?: ""
                     if (!resp.isSuccessful) {
                         Log.w(_TAG, "send HTTP ${resp.code} for chat=${_safeId(chatId)}: ${text.take(200)}")
+                        _diagSink?.w(
+                            _TAG,
+                            "send OUT errcode=HTTP${resp.code} errmsg=${text.take(120)} chat=${_safeId(chatId)}"
+                        )
                         return@use SendResult(success = false, error = "HTTP ${resp.code}: ${text.take(200)}")
                     }
                     val data = try { JSONObject(text) } catch (_: Exception) { JSONObject() }
@@ -156,11 +177,20 @@ class WeixinAdapter(
                             "send rejected errcode=$errcode errmsg=${data.optString("errmsg")} " +
                                 "chat=${_safeId(chatId)} hadToken=${ctxToken != null}"
                         )
+                        _diagSink?.w(
+                            _TAG,
+                            "send OUT errcode=$errcode errmsg=${data.optString("errmsg")} " +
+                                "chat=${_safeId(chatId)} hadToken=${ctxToken != null}"
+                        )
                         return@use SendResult(
                             success = false,
                             error = "errcode=$errcode ${data.optString("errmsg")}"
                         )
                     }
+                    _diagSink?.i(
+                        _TAG,
+                        "send OUT errcode=0 chat=${_safeId(chatId)} clientId=$clientId"
+                    )
                     SendResult(success = true, messageId = clientId)
                 }
 
@@ -347,6 +377,7 @@ class WeixinAdapter(
             }
         }
         Log.i(_TAG, "Poll loop ended")
+        _diagSink?.w(_TAG, "poll loop ended account=${_safeId(_accountId)} — process likely killed or disconnect called")
     }
 
     private suspend fun _handleInbound(msg: JSONObject) {
